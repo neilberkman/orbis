@@ -12,8 +12,8 @@ defmodule Orbis.CCSDS.CDM do
       cdm.tca                    # ~U[2010-03-13 22:37:52.618Z]
       cdm.miss_distance_m        # 715.0
       cdm.collision_probability  # 4.835e-05
-      cdm.object1.state          # {r, v} in km and km/s
-      cdm.object1.covariance     # 6x6 lower-triangle in m²
+
+      kvn = Orbis.CCSDS.CDM.encode(cdm)
   """
 
   defmodule ObjectData do
@@ -85,8 +85,10 @@ defmodule Orbis.CCSDS.CDM do
 
     kv = parse_kv_lines(lines)
 
+    # Required header/metadata fields
     with {:ok, tca} <- parse_datetime(kv["TCA"]),
-         {:ok, creation} <- parse_datetime(kv["CREATION_DATE"]) do
+         {:ok, creation} <- parse_datetime(kv["CREATION_DATE"]),
+         {:ok, msg_id} <- required(kv["MESSAGE_ID"], "missing MESSAGE_ID") do
       # Parse HBR from COMMENT lines (NASA CARA convention)
       hbr = parse_hbr(kvn_string)
 
@@ -99,7 +101,7 @@ defmodule Orbis.CCSDS.CDM do
          %__MODULE__{
            creation_date: creation,
            originator: kv["ORIGINATOR"],
-           message_id: kv["MESSAGE_ID"],
+           message_id: msg_id,
            tca: tca,
            miss_distance_m: parse_num(kv["MISS_DISTANCE"]),
            relative_speed_m_s: parse_num(kv["RELATIVE_SPEED"]),
@@ -116,13 +118,38 @@ defmodule Orbis.CCSDS.CDM do
   end
 
   @doc """
+  Encode a CDM to KVN format.
+  """
+  @spec encode(t()) :: String.t()
+  def encode(%__MODULE__{} = cdm) do
+    lines = [
+      "CCSDS_CDM_VERS = 1.0",
+      "CREATION_DATE = #{format_datetime(cdm.creation_date)}",
+      "ORIGINATOR = #{cdm.originator}",
+      "MESSAGE_ID = #{cdm.message_id}",
+      "TCA = #{format_datetime(cdm.tca)}",
+      "MISS_DISTANCE = #{cdm.miss_distance_m} [m]",
+      "RELATIVE_SPEED = #{cdm.relative_speed_m_s} [m/s]",
+      "COLLISION_PROBABILITY = #{cdm.collision_probability}",
+      "COLLISION_PROBABILITY_METHOD = #{cdm.collision_probability_method}"
+    ]
+
+    # Optional HBR comment
+    lines =
+      if cdm.hard_body_radius_m do
+        lines ++ ["COMMENT HBR = #{cdm.hard_body_radius_m}"]
+      else
+        lines
+      end
+
+    lines = lines ++ encode_object(cdm.object1, "OBJECT1")
+    lines = lines ++ encode_object(cdm.object2, "OBJECT2")
+
+    Enum.join(lines, "\n")
+  end
+
+  @doc """
   Convert a parsed CDM to inputs for `Orbis.Collision.probability/1`.
-
-  Extracts states and covariances from the CDM, converting RTN covariance
-  to position-only ECI covariance (simplified — uses diagonal approximation
-  for the RTN-to-ECI transform).
-
-  Returns the parameter map expected by `Orbis.Collision.probability/1`.
   """
   @spec to_collision_params(t()) :: map()
   def to_collision_params(%__MODULE__{} = cdm) do
@@ -130,16 +157,16 @@ defmodule Orbis.CCSDS.CDM do
     {r2, v2} = cdm.object2.state
 
     # Extract 3x3 position covariance from RTN (first 3x3 block)
-    cov1_rtn = extract_pos_cov(cdm.object1.covariance_rtn)
-    cov2_rtn = extract_pos_cov(cdm.object2.covariance_rtn)
+    {:ok, cov1_rtn} = Orbis.Covariance.extract_pos_cov(cdm.object1.covariance_rtn)
+    {:ok, cov2_rtn} = Orbis.Covariance.extract_pos_cov(cdm.object2.covariance_rtn)
 
     # Convert RTN covariance to ECI using the object's state
-    cov1_eci = rtn_to_eci(cov1_rtn, r1, v1)
-    cov2_eci = rtn_to_eci(cov2_rtn, r2, v2)
+    {:ok, cov1_eci} = Orbis.Covariance.rtn_to_eci(cov1_rtn, r1, v1)
+    {:ok, cov2_eci} = Orbis.Covariance.rtn_to_eci(cov2_rtn, r2, v2)
 
     # Convert m² to km²
-    cov1_km2 = scale_cov(cov1_eci, 1.0e-6)
-    cov2_km2 = scale_cov(cov2_eci, 1.0e-6)
+    cov1_km2 = Orbis.Covariance.scale(cov1_eci, 1.0e-6)
+    cov2_km2 = Orbis.Covariance.scale(cov2_eci, 1.0e-6)
 
     hbr_km = (cdm.hard_body_radius_m || 15.0) / 1000.0
 
@@ -154,7 +181,10 @@ defmodule Orbis.CCSDS.CDM do
     }
   end
 
-  # --- KVN Parsing ---
+  # --- Helpers ---
+
+  defp required(nil, reason), do: {:error, reason}
+  defp required(val, _), do: {:ok, val}
 
   defp parse_kv_lines(lines) do
     lines
@@ -170,27 +200,39 @@ defmodule Orbis.CCSDS.CDM do
   end
 
   defp strip_units(val) do
-    # Remove [m], [m/s], [km], [m**2] etc.
     Regex.replace(~r/\s*\[.*?\]\s*$/, val, "")
   end
 
   defp parse_datetime(nil), do: {:error, "missing datetime"}
 
   defp parse_datetime(str) do
-    case DateTime.from_iso8601(str <> "Z") do
+    # 1. Try ISO8601 directly (handles Z and +HH:MM offsets)
+    case DateTime.from_iso8601(str) do
       {:ok, dt, _} ->
         {:ok, dt}
 
       _ ->
-        case NaiveDateTime.from_iso8601(str) do
-          {:ok, ndt} -> {:ok, DateTime.from_naive!(ndt, "Etc/UTC")}
-          {:error, r} -> {:error, "bad datetime: #{r}"}
+        # 2. Try with assumed UTC 'Z' if no offset is present
+        if not String.contains?(str, ["Z", "+", "-"]) do
+          case DateTime.from_iso8601(str <> "Z") do
+            {:ok, dt, _} -> {:ok, dt}
+            _ -> {:error, "bad datetime: #{str}"}
+          end
+        else
+          # Fallback for Naive strings that might be in a different format
+          case NaiveDateTime.from_iso8601(str) do
+            {:ok, ndt} -> {:ok, DateTime.from_naive!(ndt, "Etc/UTC")}
+            {:error, _} -> {:error, "bad datetime: #{str}"}
+          end
         end
     end
   end
 
-  defp parse_num(nil), do: nil
+  defp format_datetime(%DateTime{} = dt) do
+    dt |> DateTime.to_iso8601() |> String.replace("Z", "")
+  end
 
+  defp parse_num(nil), do: nil
   defp parse_num(str) do
     case Float.parse(str) do
       {f, _} -> f
@@ -206,8 +248,6 @@ defmodule Orbis.CCSDS.CDM do
   end
 
   defp split_object_blocks(lines) do
-    # Find exact "OBJECT = OBJECT1" and "OBJECT = OBJECT2" markers
-    # Must match key exactly to avoid false hits on OBJECT_DESIGNATOR etc.
     obj_marker_indices =
       lines
       |> Enum.with_index()
@@ -226,9 +266,7 @@ defmodule Orbis.CCSDS.CDM do
         {parse_kv_lines(obj1_lines), parse_kv_lines(obj2_lines)}
 
       _ ->
-        # Fallback: split in half
-        mid = div(length(lines), 2)
-        {parse_kv_lines(Enum.take(lines, mid)), parse_kv_lines(Enum.drop(lines, mid))}
+        {Map.new(), Map.new()}
     end
   end
 
@@ -236,7 +274,6 @@ defmodule Orbis.CCSDS.CDM do
   @cov_keys ~w(CR_R CT_R CT_T CN_R CN_T CN_N)
 
   defp parse_object(kv) do
-    # Require state vector fields
     state_vals = Enum.map(@state_keys, &parse_num(kv[&1]))
     cov_vals = Enum.map(@cov_keys, &parse_num(kv[&1]))
 
@@ -244,8 +281,6 @@ defmodule Orbis.CCSDS.CDM do
       {:error, "incomplete state vector"}
     else
       [x, y, z, xd, yd, zd] = state_vals
-
-      # Covariance defaults to zero (optional in some CDMs)
       [cr_r, ct_r, ct_t, cn_r, cn_t, cn_n] = Enum.map(cov_vals, &(&1 || 0.0))
 
       {:ok,
@@ -262,53 +297,27 @@ defmodule Orbis.CCSDS.CDM do
     end
   end
 
-  # --- Covariance transforms ---
+  defp encode_object(obj, name) do
+    {{x, y, z}, {xd, yd, zd}} = obj.state
+    [cr_r, ct_r, ct_t, cn_r, cn_t, cn_n] = obj.covariance_rtn
 
-  # Extract 3x3 position covariance from RTN lower-triangle
-  defp extract_pos_cov([cr_r, ct_r, ct_t, cn_r, cn_t, cn_n | _]) do
     [
-      [cr_r, ct_r, cn_r],
-      [ct_r, ct_t, cn_t],
-      [cn_r, cn_t, cn_n]
+      "OBJECT = #{name}",
+      "OBJECT_DESIGNATOR = #{obj.object_designator}",
+      "OBJECT_NAME = #{obj.object_name}",
+      "REF_FRAME = #{obj.ref_frame}",
+      "X = #{x} [km]",
+      "Y = #{y} [km]",
+      "Z = #{z} [km]",
+      "X_DOT = #{xd} [km/s]",
+      "Y_DOT = #{yd} [km/s]",
+      "Z_DOT = #{zd} [km/s]",
+      "CR_R = #{cr_r} [m**2]",
+      "CT_R = #{ct_r} [m**2]",
+      "CT_T = #{ct_t} [m**2]",
+      "CN_R = #{cn_r} [m**2]",
+      "CN_T = #{cn_t} [m**2]",
+      "CN_N = #{cn_n} [m**2]"
     ]
   end
-
-  # Rotate RTN covariance to ECI: C_eci = R * C_rtn * R'
-  defp rtn_to_eci(cov_rtn, {rx, ry, rz}, {vx, vy, vz}) do
-    r = {rx, ry, rz}
-    v = {vx, vy, vz}
-
-    r_hat = normalize(r)
-    h = cross(r, v)
-    n_hat = normalize(h)
-    t_hat = cross(n_hat, r_hat)
-
-    # Rotation matrix: RTN → ECI (columns are R, T, N unit vectors)
-    rot = [
-      [elem(r_hat, 0), elem(t_hat, 0), elem(n_hat, 0)],
-      [elem(r_hat, 1), elem(t_hat, 1), elem(n_hat, 1)],
-      [elem(r_hat, 2), elem(t_hat, 2), elem(n_hat, 2)]
-    ]
-
-    rot_t = transpose(rot)
-    mat_mul(mat_mul(rot, cov_rtn), rot_t)
-  end
-
-  defp mag({x, y, z}), do: :math.sqrt(x * x + y * y + z * z)
-  defp normalize(v), do: {elem(v, 0) / mag(v), elem(v, 1) / mag(v), elem(v, 2) / mag(v)}
-
-  defp cross({ax, ay, az}, {bx, by, bz}),
-    do: {ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx}
-
-  defp transpose(m), do: m |> Enum.zip() |> Enum.map(&Tuple.to_list/1)
-
-  defp mat_mul(a, b) do
-    bt = transpose(b)
-
-    for row <- a,
-        do:
-          for(col <- bt, do: Enum.zip(row, col) |> Enum.map(fn {x, y} -> x * y end) |> Enum.sum())
-  end
-
-  defp scale_cov(m, s), do: for(row <- m, do: for(v <- row, do: v * s))
 end

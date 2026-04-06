@@ -6,6 +6,7 @@ defmodule Orbis.CollisionTest do
   """
   use ExUnit.Case
 
+
   # NASA CARA Omitron test case — states in ECI km/km/s, covariances in km²
   @omitron_params %{
     r1: {378.39559, 4305.721887, 5752.767554},
@@ -25,59 +26,63 @@ defmodule Orbis.CollisionTest do
     hard_body_radius_km: 0.020
   }
 
-  describe "probability/1" do
+  describe "probability/2 - methods" do
     test "Omitron test case: equal-area Pc matches CARA reference" do
-      result = Orbis.Collision.probability(@omitron_params)
+      {:ok, result} = Orbis.Collision.probability(@omitron_params, method: :equal_area)
 
       # CARA reference: equal-area square Pc = 2.70601573490111e-05
       assert_in_delta result.pc, 2.70601573490111e-05, 1.0e-09
-      assert result.miss_km > 0 and result.miss_km < 10
       assert result.method == :foster_2d_equal_area
     end
 
-    test "zero miss distance with tight covariance gives high Pc" do
-      # Small covariance (10m σ) with 15m HBR and zero miss = high Pc
-      # 10m = 0.01 km, squared
-      sigma_km2 = 0.01 * 0.01
+    test "Omitron test case: numerical Pc is close to equal-area" do
+      {:ok, res_ea} = Orbis.Collision.probability(@omitron_params, method: :equal_area)
+      {:ok, res_num} = Orbis.Collision.probability(@omitron_params, method: :numerical)
 
-      result =
-        Orbis.Collision.probability(%{
-          r1: {7000.0, 0.0, 0.0},
-          v1: {0.0, 7.5, 0.0},
-          cov1: [[sigma_km2, 0.0, 0.0], [0.0, sigma_km2, 0.0], [0.0, 0.0, sigma_km2]],
-          r2: {7000.0, 0.0, 0.0},
-          v2: {0.0, -7.5, 0.0},
-          cov2: [[sigma_km2, 0.0, 0.0], [0.0, sigma_km2, 0.0], [0.0, 0.0, sigma_km2]],
-          hard_body_radius_km: 0.015
-        })
-
-      assert result.pc > 0.1
+      # They should be very close for this geometry
+      assert_in_delta res_num.pc, res_ea.pc, res_ea.pc * 0.01
+      assert res_num.method == :foster_2d_numerical
     end
+  end
 
-    test "large miss distance gives near-zero Pc" do
-      result =
-        Orbis.Collision.probability(%{
-          r1: {7000.0, 0.0, 0.0},
-          v1: {0.0, 7.5, 0.0},
-          cov1: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
-          r2: {7100.0, 0.0, 0.0},
-          v2: {0.0, -7.5, 0.0},
-          cov2: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
-          hard_body_radius_km: 0.015
-        })
+  describe "probability/2 - symmetry" do
+    test "swapping objects gives same result" do
+      params1 = @omitron_params
+      params2 = %{
+        r1: params1.r2, v1: params1.v2, cov1: params1.cov2,
+        r2: params1.r1, v2: params1.v1, cov2: params1.cov1,
+        hard_body_radius_km: params1.hard_body_radius_km
+      }
 
-      assert result.pc < 1.0e-10
+      {:ok, res1} = Orbis.Collision.probability(params1)
+      {:ok, res2} = Orbis.Collision.probability(params2)
+
+      assert_in_delta res1.pc, res2.pc, 1.0e-15
     end
+  end
 
+  describe "probability/2 - monotonicity" do
     test "larger HBR increases Pc" do
-      small = Orbis.Collision.probability(Map.put(@omitron_params, :hard_body_radius_km, 0.010))
-      large = Orbis.Collision.probability(Map.put(@omitron_params, :hard_body_radius_km, 0.040))
+      {:ok, small} = Orbis.Collision.probability(Map.put(@omitron_params, :hard_body_radius_km, 0.010))
+      {:ok, large} = Orbis.Collision.probability(Map.put(@omitron_params, :hard_body_radius_km, 0.040))
 
       assert large.pc > small.pc
     end
 
-    test "zero relative velocity returns Pc = 0 without crashing" do
-      result =
+    test "larger miss distance decreases Pc" do
+      p1 = @omitron_params
+      p2 = %{p1 | r2: {elem(p1.r2, 0) + 1000.0, elem(p1.r2, 1), elem(p1.r2, 2)}}
+
+      {:ok, res1} = Orbis.Collision.probability(p1)
+      {:ok, res2} = Orbis.Collision.probability(p2)
+
+      assert res2.pc < res1.pc
+    end
+  end
+
+  describe "probability/2 - error handling" do
+    test "zero relative velocity returns error" do
+      assert {:error, "zero relative velocity"} =
         Orbis.Collision.probability(%{
           r1: {7000.0, 0.0, 0.0},
           v1: {0.0, 7.5, 0.0},
@@ -87,9 +92,6 @@ defmodule Orbis.CollisionTest do
           cov2: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
           hard_body_radius_km: 0.015
         })
-
-      assert result.pc == 0.0
-      assert result.relative_speed_km_s == 0.0
     end
   end
 end

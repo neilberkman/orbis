@@ -1,244 +1,195 @@
 defmodule Orbis.Collision do
   @moduledoc """
-  Collision probability calculation.
+  Collision probability calculation for close approaches.
 
-  Computes the probability of collision (Pc) between two objects at
-  the time of closest approach (TCA) given their states and covariance
-  matrices. Implements the 2D Foster method (Foster 1992, Alfano 2005).
+  Computes `Pc` from relative state, covariance, and hard-body radius
+  using encounter-plane methods such as Foster 2D.
 
-  The algorithm:
-  1. Combine position covariances in ECI
-  2. Construct the encounter plane from relative velocity
-  3. Project combined covariance onto 2D encounter plane
-  4. Eigendecompose to get principal axes
-  5. Integrate 2D Gaussian over the hard-body radius circle
-
-  ## Examples
-
-      result = Orbis.Collision.probability(%{
-        r1: {378.39559, 4305.721887, 5752.767554},
-        v1: {2.360800244, 5.580331936, -4.322349039},
-        cov1: [...],  # 3x3 position covariance in km²
-        r2: {374.5180598, 4307.560983, 5751.130418},
-        v2: {-5.388125081, -3.946827739, 3.322820358},
-        cov2: [...],  # 3x3 position covariance in km²
-        hard_body_radius_km: 0.020
-      })
-
-      result.pc        # collision probability
-      result.miss_km   # miss distance in km
+  This module is intended for operational conjunction screening and
+  standards-based workflows such as CCSDS CDM ingestion.
   """
+
+  alias Orbis.Collision.Result
+  alias Orbis.Encounter
+  alias Orbis.Covariance
+
+  @type params :: %{
+          r1: {float(), float(), float()},
+          v1: {float(), float(), float()},
+          cov1: [[float()]],
+          r2: {float(), float(), float()},
+          v2: {float(), float(), float()},
+          cov2: [[float()]],
+          hard_body_radius_km: float()
+        }
 
   @doc """
   Compute collision probability from two objects' states and covariances.
 
   All positions in km, velocities in km/s, covariances in km².
-  Hard body radius in km.
 
-  Uses the equal-area-square approximation of the 2D Foster circular Pc,
-  which requires no numerical integration and matches the circular method
-  to high precision for typical conjunction geometries.
+  ## Options
+    * `:method` — `:equal_area` (default) or `:numerical`
 
-  ## Input map keys
-
-    * `:r1`, `:r2` — position tuples `{x, y, z}` in km (ECI)
-    * `:v1`, `:v2` — velocity tuples `{vx, vy, vz}` in km/s (ECI)
-    * `:cov1`, `:cov2` — 3x3 position covariance as list of lists in km²
-    * `:hard_body_radius_km` — combined hard body radius in km
-
-  ## Returns
-
-  A map with:
-    * `:pc` — collision probability
-    * `:miss_km` — miss distance in km
-    * `:relative_speed_km_s` — relative speed at TCA
-    * `:method` — `:foster_2d_equal_area`
+  Returns `{:ok, %Result{}}` or `{:error, reason}`.
   """
-  @spec probability(map()) :: map()
-  def probability(%{
-        r1: {r1x, r1y, r1z},
-        v1: {v1x, v1y, v1z},
-        cov1: cov1,
-        r2: {r2x, r2y, r2z},
-        v2: {v2x, v2y, v2z},
-        cov2: cov2,
-        hard_body_radius_km: hbr
-      }) do
-    # Relative state
-    dr = {r1x - r2x, r1y - r2y, r1z - r2z}
-    dv = {v1x - v2x, v1y - v2y, v1z - v2z}
+  @spec probability(params(), keyword()) :: {:ok, Result.t()} | {:error, String.t()}
+  def probability(params, opts \\ []) do
+    %{cov1: cov1, cov2: cov2} = params
 
-    miss = mag(dr)
-    rel_speed = mag(dv)
+    cond do
+      not Covariance.valid_matrix?(cov1) -> {:error, "cov1 is not a 3x3 numeric matrix"}
+      not Covariance.valid_matrix?(cov2) -> {:error, "cov2 is not a 3x3 numeric matrix"}
+      not Covariance.positive_semidefinite?(cov1) -> {:error, "cov1 is not positive semidefinite"}
+      not Covariance.positive_semidefinite?(cov2) -> {:error, "cov2 is not positive semidefinite"}
+      true ->
+        method = Keyword.get(opts, :method, :equal_area)
 
-    # Guard: zero relative velocity means no well-defined encounter plane
-    if rel_speed < 1.0e-30 do
-      %{
-        pc: 0.0,
-        miss_km: miss,
-        relative_speed_km_s: 0.0,
-        sigma_x_km: 0.0,
-        sigma_z_km: 0.0,
-        method: :foster_2d_equal_area
-      }
-    else
-      probability_2d(dr, dv, miss, rel_speed, cov1, cov2, hbr)
+        case method do
+          :equal_area -> probability_equal_area(params)
+          :numerical -> probability_numerical(params)
+          _ -> {:error, "unsupported method: #{method}"}
+        end
     end
   end
 
-  defp probability_2d(dr, dv, miss, rel_speed, cov1, cov2, hbr) do
-    # Step 1: Combine position covariances
-    c_combined = mat_add(cov1, cov2)
+  @doc """
+  Compute Pc using the 2D Foster method with equal-area square approximation.
+  """
+  @spec probability_equal_area(params()) :: {:ok, Result.t()} | {:error, String.t()}
+  def probability_equal_area(params) do
+    %{r1: r1, v1: v1, cov1: cov1, r2: r2, v2: v2, cov2: cov2, hard_body_radius_km: hbr} = params
 
-    # Step 2: Encounter frame (x = in-plane cross-track, y = along velocity, z = normal)
-    y_hat = normalize(dv)
-    h = cross(dr, dv)
+    case Encounter.frame(r1, v1, r2, v2) do
+      {:ok, frame} ->
+        c_combined = Covariance.add(cov1, cov2)
+        c_encounter = Encounter.encounter_plane_covariance(frame, c_combined)
+        {:ok, compute_foster_2d_equal_area(frame, c_encounter, hbr)}
 
-    # Guard: if dr and dv are parallel (or dr is zero), pick an arbitrary normal
-    z_hat =
-      if mag(h) < 1.0e-30 do
-        # Find a vector not parallel to dv
-        {yx, _, _} = y_hat
-        trial = if abs(yx) < 0.9, do: {1.0, 0.0, 0.0}, else: {0.0, 1.0, 0.0}
-        normalize(cross(y_hat, trial))
-      else
-        normalize(h)
-      end
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
 
-    x_hat = cross(y_hat, z_hat)
+  @doc """
+  Compute Pc using the 2D Foster method with numerical integration over the circle.
+  """
+  @spec probability_numerical(params()) :: {:ok, Result.t()} | {:error, String.t()}
+  def probability_numerical(params) do
+    %{r1: r1, v1: v1, cov1: cov1, r2: r2, v2: v2, cov2: cov2, hard_body_radius_km: hbr} = params
 
-    # Rotation matrix: ECI → encounter frame
-    t_mat = [
-      [elem(x_hat, 0), elem(x_hat, 1), elem(x_hat, 2)],
-      [elem(y_hat, 0), elem(y_hat, 1), elem(y_hat, 2)],
-      [elem(z_hat, 0), elem(z_hat, 1), elem(z_hat, 2)]
-    ]
+    case Encounter.frame(r1, v1, r2, v2) do
+      {:ok, frame} ->
+        c_combined = Covariance.add(cov1, cov2)
+        c_encounter = Encounter.encounter_plane_covariance(frame, c_combined)
+        {:ok, compute_foster_2d_numerical(frame, c_encounter, hbr)}
 
-    # Step 3: Rotate covariance to encounter frame, extract 2D (x, z)
-    c_enc = mat_mul(mat_mul(t_mat, c_combined), transpose(t_mat))
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
 
-    c_2d = [
-      [at(c_enc, 0, 0), at(c_enc, 0, 2)],
-      [at(c_enc, 2, 0), at(c_enc, 2, 2)]
-    ]
+  # --- Encounter-plane methods ---
 
-    # Step 4: Eigendecompose 2x2
-    {l1, l2, v1_eig} = eigen_2x2(c_2d)
+  defp compute_foster_2d_equal_area(frame, c_enc, hbr) do
+    {sigma_x, sigma_z, xm, zm, _theta} = principal_components(frame, c_enc)
 
-    # Guard against non-positive eigenvalues
-    min_var = 1.0e-4 * hbr * (1.0e-4 * hbr)
-    l1 = max(l1, min_var)
-    l2 = max(l2, min_var)
-
-    sigma_x = :math.sqrt(l1)
-    sigma_z = :math.sqrt(l2)
-
-    # Step 5: Miss distance in principal axes
-    # Project relative position onto encounter plane principal axes
-    dr_enc = mat_vec(t_mat, dr)
-    miss_enc = {elem(dr_enc, 0), elem(dr_enc, 2)}
-
-    # Rotate to principal axes
-    xm = abs(elem(miss_enc, 0) * elem(v1_eig, 0) + elem(miss_enc, 1) * elem(v1_eig, 1))
-    zm = abs(-elem(miss_enc, 0) * elem(v1_eig, 1) + elem(miss_enc, 1) * elem(v1_eig, 0))
-
-    # Step 6: Equal-area square Pc (no numerical integration needed)
+    # Equal-area square Pc
     hsq = :math.sqrt(:math.pi() / 4.0) * hbr
     sqrt2 = :math.sqrt(2.0)
 
     pc =
-      0.25 *
-        (erf((xm + hsq) / (sqrt2 * sigma_x)) - erf((xm - hsq) / (sqrt2 * sigma_x))) *
-        (erf((zm + hsq) / (sqrt2 * sigma_z)) - erf((zm - hsq) / (sqrt2 * sigma_z)))
+      if sigma_x > 1.0e-12 and sigma_z > 1.0e-12 do
+        0.25 *
+          (:math.erf((xm + hsq) / (sqrt2 * sigma_x)) - :math.erf((xm - hsq) / (sqrt2 * sigma_x))) *
+          (:math.erf((zm + hsq) / (sqrt2 * sigma_z)) - :math.erf((zm - hsq) / (sqrt2 * sigma_z)))
+      else
+        0.0
+      end
 
-    %{
-      pc: pc,
-      miss_km: miss,
-      relative_speed_km_s: rel_speed,
+    %Result{
+      pc: max(0.0, pc),
+      miss_km: frame.miss_km,
+      relative_speed_km_s: frame.relative_speed_km_s,
       sigma_x_km: sigma_x,
       sigma_z_km: sigma_z,
       method: :foster_2d_equal_area
     }
   end
 
-  # --- Vector math ---
+  defp compute_foster_2d_numerical(frame, c_enc, hbr) do
+    {sigma_x, sigma_z, xm, zm, _theta} = principal_components(frame, c_enc)
 
-  defp mag({x, y, z}), do: :math.sqrt(x * x + y * y + z * z)
+    # Numerical integration over the circle using a simple polar grid (20x20)
+    # This is a baseline implementation; higher precision would use adaptive quadrature.
+    pc =
+      if sigma_x > 1.0e-12 and sigma_z > 1.0e-12 do
+        steps_r = 20
+        steps_theta = 40
+        dr = hbr / steps_r
+        dtheta = 2.0 * :math.pi() / steps_theta
 
-  defp normalize(v) do
-    m = mag(v)
-    {elem(v, 0) / m, elem(v, 1) / m, elem(v, 2) / m}
-  end
+        # Integral sum: f(r, theta) * r * dr * dtheta
+        for i <- 0..(steps_r - 1),
+            j <- 0..(steps_theta - 1),
+            reduce: 0.0 do
+          acc ->
+            r = (i + 0.5) * dr
+            theta = (j + 0.5) * dtheta
+            x = r * :math.cos(theta)
+            z = r * :math.sin(theta)
 
-  defp cross({ax, ay, az}, {bx, by, bz}) do
-    {ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx}
-  end
+            # Evaluate Gaussian centered at (xm, zm)
+            arg =
+              :math.pow(x - xm, 2) / (2.0 * sigma_x * sigma_x) +
+                :math.pow(z - zm, 2) / (2.0 * sigma_z * sigma_z)
 
-  # --- Matrix math (3x3 as list of lists) ---
-
-  defp mat_add(a, b) do
-    for {ar, br} <- Enum.zip(a, b) do
-      for {av, bv} <- Enum.zip(ar, br), do: av + bv
-    end
-  end
-
-  defp transpose(m) do
-    m |> Enum.zip() |> Enum.map(&Tuple.to_list/1)
-  end
-
-  defp mat_mul(a, b) do
-    bt = transpose(b)
-
-    for row <- a do
-      for col <- bt do
-        Enum.zip(row, col) |> Enum.map(fn {x, y} -> x * y end) |> Enum.sum()
+            f = :math.exp(-arg) / (2.0 * :math.pi() * sigma_x * sigma_z)
+            acc + f * r * dr * dtheta
+        end
+      else
+        0.0
       end
-    end
-  end
 
-  defp mat_vec(m, {x, y, z}) do
-    [r0, r1, r2] = m
-
-    {
-      Enum.at(r0, 0) * x + Enum.at(r0, 1) * y + Enum.at(r0, 2) * z,
-      Enum.at(r1, 0) * x + Enum.at(r1, 1) * y + Enum.at(r1, 2) * z,
-      Enum.at(r2, 0) * x + Enum.at(r2, 1) * y + Enum.at(r2, 2) * z
+    %Result{
+      pc: max(0.0, pc),
+      miss_km: frame.miss_km,
+      relative_speed_km_s: frame.relative_speed_km_s,
+      sigma_x_km: sigma_x,
+      sigma_z_km: sigma_z,
+      method: :foster_2d_numerical
     }
   end
 
-  defp at(m, i, j), do: Enum.at(m, i) |> Enum.at(j)
+  defp principal_components(frame, c_enc) do
+    [[a, b], [c, d]] = c_enc
 
-  # --- 2x2 eigendecomposition ---
-
-  defp eigen_2x2([[a, b], [c, d]]) do
     trace = a + d
     det = a * d - b * c
-    disc = :math.sqrt(max(trace * trace / 4.0 - det, 0.0))
+    disc = :math.sqrt(max(0.0, (trace * trace) / 4.0 - det))
 
     l1 = trace / 2.0 + disc
     l2 = trace / 2.0 - disc
 
-    # Eigenvector for l1: from (A - λI)v = 0
-    # Row 1: (a-λ)x + by = 0  →  direction (b, λ-a)
-    # Row 2: cx + (d-λ)y = 0  →  direction (λ-d, c)
+    sigma_x = :math.sqrt(max(0.0, l1))
+    sigma_z = :math.sqrt(max(0.0, l2))
+
     {vx, vy} =
-      if abs(b) > 1.0e-30 do
-        normalize_2d({l1 - d, c})
-      else
-        if abs(c) > 1.0e-30 do
-          normalize_2d({c, l1 - a})
-        else
-          {1.0, 0.0}
-        end
+      cond do
+        abs(b) > 1.0e-30 -> normalize_2d({l1 - d, c})
+        abs(c) > 1.0e-30 -> normalize_2d({c, l1 - a})
+        true -> {1.0, 0.0}
       end
 
-    {l1, l2, {vx, vy}}
+    theta = :math.atan2(vy, vx)
+    xm = frame.miss_km * :math.cos(theta)
+    zm = -frame.miss_km * :math.sin(theta)
+
+    {sigma_x, sigma_z, xm, zm, theta}
   end
 
   defp normalize_2d({x, y}) do
     m = :math.sqrt(x * x + y * y)
     if m > 1.0e-30, do: {x / m, y / m}, else: {1.0, 0.0}
   end
-
-  defp erf(x), do: :math.erf(x)
 end
