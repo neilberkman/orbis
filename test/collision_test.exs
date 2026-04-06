@@ -6,7 +6,6 @@ defmodule Orbis.CollisionTest do
   """
   use ExUnit.Case
 
-
   # NASA CARA Omitron test case — states in ECI km/km/s, covariances in km²
   @omitron_params %{
     r1: {378.39559, 4305.721887, 5752.767554},
@@ -48,9 +47,14 @@ defmodule Orbis.CollisionTest do
   describe "probability/2 - symmetry" do
     test "swapping objects gives same result" do
       params1 = @omitron_params
+
       params2 = %{
-        r1: params1.r2, v1: params1.v2, cov1: params1.cov2,
-        r2: params1.r1, v2: params1.v1, cov2: params1.cov1,
+        r1: params1.r2,
+        v1: params1.v2,
+        cov1: params1.cov2,
+        r2: params1.r1,
+        v2: params1.v1,
+        cov2: params1.cov1,
         hard_body_radius_km: params1.hard_body_radius_km
       }
 
@@ -63,8 +67,11 @@ defmodule Orbis.CollisionTest do
 
   describe "probability/2 - monotonicity" do
     test "larger HBR increases Pc" do
-      {:ok, small} = Orbis.Collision.probability(Map.put(@omitron_params, :hard_body_radius_km, 0.010))
-      {:ok, large} = Orbis.Collision.probability(Map.put(@omitron_params, :hard_body_radius_km, 0.040))
+      {:ok, small} =
+        Orbis.Collision.probability(Map.put(@omitron_params, :hard_body_radius_km, 0.010))
+
+      {:ok, large} =
+        Orbis.Collision.probability(Map.put(@omitron_params, :hard_body_radius_km, 0.040))
 
       assert large.pc > small.pc
     end
@@ -83,15 +90,15 @@ defmodule Orbis.CollisionTest do
   describe "probability/2 - error handling" do
     test "zero relative velocity returns error" do
       assert {:error, "zero relative velocity"} =
-        Orbis.Collision.probability(%{
-          r1: {7000.0, 0.0, 0.0},
-          v1: {0.0, 7.5, 0.0},
-          cov1: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
-          r2: {7000.01, 0.0, 0.0},
-          v2: {0.0, 7.5, 0.0},
-          cov2: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
-          hard_body_radius_km: 0.015
-        })
+               Orbis.Collision.probability(%{
+                 r1: {7000.0, 0.0, 0.0},
+                 v1: {0.0, 7.5, 0.0},
+                 cov1: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+                 r2: {7000.01, 0.0, 0.0},
+                 v2: {0.0, 7.5, 0.0},
+                 cov2: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+                 hard_body_radius_km: 0.015
+               })
     end
   end
 end

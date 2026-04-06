@@ -1,5 +1,6 @@
 defmodule Orbis.EncounterTest do
   use ExUnit.Case, async: true
+
   alias Orbis.Encounter
 
   describe "frame/4" do
@@ -61,9 +62,9 @@ defmodule Orbis.EncounterTest do
       # R = [[1,0,0], [0,0,1]]
       # C_enc = [[1,0], [0,3]]
       assert c_enc == [
-        [1.0, 0.0],
-        [0.0, 3.0]
-      ]
+               [1.0, 0.0],
+               [0.0, 3.0]
+             ]
     end
   end
 end

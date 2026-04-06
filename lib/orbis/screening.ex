@@ -6,9 +6,9 @@ defmodule Orbis.Screening do
   and evaluates collision probability on surviving encounters.
   """
 
+  alias Orbis.Collision
   alias Orbis.Screening.Candidate
   alias Orbis.Screening.Result
-  alias Orbis.Collision
 
   @type object :: %{
           optional(:id) => String.t(),
@@ -78,7 +78,8 @@ defmodule Orbis.Screening do
     end)
     |> Enum.filter(fn res ->
       case res.collision do
-        nil -> true # Keep errors for visibility
+        # Keep errors for visibility
+        nil -> true
         col -> col.pc >= pc_min
       end
     end)

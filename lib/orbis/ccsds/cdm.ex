@@ -213,16 +213,16 @@ defmodule Orbis.CCSDS.CDM do
 
       _ ->
         # 2. Try with assumed UTC 'Z' if no offset is present
-        if not String.contains?(str, ["Z", "+", "-"]) do
-          case DateTime.from_iso8601(str <> "Z") do
-            {:ok, dt, _} -> {:ok, dt}
-            _ -> {:error, "bad datetime: #{str}"}
-          end
-        else
+        if String.contains?(str, ["Z", "+", "-"]) do
           # Fallback for Naive strings that might be in a different format
           case NaiveDateTime.from_iso8601(str) do
             {:ok, ndt} -> {:ok, DateTime.from_naive!(ndt, "Etc/UTC")}
             {:error, _} -> {:error, "bad datetime: #{str}"}
+          end
+        else
+          case DateTime.from_iso8601(str <> "Z") do
+            {:ok, dt, _} -> {:ok, dt}
+            _ -> {:error, "bad datetime: #{str}"}
           end
         end
     end
@@ -233,6 +233,7 @@ defmodule Orbis.CCSDS.CDM do
   end
 
   defp parse_num(nil), do: nil
+
   defp parse_num(str) do
     case Float.parse(str) do
       {f, _} -> f

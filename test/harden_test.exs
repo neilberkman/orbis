@@ -1,5 +1,6 @@
 defmodule Orbis.HardenTest do
   use ExUnit.Case, async: true
+
   alias Orbis.CCSDS.CDM
   alias Orbis.Collision
   alias Orbis.Covariance
@@ -87,7 +88,11 @@ defmodule Orbis.HardenTest do
     end
 
     test "returns true for identity" do
-      assert Covariance.positive_semidefinite?([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+      assert Covariance.positive_semidefinite?([
+               [1.0, 0.0, 0.0],
+               [0.0, 1.0, 0.0],
+               [0.0, 0.0, 1.0]
+             ])
     end
 
     test "returns true for a real covariance-like PSD matrix" do

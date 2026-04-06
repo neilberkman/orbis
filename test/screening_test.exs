@@ -1,5 +1,6 @@
 defmodule Orbis.ScreeningTest do
   use ExUnit.Case, async: true
+
   alias Orbis.Screening
 
   @cov [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
@@ -7,9 +8,27 @@ defmodule Orbis.ScreeningTest do
   describe "screen_catalog/2" do
     test "finds candidate pairs within threshold" do
       objs = [
-        %{id: "A", r: {7000.0, 0.0, 0.0}, v: {0.0, 7.5, 0.0}, cov: @cov, hard_body_radius_km: 0.01},
-        %{id: "B", r: {7000.1, 0.0, 0.0}, v: {0.0, -7.5, 0.0}, cov: @cov, hard_body_radius_km: 0.01},
-        %{id: "C", r: {8000.0, 0.0, 0.0}, v: {0.0, 7.5, 0.0}, cov: @cov, hard_body_radius_km: 0.01}
+        %{
+          id: "A",
+          r: {7000.0, 0.0, 0.0},
+          v: {0.0, 7.5, 0.0},
+          cov: @cov,
+          hard_body_radius_km: 0.01
+        },
+        %{
+          id: "B",
+          r: {7000.1, 0.0, 0.0},
+          v: {0.0, -7.5, 0.0},
+          cov: @cov,
+          hard_body_radius_km: 0.01
+        },
+        %{
+          id: "C",
+          r: {8000.0, 0.0, 0.0},
+          v: {0.0, 7.5, 0.0},
+          cov: @cov,
+          hard_body_radius_km: 0.01
+        }
       ]
 
       results = Screening.screen_catalog(objs, miss_threshold_km: 1.0)
@@ -24,9 +43,27 @@ defmodule Orbis.ScreeningTest do
 
     test "sorts results by Pc" do
       objs = [
-        %{id: "A", r: {7000.0, 0.0, 0.0}, v: {0.0, 7.5, 0.0}, cov: @cov, hard_body_radius_km: 0.01},
-        %{id: "B", r: {7000.01, 0.0, 0.0}, v: {0.0, -7.5, 0.0}, cov: @cov, hard_body_radius_km: 0.01},
-        %{id: "C", r: {7000.1, 0.0, 0.0}, v: {0.0, -7.55, 0.0}, cov: @cov, hard_body_radius_km: 0.01}
+        %{
+          id: "A",
+          r: {7000.0, 0.0, 0.0},
+          v: {0.0, 7.5, 0.0},
+          cov: @cov,
+          hard_body_radius_km: 0.01
+        },
+        %{
+          id: "B",
+          r: {7000.01, 0.0, 0.0},
+          v: {0.0, -7.5, 0.0},
+          cov: @cov,
+          hard_body_radius_km: 0.01
+        },
+        %{
+          id: "C",
+          r: {7000.1, 0.0, 0.0},
+          v: {0.0, -7.55, 0.0},
+          cov: @cov,
+          hard_body_radius_km: 0.01
+        }
       ]
 
       results = Screening.screen_catalog(objs, miss_threshold_km: 1.0)
@@ -41,8 +78,20 @@ defmodule Orbis.ScreeningTest do
 
     test "handles degenerate encounters without crashing" do
       objs = [
-        %{id: "A", r: {7000.0, 0.0, 0.0}, v: {0.0, 7.5, 0.0}, cov: @cov, hard_body_radius_km: 0.01},
-        %{id: "B", r: {7000.1, 0.0, 0.0}, v: {0.0, 7.5, 0.0}, cov: @cov, hard_body_radius_km: 0.01}
+        %{
+          id: "A",
+          r: {7000.0, 0.0, 0.0},
+          v: {0.0, 7.5, 0.0},
+          cov: @cov,
+          hard_body_radius_km: 0.01
+        },
+        %{
+          id: "B",
+          r: {7000.1, 0.0, 0.0},
+          v: {0.0, 7.5, 0.0},
+          cov: @cov,
+          hard_body_radius_km: 0.01
+        }
       ]
 
       # This should return an error for zero relative velocity but not crash

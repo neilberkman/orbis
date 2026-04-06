@@ -1,16 +1,18 @@
 defmodule Orbis.CovarianceTest do
   use ExUnit.Case, async: true
+
   alias Orbis.Covariance
 
   describe "extract_pos_cov/1" do
     test "extracts 3x3 matrix from RTN lower triangle" do
       lt = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
       {:ok, m} = Covariance.extract_pos_cov(lt)
+
       assert m == [
-        [1.0, 2.0, 4.0],
-        [2.0, 3.0, 5.0],
-        [4.0, 5.0, 6.0]
-      ]
+               [1.0, 2.0, 4.0],
+               [2.0, 3.0, 5.0],
+               [4.0, 5.0, 6.0]
+             ]
     end
 
     test "returns error for invalid length" do
@@ -28,6 +30,7 @@ defmodule Orbis.CovarianceTest do
         [0.0, 2.0, 0.0],
         [0.0, 0.0, 3.0]
       ]
+
       {:ok, cov_eci} = Covariance.rtn_to_eci(cov_rtn, r, v)
       # In this case RTN aligns with ECI
       assert_in_delta Enum.at(Enum.at(cov_eci, 0), 0), 1.0, 1.0e-9
@@ -45,11 +48,19 @@ defmodule Orbis.CovarianceTest do
 
   describe "positive_semidefinite?/1" do
     test "returns true for identity" do
-      assert Covariance.positive_semidefinite?([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+      assert Covariance.positive_semidefinite?([
+               [1.0, 0.0, 0.0],
+               [0.0, 1.0, 0.0],
+               [0.0, 0.0, 1.0]
+             ])
     end
 
     test "returns false for negative diagonal" do
-      refute Covariance.positive_semidefinite?([[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+      refute Covariance.positive_semidefinite?([
+               [-1.0, 0.0, 0.0],
+               [0.0, 1.0, 0.0],
+               [0.0, 0.0, 1.0]
+             ])
     end
   end
 end

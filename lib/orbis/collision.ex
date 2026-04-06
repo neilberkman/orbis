@@ -10,8 +10,8 @@ defmodule Orbis.Collision do
   """
 
   alias Orbis.Collision.Result
-  alias Orbis.Encounter
   alias Orbis.Covariance
+  alias Orbis.Encounter
 
   @type params :: %{
           r1: {float(), float(), float()},
@@ -38,10 +38,18 @@ defmodule Orbis.Collision do
     %{cov1: cov1, cov2: cov2} = params
 
     cond do
-      not Covariance.valid_matrix?(cov1) -> {:error, "cov1 is not a 3x3 numeric matrix"}
-      not Covariance.valid_matrix?(cov2) -> {:error, "cov2 is not a 3x3 numeric matrix"}
-      not Covariance.positive_semidefinite?(cov1) -> {:error, "cov1 is not positive semidefinite"}
-      not Covariance.positive_semidefinite?(cov2) -> {:error, "cov2 is not positive semidefinite"}
+      not Covariance.valid_matrix?(cov1) ->
+        {:error, "cov1 is not a 3x3 numeric matrix"}
+
+      not Covariance.valid_matrix?(cov2) ->
+        {:error, "cov2 is not a 3x3 numeric matrix"}
+
+      not Covariance.positive_semidefinite?(cov1) ->
+        {:error, "cov1 is not positive semidefinite"}
+
+      not Covariance.positive_semidefinite?(cov2) ->
+        {:error, "cov2 is not positive semidefinite"}
+
       true ->
         method = Keyword.get(opts, :method, :equal_area)
 
@@ -166,7 +174,7 @@ defmodule Orbis.Collision do
 
     trace = a + d
     det = a * d - b * c
-    disc = :math.sqrt(max(0.0, (trace * trace) / 4.0 - det))
+    disc = :math.sqrt(max(0.0, trace * trace / 4.0 - det))
 
     l1 = trace / 2.0 + disc
     l2 = trace / 2.0 - disc
