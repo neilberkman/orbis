@@ -71,6 +71,22 @@ defmodule Orbis.Collision do
     miss = mag(dr)
     rel_speed = mag(dv)
 
+    # Guard: zero relative velocity means no well-defined encounter plane
+    if rel_speed < 1.0e-30 do
+      %{
+        pc: 0.0,
+        miss_km: miss,
+        relative_speed_km_s: 0.0,
+        sigma_x_km: 0.0,
+        sigma_z_km: 0.0,
+        method: :foster_2d_equal_area
+      }
+    else
+      probability_2d(dr, dv, miss, rel_speed, cov1, cov2, hbr)
+    end
+  end
+
+  defp probability_2d(dr, dv, miss, rel_speed, cov1, cov2, hbr) do
     # Step 1: Combine position covariances
     c_combined = mat_add(cov1, cov2)
 
@@ -82,7 +98,7 @@ defmodule Orbis.Collision do
     z_hat =
       if mag(h) < 1.0e-30 do
         # Find a vector not parallel to dv
-        {yx, yy, yz} = y_hat
+        {yx, _, _} = y_hat
         trial = if abs(yx) < 0.9, do: {1.0, 0.0, 0.0}, else: {0.0, 1.0, 0.0}
         normalize(cross(y_hat, trial))
       else
@@ -202,13 +218,15 @@ defmodule Orbis.Collision do
     l1 = trace / 2.0 + disc
     l2 = trace / 2.0 - disc
 
-    # Eigenvector for l1
+    # Eigenvector for l1: from (A - λI)v = 0
+    # Row 1: (a-λ)x + by = 0  →  direction (b, λ-a)
+    # Row 2: cx + (d-λ)y = 0  →  direction (λ-d, c)
     {vx, vy} =
       if abs(b) > 1.0e-30 do
-        normalize_2d({l1 - d, b + c})
+        normalize_2d({l1 - d, c})
       else
         if abs(c) > 1.0e-30 do
-          normalize_2d({b + c, l1 - a})
+          normalize_2d({c, l1 - a})
         else
           {1.0, 0.0}
         end
@@ -222,20 +240,5 @@ defmodule Orbis.Collision do
     if m > 1.0e-30, do: {x / m, y / m}, else: {1.0, 0.0}
   end
 
-  # --- Error function approximation (Abramowitz & Stegun 7.1.26) ---
-
-  defp erf(x) when x < 0, do: -erf(-x)
-
-  defp erf(x) do
-    a1 = 0.254829592
-    a2 = -0.284496736
-    a3 = 1.421413741
-    a4 = -1.453152027
-    a5 = 1.061405429
-    p = 0.3275911
-
-    t = 1.0 / (1.0 + p * x)
-    y = 1.0 - ((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t * :math.exp(-x * x)
-    y
-  end
+  defp erf(x), do: :math.erf(x)
 end

@@ -30,10 +30,7 @@ defmodule Orbis.CollisionTest do
       result = Orbis.Collision.probability(@omitron_params)
 
       # CARA reference: equal-area square Pc = 2.70601573490111e-05
-      # Our implementation matches within ~25% — the remaining difference
-      # is from encounter frame construction details. Both values are
-      # in the same order of magnitude and the algorithm is fundamentally correct.
-      assert result.pc > 1.0e-05 and result.pc < 5.0e-05
+      assert_in_delta result.pc, 2.70601573490111e-05, 1.0e-09
       assert result.miss_km > 0 and result.miss_km < 10
       assert result.method == :foster_2d_equal_area
     end
@@ -77,6 +74,22 @@ defmodule Orbis.CollisionTest do
       large = Orbis.Collision.probability(Map.put(@omitron_params, :hard_body_radius_km, 0.040))
 
       assert large.pc > small.pc
+    end
+
+    test "zero relative velocity returns Pc = 0 without crashing" do
+      result =
+        Orbis.Collision.probability(%{
+          r1: {7000.0, 0.0, 0.0},
+          v1: {0.0, 7.5, 0.0},
+          cov1: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+          r2: {7000.01, 0.0, 0.0},
+          v2: {0.0, 7.5, 0.0},
+          cov2: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+          hard_body_radius_km: 0.015
+        })
+
+      assert result.pc == 0.0
+      assert result.relative_speed_km_s == 0.0
     end
   end
 end
