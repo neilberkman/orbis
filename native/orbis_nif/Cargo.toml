@@ -1,0 +1,13 @@
+[package]
+name = "orbis_nif"
+version = "0.1.0"
+authors = []
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+rustler = "0.37.3"
+chrono = "0.4"
+sgp4 = "2"
