@@ -30,6 +30,7 @@ defmodule Orbis.MixProject do
     [
       {:nx, "~> 0.7"},
       {:rustler, "~> 0.36"},
+      {:astrodynamics, "~> 0.5.0"},
       {:req, "~> 0.5"},
       {:jason, "~> 1.4"},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},

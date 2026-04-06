@@ -123,4 +123,3 @@ fn epoch_to_naive_datetime(year: i32, epochdays: f64) -> chrono::NaiveDateTime {
     let frac_nanos = (frac_day * 86400.0 * 1e9) as i64;
     jan1 + chrono::TimeDelta::days(whole_days) + chrono::TimeDelta::nanoseconds(frac_nanos)
 }
-
