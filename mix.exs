@@ -48,6 +48,14 @@ defmodule Orbis.MixProject do
 
   defp package do
     [
+      files: [
+        "lib",
+        "native/orbis_nif/src",
+        "native/orbis_nif/Cargo*",
+        "mix.exs",
+        "README.md",
+        "LICENSE"
+      ],
       licenses: ["MIT"],
       links: %{"GitHub" => @source_url}
     ]
