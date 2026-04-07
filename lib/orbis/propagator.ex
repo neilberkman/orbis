@@ -39,22 +39,28 @@ defmodule Orbis.Propagator do
     k3 = derivatives(s3, force_funs)
     s4 = add_step({r, v}, k3, dt)
     k4 = derivatives(s4, force_funs)
-    
+
     {r1, v1} = k1
     {r2, v2} = k2
     {r3, v3} = k3
     {r4, v4} = k4
-    
-    rf = vec_add(r, vec_scale(vec_sum([r1, vec_scale(r2, 2.0), vec_scale(r3, 2.0), r4]), dt / 6.0))
-    vf = vec_add(v, vec_scale(vec_sum([v1, vec_scale(v2, 2.0), vec_scale(v3, 2.0), v4]), dt / 6.0))
+
+    rf =
+      vec_add(r, vec_scale(vec_sum([r1, vec_scale(r2, 2.0), vec_scale(r3, 2.0), r4]), dt / 6.0))
+
+    vf =
+      vec_add(v, vec_scale(vec_sum([v1, vec_scale(v2, 2.0), vec_scale(v3, 2.0), v4]), dt / 6.0))
+
     {rf, vf}
   end
 
   defp derivatives({r, v}, forces) do
-    accel = Enum.reduce(forces, {0.0, 0.0, 0.0}, fn f, acc ->
-      a = f.(r, v)
-      vec_add(acc, a)
-    end)
+    accel =
+      Enum.reduce(forces, {0.0, 0.0, 0.0}, fn f, acc ->
+        a = f.(r, v)
+        vec_add(acc, a)
+      end)
+
     {v, accel}
   end
 

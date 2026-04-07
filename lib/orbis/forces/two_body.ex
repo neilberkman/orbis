@@ -3,7 +3,8 @@ defmodule Orbis.Forces.TwoBody do
   Standard Keplerian Two-Body gravity force model.
   """
 
-  @mu 398600.4418 # km³/s²
+  # km³/s²
+  @mu 398_600.4418
 
   @doc """
   Compute the acceleration due to two-body gravity.
@@ -14,9 +15,9 @@ defmodule Orbis.Forces.TwoBody do
     r2 = x * x + y * y + z * z
     r = :math.sqrt(r2)
     r3 = r2 * r
-    
+
     f = -@mu / r3
-    
+
     {x * f, y * f, z * f}
   end
 end
