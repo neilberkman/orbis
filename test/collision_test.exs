@@ -42,6 +42,40 @@ defmodule Orbis.CollisionTest do
       assert_in_delta res_num.pc, res_ea.pc, res_ea.pc * 0.01
       assert res_num.method == :foster_2d_numerical
     end
+
+    test "Omitron test case: Alfano 2005 matches the Foster methods" do
+      {:ok, res_ea} = Orbis.Collision.probability(@omitron_params, method: :equal_area)
+      {:ok, res_num} = Orbis.Collision.probability(@omitron_params, method: :numerical)
+      {:ok, res_alf} = Orbis.Collision.probability(@omitron_params, method: :alfano_2005)
+
+      # Alfano is an independent derivation — it should match the Foster
+      # methods within ~1% for this well-conditioned geometry.
+      assert_in_delta res_alf.pc, res_ea.pc, res_ea.pc * 0.01
+      assert_in_delta res_alf.pc, res_num.pc, res_num.pc * 0.01
+      assert res_alf.method == :alfano_2005
+      assert res_alf.pc > 0.0
+    end
+
+    test "Alfano 2005 respects HBR monotonicity" do
+      {:ok, small} =
+        Orbis.Collision.probability(
+          Map.put(@omitron_params, :hard_body_radius_km, 0.010),
+          method: :alfano_2005
+        )
+
+      {:ok, large} =
+        Orbis.Collision.probability(
+          Map.put(@omitron_params, :hard_body_radius_km, 0.040),
+          method: :alfano_2005
+        )
+
+      assert large.pc > small.pc
+    end
+
+    test "unsupported method returns error" do
+      assert {:error, "unsupported method: no_such_method"} =
+               Orbis.Collision.probability(@omitron_params, method: :no_such_method)
+    end
   end
 
   describe "probability/2 - symmetry" do
