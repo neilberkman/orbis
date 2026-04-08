@@ -4,6 +4,21 @@ defmodule Orbis.Screening do
 
   Generates candidate pairs from many objects, applies coarse filters,
   and evaluates collision probability on surviving encounters.
+
+  ## Where catalog management lives
+
+  Orbis treats "catalog" as a responsibility split across three modules
+  rather than a single `Catalog` facade:
+
+    * `Orbis.CelesTrak` — fetches TLE / OMM data from public endpoints.
+    * `Orbis.Constellation` — holds a named set of propagated satellites
+      and drives bulk operations like `propagate_all/2`.
+    * `Orbis.Screening` (this module) — consumes a materialized list of
+      objects at a common epoch and produces conjunction results.
+
+  A typical workflow pipes CelesTrak → Constellation → Screening. There
+  is no separate `Orbis.Catalog` module because that layer would only
+  re-export these three with no additional behavior.
   """
 
   alias Orbis.Collision
