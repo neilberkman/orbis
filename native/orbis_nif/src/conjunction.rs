@@ -1,8 +1,10 @@
 //! Conjunction assessment: find closest approach between two satellites.
 //!
 //! Uses coarse-fine search: scan at configurable step size, then refine
-//! with golden section search within each candidate interval.
+//! with golden section search within each candidate interval. Backed by
+//! the in-house `astrodynamics::sgp4` propagator.
 
+use astrodynamics::sgp4::{MinutesSinceEpoch, OpsMode, Satellite};
 use rustler::{Encoder, Env, NifResult, Term};
 
 /// Distance between two 3-vectors.
@@ -13,18 +15,26 @@ fn dist(a: &[f64; 3], b: &[f64; 3]) -> f64 {
     (dx * dx + dy * dy + dz * dz).sqrt()
 }
 
-/// Propagate and return position, given precomputed Constants.
-fn propagate(c: &sgp4::Constants, tsince: f64) -> Option<[f64; 3]> {
-    c.propagate_afspc_compatibility_mode(sgp4::MinutesSinceEpoch(tsince))
+/// Propagate one satellite to a given tsince and return the position vector.
+fn propagate(sat: &Satellite, tsince: f64) -> Option<[f64; 3]> {
+    sat.propagate(MinutesSinceEpoch(tsince))
         .ok()
         .map(|p| p.position)
 }
 
+/// Compute the distance between the two satellites at time `tsince` measured
+/// from satellite 1's epoch. Satellite 2 is offset by `epoch_offset2_min`.
+fn dist_at(s1: &Satellite, s2: &Satellite, epoch_offset2_min: f64, tsince: f64) -> Option<f64> {
+    let p1 = propagate(s1, tsince)?;
+    let p2 = propagate(s2, tsince - epoch_offset2_min)?;
+    Some(dist(&p1, &p2))
+}
+
 /// Golden section search for minimum distance within [a, b] (minutes).
 fn golden_search(
-    c1: &sgp4::Constants,
-    c2: &sgp4::Constants,
-    epoch_offset2: f64,
+    s1: &Satellite,
+    s2: &Satellite,
+    epoch_offset2_min: f64,
     mut a: f64,
     mut b: f64,
 ) -> Option<(f64, f64)> {
@@ -39,8 +49,8 @@ fn golden_search(
             break;
         }
 
-        let dc = dist_at(c1, c2, epoch_offset2, c)?;
-        let dd = dist_at(c1, c2, epoch_offset2, d)?;
+        let dc = dist_at(s1, s2, epoch_offset2_min, c)?;
+        let dd = dist_at(s1, s2, epoch_offset2_min, d)?;
 
         if dc < dd {
             b = d;
@@ -53,19 +63,8 @@ fn golden_search(
     }
 
     let mid = (a + b) / 2.0;
-    let d = dist_at(c1, c2, epoch_offset2, mid)?;
+    let d = dist_at(s1, s2, epoch_offset2_min, mid)?;
     Some((mid, d))
-}
-
-fn dist_at(
-    c1: &sgp4::Constants,
-    c2: &sgp4::Constants,
-    epoch_offset2: f64,
-    tsince: f64,
-) -> Option<f64> {
-    let p1 = propagate(c1, tsince)?;
-    let p2 = propagate(c2, tsince - epoch_offset2)?;
-    Some(dist(&p1, &p2))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -83,36 +82,26 @@ pub(crate) fn conjunction_impl<'a>(
     let ok = rustler::types::atom::Atom::from_str(env, "ok")?;
     let error = rustler::types::atom::Atom::from_str(env, "error")?;
 
-    let tle1 = format!("{}\n{}\n", line1_a.trim(), line2_a.trim());
-    let tle2 = format!("{}\n{}\n", line1_b.trim(), line2_b.trim());
-
-    // Parse and initialize once
-    let e1 = match sgp4::parse_2les(&tle1) {
-        Ok(e) if !e.is_empty() => e,
-        _ => return Ok((error, "failed to parse TLE 1").encode(env)),
+    // Parse and initialize once per satellite — Satellite caches the satrec
+    // so subsequent propagate calls are pure step kernels. AFSPC opsmode
+    // matches historical orbis behavior calibrated against AFSPC reference
+    // catalogs (see `propagation.rs` for the same rationale).
+    let s1 = match Satellite::from_tle_with_opsmode(line1_a, line2_a, OpsMode::Afspc) {
+        Ok(s) => s,
+        Err(e) => return Ok((error, format!("failed to parse TLE 1: {e}")).encode(env)),
     };
-    let e2 = match sgp4::parse_2les(&tle2) {
-        Ok(e) if !e.is_empty() => e,
-        _ => return Ok((error, "failed to parse TLE 2").encode(env)),
-    };
-
-    let c1 = match sgp4::Constants::from_elements_afspc_compatibility_mode(&e1[0]) {
-        Ok(c) => c,
-        Err(e) => return Ok((error, format!("SGP4 init TLE1: {e}")).encode(env)),
-    };
-    let c2 = match sgp4::Constants::from_elements_afspc_compatibility_mode(&e2[0]) {
-        Ok(c) => c,
-        Err(e) => return Ok((error, format!("SGP4 init TLE2: {e}")).encode(env)),
+    let s2 = match Satellite::from_tle_with_opsmode(line1_b, line2_b, OpsMode::Afspc) {
+        Ok(s) => s,
+        Err(e) => return Ok((error, format!("failed to parse TLE 2: {e}")).encode(env)),
     };
 
-    // Epoch offset: TLE2 epoch - TLE1 epoch in minutes
-    let epoch1 =
-        sgp4::julian_years_since_j2000_afspc_compatibility_mode(&e1[0].datetime);
-    let epoch2 =
-        sgp4::julian_years_since_j2000_afspc_compatibility_mode(&e2[0].datetime);
-    let epoch_offset2 = (epoch2 - epoch1) * 365.25 * 24.0 * 60.0;
+    // Epoch offset: TLE2 epoch - TLE1 epoch in minutes. Computed in split-JD
+    // form to preserve precision over multi-decade epochs.
+    let e1 = s1.epoch_jd();
+    let e2 = s2.epoch_jd();
+    let epoch_offset2_min = ((e2.0 - e1.0) + (e2.1 - e1.1)) * 1440.0;
 
-    // Coarse scan + golden section refinement
+    // Coarse scan + golden section refinement.
     let n_steps = ((end_min - start_min) / step_min).ceil() as usize;
     let mut results: Vec<(f64, f64)> = Vec::new();
     let mut prev_dist = f64::MAX;
@@ -122,7 +111,7 @@ pub(crate) fn conjunction_impl<'a>(
     for i in 0..=n_steps {
         let t = (start_min + i as f64 * step_min).min(end_min);
 
-        let d = match dist_at(&c1, &c2, epoch_offset2, t) {
+        let d = match dist_at(&s1, &s2, epoch_offset2_min, t) {
             Some(d) => d,
             None => {
                 prev_dist = f64::MAX;
@@ -135,7 +124,7 @@ pub(crate) fn conjunction_impl<'a>(
         if d > prev_dist && decreasing {
             let search_start = (prev_t - step_min).max(start_min);
             if let Some((tca, tca_dist)) =
-                golden_search(&c1, &c2, epoch_offset2, search_start, t)
+                golden_search(&s1, &s2, epoch_offset2_min, search_start, t)
             {
                 if tca_dist < threshold_km {
                     results.push((tca, tca_dist));

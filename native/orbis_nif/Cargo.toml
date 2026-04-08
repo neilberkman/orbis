@@ -10,4 +10,4 @@ crate-type = ["cdylib"]
 [dependencies]
 rustler = "0.37.3"
 chrono = "0.4"
-sgp4 = "2"
+astrodynamics = "0.6.2"

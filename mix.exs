@@ -1,7 +1,7 @@
 defmodule Orbis.MixProject do
   use Mix.Project
 
-  @version "0.5.0"
+  @version "0.6.0"
   @source_url "https://github.com/neilberkman/orbis"
 
   def project do
@@ -30,7 +30,7 @@ defmodule Orbis.MixProject do
     [
       {:nx, "~> 0.7"},
       {:rustler, "~> 0.36"},
-      {:astrodynamics, "~> 0.5.0"},
+      {:astrodynamics, "~> 0.6.0"},
       {:req, "~> 0.5"},
       {:jason, "~> 1.4"},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
