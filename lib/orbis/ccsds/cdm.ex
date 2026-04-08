@@ -2,9 +2,13 @@ defmodule Orbis.CCSDS.CDM do
   @moduledoc """
   Parse and encode CCSDS Conjunction Data Messages (CDM).
 
-  Supports the KVN (Keyword=Value Notation) format per CCSDS 508.0-B-1.
-  CDMs describe a predicted close approach between two space objects,
-  including states, covariances, and collision probability.
+  Supports both the **KVN** (Keyword=Value Notation) and **XML** formats
+  per CCSDS 508.0-B-1. CDMs describe a predicted close approach between
+  two space objects, including states, covariances, and collision
+  probability.
+
+  `parse/1` auto-detects the format based on the first non-whitespace
+  character: a leading `<` is treated as XML, anything else as KVN.
 
   ## Examples
 
@@ -13,7 +17,14 @@ defmodule Orbis.CCSDS.CDM do
       cdm.miss_distance_m        # 715.0
       cdm.collision_probability  # 4.835e-05
 
+      # KVN output (default)
       kvn = Orbis.CCSDS.CDM.encode(cdm)
+
+      # XML output
+      xml = Orbis.CCSDS.CDM.encode(cdm, format: :xml)
+
+      # Round-trip through XML
+      {:ok, cdm2} = Orbis.CCSDS.CDM.parse(xml)
   """
 
   defmodule ObjectData do
@@ -70,13 +81,33 @@ defmodule Orbis.CCSDS.CDM do
     :object2
   ]
 
+  @state_keys ~w(X Y Z X_DOT Y_DOT Z_DOT)
+  @cov_keys ~w(CR_R CT_R CT_T CN_R CN_T CN_N)
+
   @doc """
-  Parse a CDM in KVN format.
+  Parse a CDM in either KVN or XML format.
+
+  Format is auto-detected from the first non-whitespace character: `<`
+  routes to the XML parser, anything else to the KVN parser.
 
   Returns `{:ok, %CDM{}}` or `{:error, reason}`.
   """
   @spec parse(String.t()) :: {:ok, t()} | {:error, String.t()}
-  def parse(kvn_string) when is_binary(kvn_string) do
+  def parse(string) when is_binary(string) do
+    trimmed = String.trim_leading(string)
+
+    if String.starts_with?(trimmed, "<") do
+      parse_xml(string)
+    else
+      parse_kvn(string)
+    end
+  end
+
+  @doc """
+  Parse a CDM in KVN format explicitly. Skips format auto-detection.
+  """
+  @spec parse_kvn(String.t()) :: {:ok, t()} | {:error, String.t()}
+  def parse_kvn(kvn_string) when is_binary(kvn_string) do
     lines =
       kvn_string
       |> String.split("\n")
@@ -118,10 +149,27 @@ defmodule Orbis.CCSDS.CDM do
   end
 
   @doc """
-  Encode a CDM to KVN format.
+  Encode a CDM.
+
+  ## Options
+    * `:format` — `:kvn` (default) or `:xml`
   """
-  @spec encode(t()) :: String.t()
-  def encode(%__MODULE__{} = cdm) do
+  @spec encode(t(), keyword()) :: String.t()
+  def encode(cdm, opts \\ [])
+
+  def encode(%__MODULE__{} = cdm, opts) do
+    case Keyword.get(opts, :format, :kvn) do
+      :kvn -> encode_kvn(cdm)
+      :xml -> encode_xml(cdm)
+      other -> raise ArgumentError, "unsupported CDM format: #{inspect(other)}"
+    end
+  end
+
+  @doc """
+  Encode a CDM to KVN format explicitly.
+  """
+  @spec encode_kvn(t()) :: String.t()
+  def encode_kvn(%__MODULE__{} = cdm) do
     lines = [
       "CCSDS_CDM_VERS = 1.0",
       "CREATION_DATE = #{format_datetime(cdm.creation_date)}",
@@ -146,6 +194,47 @@ defmodule Orbis.CCSDS.CDM do
     lines = lines ++ encode_object(cdm.object2, "OBJECT2")
 
     Enum.join(lines, "\n")
+  end
+
+  @doc """
+  Encode a CDM to XML format explicitly.
+
+  Produces a document matching the CCSDS 508.0-B-1 CDM XML schema's
+  top-level shape (cdm > header/body > segment > metadata/data). This
+  is the canonical XML form used for inter-system exchange alongside KVN.
+  """
+  @spec encode_xml(t()) :: String.t()
+  def encode_xml(%__MODULE__{} = cdm) do
+    header =
+      [
+        ~s(<?xml version="1.0" encoding="UTF-8"?>),
+        ~s(<cdm id="CCSDS_CDM_VERS" version="1.0">),
+        "  <header>",
+        "    <CCSDS_CDM_VERS>1.0</CCSDS_CDM_VERS>",
+        "    <CREATION_DATE>#{format_datetime(cdm.creation_date)}</CREATION_DATE>",
+        "    <ORIGINATOR>#{xml_escape(cdm.originator)}</ORIGINATOR>",
+        "    <MESSAGE_ID>#{xml_escape(cdm.message_id)}</MESSAGE_ID>",
+        "  </header>"
+      ]
+
+    body_open = ["  <body>"]
+
+    rel_meta = [
+      "    <relativeMetadataData>",
+      "      <TCA>#{format_datetime(cdm.tca)}</TCA>",
+      ~s(      <MISS_DISTANCE units="m">#{cdm.miss_distance_m}</MISS_DISTANCE>),
+      ~s(      <RELATIVE_SPEED units="m/s">#{cdm.relative_speed_m_s}</RELATIVE_SPEED>),
+      "      <COLLISION_PROBABILITY>#{cdm.collision_probability}</COLLISION_PROBABILITY>",
+      "      <COLLISION_PROBABILITY_METHOD>#{xml_escape(cdm.collision_probability_method)}</COLLISION_PROBABILITY_METHOD>",
+      "    </relativeMetadataData>"
+    ]
+
+    seg1 = encode_xml_segment(cdm.object1, "OBJECT1")
+    seg2 = encode_xml_segment(cdm.object2, "OBJECT2")
+
+    footer = ["  </body>", "</cdm>"]
+
+    Enum.join(header ++ body_open ++ rel_meta ++ seg1 ++ seg2 ++ footer, "\n")
   end
 
   @doc """
@@ -180,6 +269,147 @@ defmodule Orbis.CCSDS.CDM do
       hard_body_radius_km: hbr_km
     }
   end
+
+  # --- XML parse ---
+
+  @doc """
+  Parse a CDM in XML format explicitly. Skips format auto-detection.
+  """
+  @spec parse_xml(String.t()) :: {:ok, t()} | {:error, String.t()}
+  def parse_xml(xml) when is_binary(xml) do
+    # Strip XML comments and the prologue so the field-extraction regexes
+    # don't have to worry about them.
+    cleaned =
+      xml
+      |> String.replace(~r/<!--.*?-->/s, "")
+      |> String.replace(~r/<\?xml[^?]*\?>/, "")
+
+    with {:ok, tca} <- parse_datetime(xml_text(cleaned, "TCA")),
+         {:ok, creation} <- parse_datetime(xml_text(cleaned, "CREATION_DATE")),
+         {:ok, msg_id} <- required(xml_text(cleaned, "MESSAGE_ID"), "missing MESSAGE_ID") do
+      hbr =
+        case xml_text(cleaned, "HBR") do
+          nil -> nil
+          v -> parse_num(v)
+        end
+
+      {seg1_xml, seg2_xml} = split_xml_segments(cleaned)
+
+      with {:ok, obj1} <- parse_xml_object(seg1_xml),
+           {:ok, obj2} <- parse_xml_object(seg2_xml) do
+        {:ok,
+         %__MODULE__{
+           creation_date: creation,
+           originator: xml_text(cleaned, "ORIGINATOR"),
+           message_id: msg_id,
+           tca: tca,
+           miss_distance_m: parse_num(xml_text(cleaned, "MISS_DISTANCE")),
+           relative_speed_m_s: parse_num(xml_text(cleaned, "RELATIVE_SPEED")),
+           collision_probability: parse_num(xml_text(cleaned, "COLLISION_PROBABILITY")),
+           collision_probability_method: xml_text(cleaned, "COLLISION_PROBABILITY_METHOD"),
+           hard_body_radius_m: hbr,
+           object1: obj1,
+           object2: obj2
+         }}
+      end
+    end
+  rescue
+    e -> {:error, "CDM XML parse error: #{Exception.message(e)}"}
+  end
+
+  # Extract the first text value for a given tag name, stripping any
+  # optional attributes. Returns nil if the tag is absent or self-closing.
+  defp xml_text(xml, tag) do
+    # Match `<TAG[ attrs]>value</TAG>`. Note: we stop the value at the
+    # first `<`, which is correct for CDM's flat leaf elements.
+    case Regex.run(~r/<#{tag}(?:\s[^>]*)?>([^<]*)<\/#{tag}>/, xml) do
+      [_, val] -> val |> String.trim() |> nil_if_empty()
+      _ -> nil
+    end
+  end
+
+  defp nil_if_empty(""), do: nil
+  defp nil_if_empty(s), do: s
+
+  # Split the body into the two <segment>...</segment> blocks. CDM always
+  # has exactly two per 508.0-B-1, one per object.
+  defp split_xml_segments(xml) do
+    case Regex.scan(~r/<segment>(.*?)<\/segment>/s, xml) do
+      [[_, seg1], [_, seg2] | _] -> {seg1, seg2}
+      _ -> {"", ""}
+    end
+  end
+
+  defp parse_xml_object(segment_xml) do
+    state_vals = Enum.map(@state_keys, &(xml_text(segment_xml, &1) |> parse_num()))
+    cov_vals = Enum.map(@cov_keys, &(xml_text(segment_xml, &1) |> parse_num()))
+
+    if Enum.any?(state_vals, &is_nil/1) do
+      {:error, "incomplete state vector"}
+    else
+      [x, y, z, xd, yd, zd] = state_vals
+      [cr_r, ct_r, ct_t, cn_r, cn_t, cn_n] = Enum.map(cov_vals, &(&1 || 0.0))
+
+      {:ok,
+       %ObjectData{
+         object_designator: xml_text(segment_xml, "OBJECT_DESIGNATOR"),
+         catalog_name: xml_text(segment_xml, "CATALOG_NAME"),
+         object_name: xml_text(segment_xml, "OBJECT_NAME"),
+         international_designator: xml_text(segment_xml, "INTERNATIONAL_DESIGNATOR"),
+         object_type: xml_text(segment_xml, "OBJECT_TYPE"),
+         ref_frame: xml_text(segment_xml, "REF_FRAME"),
+         state: {{x, y, z}, {xd, yd, zd}},
+         covariance_rtn: [cr_r, ct_r, ct_t, cn_r, cn_t, cn_n]
+       }}
+    end
+  end
+
+  defp encode_xml_segment(obj, name) do
+    {{x, y, z}, {xd, yd, zd}} = obj.state
+    [cr_r, ct_r, ct_t, cn_r, cn_t, cn_n] = obj.covariance_rtn
+
+    [
+      "    <segment>",
+      "      <metadata>",
+      "        <OBJECT>#{name}</OBJECT>",
+      "        <OBJECT_DESIGNATOR>#{xml_escape(obj.object_designator)}</OBJECT_DESIGNATOR>",
+      "        <OBJECT_NAME>#{xml_escape(obj.object_name)}</OBJECT_NAME>",
+      "        <REF_FRAME>#{xml_escape(obj.ref_frame)}</REF_FRAME>",
+      "      </metadata>",
+      "      <data>",
+      "        <stateVector>",
+      ~s(          <X units="km">#{x}</X>),
+      ~s(          <Y units="km">#{y}</Y>),
+      ~s(          <Z units="km">#{z}</Z>),
+      ~s(          <X_DOT units="km/s">#{xd}</X_DOT>),
+      ~s(          <Y_DOT units="km/s">#{yd}</Y_DOT>),
+      ~s(          <Z_DOT units="km/s">#{zd}</Z_DOT>),
+      "        </stateVector>",
+      "        <covarianceMatrix>",
+      ~s(          <CR_R units="m**2">#{cr_r}</CR_R>),
+      ~s(          <CT_R units="m**2">#{ct_r}</CT_R>),
+      ~s(          <CT_T units="m**2">#{ct_t}</CT_T>),
+      ~s(          <CN_R units="m**2">#{cn_r}</CN_R>),
+      ~s(          <CN_T units="m**2">#{cn_t}</CN_T>),
+      ~s(          <CN_N units="m**2">#{cn_n}</CN_N>),
+      "        </covarianceMatrix>",
+      "      </data>",
+      "    </segment>"
+    ]
+  end
+
+  defp xml_escape(nil), do: ""
+
+  defp xml_escape(value) when is_binary(value) do
+    value
+    |> String.replace("&", "&amp;")
+    |> String.replace("<", "&lt;")
+    |> String.replace(">", "&gt;")
+    |> String.replace("\"", "&quot;")
+    |> String.replace("'", "&apos;")
+  end
+
+  defp xml_escape(value), do: xml_escape(to_string(value))
 
   # --- Helpers ---
 
@@ -270,9 +500,6 @@ defmodule Orbis.CCSDS.CDM do
         {Map.new(), Map.new()}
     end
   end
-
-  @state_keys ~w(X Y Z X_DOT Y_DOT Z_DOT)
-  @cov_keys ~w(CR_R CT_R CT_T CN_R CN_T CN_N)
 
   defp parse_object(kv) do
     state_vals = Enum.map(@state_keys, &parse_num(kv[&1]))

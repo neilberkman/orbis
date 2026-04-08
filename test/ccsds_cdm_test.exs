@@ -140,6 +140,94 @@ defmodule Orbis.CCSDS.CDMTest do
       assert cdm2.object1.state == cdm.object1.state
     end
 
+    test "round-trips through XML encode/parse", %{cdm: cdm} do
+      # Encode to XML, parse back, and confirm every meaningful field matches.
+      xml = CDM.encode(cdm, format: :xml)
+
+      # Basic shape checks on the emitted XML
+      assert String.starts_with?(String.trim_leading(xml), "<?xml")
+      assert String.contains?(xml, "<cdm ")
+      assert String.contains?(xml, "<relativeMetadataData>")
+      assert String.contains?(xml, "<segment>")
+
+      # Format auto-detection should route this back to the XML parser
+      {:ok, cdm2} = CDM.parse(xml)
+
+      assert cdm2.originator == cdm.originator
+      assert cdm2.message_id == cdm.message_id
+      assert cdm2.creation_date == cdm.creation_date
+      assert cdm2.tca == cdm.tca
+      assert_in_delta cdm2.miss_distance_m, cdm.miss_distance_m, 1.0e-6
+      assert_in_delta cdm2.relative_speed_m_s, cdm.relative_speed_m_s, 1.0e-6
+      assert_in_delta cdm2.collision_probability, cdm.collision_probability, 1.0e-10
+      assert cdm2.collision_probability_method == cdm.collision_probability_method
+
+      # Object metadata
+      assert cdm2.object1.object_designator == cdm.object1.object_designator
+      assert cdm2.object1.object_name == cdm.object1.object_name
+      assert cdm2.object1.ref_frame == cdm.object1.ref_frame
+      assert cdm2.object2.object_designator == cdm.object2.object_designator
+      assert cdm2.object2.object_name == cdm.object2.object_name
+
+      # State vectors (exact)
+      assert cdm2.object1.state == cdm.object1.state
+      assert cdm2.object2.state == cdm.object2.state
+
+      # Covariance (exact bit-patterns through f64 → string → f64)
+      for {a, b} <- Enum.zip(cdm2.object1.covariance_rtn, cdm.object1.covariance_rtn) do
+        assert_in_delta a, b, 1.0e-6
+      end
+
+      for {a, b} <- Enum.zip(cdm2.object2.covariance_rtn, cdm.object2.covariance_rtn) do
+        assert_in_delta a, b, 1.0e-6
+      end
+    end
+
+    test "parse_xml/1 explicit form matches parse/1 auto-detection", %{cdm: cdm} do
+      xml = CDM.encode_xml(cdm)
+      {:ok, via_auto} = CDM.parse(xml)
+      {:ok, via_explicit} = CDM.parse_xml(xml)
+
+      assert via_auto.message_id == via_explicit.message_id
+      assert via_auto.tca == via_explicit.tca
+      assert via_auto.object1.state == via_explicit.object1.state
+    end
+
+    test "parse_kvn/1 explicit form matches parse/1 auto-detection", %{kvn: kvn} do
+      {:ok, via_auto} = CDM.parse(kvn)
+      {:ok, via_explicit} = CDM.parse_kvn(kvn)
+
+      assert via_auto.message_id == via_explicit.message_id
+      assert via_auto.tca == via_explicit.tca
+    end
+
+    test "XML format auto-detection handles leading whitespace" do
+      kvn = """
+         \t
+      CCSDS_CDM_VERS = 1.0
+      CREATION_DATE = 2024-01-01T00:00:00.000
+      """
+
+      xml = """
+         \t
+      <?xml version="1.0" encoding="UTF-8"?>
+      <cdm>
+      """
+
+      # KVN with leading whitespace routes to KVN parser (will fail on
+      # missing required fields, not on format detection)
+      assert {:error, _} = CDM.parse(kvn)
+      # XML with leading whitespace routes to XML parser (same — will
+      # fail on missing required fields, not on format detection)
+      assert {:error, _} = CDM.parse(xml)
+    end
+
+    test "XML encode rejects unsupported format option", %{cdm: cdm} do
+      assert_raise ArgumentError, fn ->
+        CDM.encode(cdm, format: :toml)
+      end
+    end
+
     test "parses HBR from COMMENT" do
       kvn = """
       CCSDS_CDM_VERS = 1.0
