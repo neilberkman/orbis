@@ -5,10 +5,18 @@
 
 use rustler::{NifResult, Term};
 
-use crate::coordinates::{
-    gcrs_to_itrs_matrix, geodetic_to_itrs, mat3_vec3_mul, parse_datetime_tuple,
-};
-use crate::time_scales::TimeScales;
+use astrodynamics::frames::transforms::{gcrs_to_itrs_matrix, geodetic_to_itrs, mat3_vec3_mul};
+use astrodynamics::time::scales::TimeScales;
+
+type DateTuple = (i32, i32, i32);
+type TimeTuple = (i32, i32, i32, i32);
+
+/// Decode an Elixir `{{y,m,d},{h,min,s,us}}` datetime tuple into its
+/// components. Pure term decode (glue); no domain formula.
+fn parse_datetime_tuple(term: Term) -> NifResult<(i32, i32, i32, i32, i32, i32, i32)> {
+    let (date, time): (DateTuple, TimeTuple) = term.decode()?;
+    Ok((date.0, date.1, date.2, time.0, time.1, time.2, time.3))
+}
 
 /// Speed of light in km/s.
 const C_KM_S: f64 = 299792.458;

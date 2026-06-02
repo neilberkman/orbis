@@ -58,6 +58,13 @@ defmodule Orbis.NIF do
   def find_conjunctions(_l1a, _l2a, _l1b, _l2b, _start, _end, _step, _threshold),
     do: :erlang.nif_error(:nif_not_loaded)
 
+  def sp3_parse(_bytes), do: :erlang.nif_error(:nif_not_loaded)
+
+  def sp3_time_scale(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def sp3_position(_handle, _system_letter, _prn, _scale, _jd_whole, _jd_fraction),
+    do: :erlang.nif_error(:nif_not_loaded)
+
   def iod_gauss(
         _decl1,
         _decl2,

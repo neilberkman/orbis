@@ -10,4 +10,5 @@ crate-type = ["cdylib"]
 [dependencies]
 rustler = "0.37.3"
 chrono = "0.4"
-astrodynamics = "0.6.2"
+astrodynamics = { path = "../../../astrodynamics/crates/astrodynamics" }
+astrodynamics-gnss = { path = "../../../astrodynamics/crates/astrodynamics-gnss" }

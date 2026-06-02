@@ -1,20 +1,45 @@
 mod atmosphere;
 mod conjunction;
-mod coordinates;
 mod doppler;
 mod ephemeris;
 mod gauss;
-mod iau2000a_data;
-mod iers_data;
 mod iod;
 mod lambert;
-mod matrix;
-mod nutation;
-mod precession;
 mod propagation;
-mod time_scales;
+mod sp3;
 
 use rustler::{Env, NifResult, Term};
+
+// The float-producing numerics for the time-scale and frame-transform substrate
+// live in the `astrodynamics` core crate. The NIF entry points below are pure
+// Rustler glue:
+// they decode Erlang terms, call the relocated `astrodynamics::` public compute
+// functions, and encode the results back. No domain formula for these moved
+// modules lives in `orbis_nif`.
+use astrodynamics::frames::transforms::{
+    gcrs_to_itrs_compute, gcrs_to_topocentric_compute, itrs_to_geodetic_compute,
+    teme_to_gcrs_compute,
+};
+use astrodynamics::time::scales::TimeScales;
+
+type DateTuple = (i32, i32, i32);
+type TimeTuple = (i32, i32, i32, i32);
+
+/// Decode an Elixir `{{y,m,d},{h,min,s,us}}` datetime tuple into UTC components.
+/// Pure term decode (glue); no domain formula.
+fn parse_datetime_tuple(term: Term) -> NifResult<(i32, i32, i32, i32, i32, i32, i32)> {
+    let (date, time): (DateTuple, TimeTuple) = term.decode()?;
+    Ok((date.0, date.1, date.2, time.0, time.1, time.2, time.3))
+}
+
+/// Build the relocated `TimeScales` from an Elixir datetime tuple. Glue only:
+/// folds microseconds into fractional seconds and forwards to the crate.
+fn time_scales_from_tuple(datetime_tuple: Term) -> NifResult<TimeScales> {
+    let (year, month, day, hour, minute, second, microsecond) =
+        parse_datetime_tuple(datetime_tuple)?;
+    let second_with_micro = second as f64 + microsecond as f64 / 1_000_000.0;
+    Ok(TimeScales::from_utc(year, month, day, hour, minute, second_with_micro))
+}
 
 #[rustler::nif]
 fn propagate_with_elements<'a>(
@@ -39,7 +64,8 @@ fn teme_to_gcrs(
     datetime_tuple: Term,
     skyfield_compat: bool,
 ) -> NifResult<(Vec3, Vec3)> {
-    coordinates::teme_to_gcrs_impl(x, y, z, vx, vy, vz, datetime_tuple, skyfield_compat)
+    let ts = time_scales_from_tuple(datetime_tuple)?;
+    Ok(teme_to_gcrs_compute(x, y, z, vx, vy, vz, &ts, skyfield_compat))
 }
 
 #[rustler::nif]
@@ -50,7 +76,8 @@ fn gcrs_to_itrs(
     datetime_tuple: Term,
     skyfield_compat: bool,
 ) -> NifResult<(f64, f64, f64)> {
-    coordinates::gcrs_to_itrs_impl(x, y, z, datetime_tuple, skyfield_compat)
+    let ts = time_scales_from_tuple(datetime_tuple)?;
+    Ok(gcrs_to_itrs_compute(x, y, z, &ts, skyfield_compat))
 }
 
 #[rustler::nif]
@@ -59,7 +86,7 @@ fn itrs_to_geodetic(
     y: f64,
     z: f64,
 ) -> NifResult<(f64, f64, f64)> {
-    coordinates::itrs_to_geodetic_impl(x, y, z)
+    Ok(itrs_to_geodetic_compute(x, y, z))
 }
 
 #[rustler::nif]
@@ -74,11 +101,12 @@ fn gcrs_to_topocentric(
     datetime_tuple: Term,
     skyfield_compat: bool,
 ) -> NifResult<(f64, f64, f64)> {
-    coordinates::gcrs_to_topocentric_impl(
+    let ts = time_scales_from_tuple(datetime_tuple)?;
+    Ok(gcrs_to_topocentric_compute(
         sat_x, sat_y, sat_z,
         station_lat_deg, station_lon_deg, station_alt_km,
-        datetime_tuple, skyfield_compat,
-    )
+        &ts, skyfield_compat,
+    ))
 }
 
 #[rustler::nif]
@@ -118,7 +146,7 @@ fn utc_to_tdb_jd_split(
     minute: i32,
     second: f64,
 ) -> NifResult<(f64, f64)> {
-    let ts = time_scales::TimeScales::from_utc(year, month, day, hour, minute, second);
+    let ts = TimeScales::from_utc(year, month, day, hour, minute, second);
     Ok((ts.jd_whole, ts.tdb_fraction))
 }
 
@@ -131,7 +159,7 @@ fn utc_to_tdb_jd(
     minute: i32,
     second: f64,
 ) -> NifResult<f64> {
-    let ts = time_scales::TimeScales::from_utc(year, month, day, hour, minute, second);
+    let ts = TimeScales::from_utc(year, month, day, hour, minute, second);
     Ok(ts.jd_tdb)
 }
 

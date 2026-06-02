@@ -22,14 +22,20 @@ dependencies = [
 
 [[package]]
 name = "astrodynamics"
-version = "0.6.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "abe454042ffbb431ab9c312f05cd8dde355271906a6b15993123027f9c8f9c30"
+version = "0.6.3"
 dependencies = [
  "cc",
  "nalgebra",
  "serde",
  "thiserror",
+]
+
+[[package]]
+name = "astrodynamics-gnss"
+version = "0.1.0"
+dependencies = [
+ "astrodynamics",
+ "nalgebra",
 ]
 
 [[package]]
@@ -258,6 +264,7 @@ name = "orbis_nif"
 version = "0.1.0"
 dependencies = [
  "astrodynamics",
+ "astrodynamics-gnss",
  "chrono",
  "rustler",
 ]
