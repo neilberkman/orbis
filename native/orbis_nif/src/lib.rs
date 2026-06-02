@@ -3,10 +3,12 @@ mod conjunction;
 mod doppler;
 mod ephemeris;
 mod gauss;
+mod iono;
 mod iod;
 mod lambert;
 mod propagation;
 mod sp3;
+mod tropo;
 
 use rustler::{Env, NifResult, Term};
 

@@ -65,6 +65,48 @@ defmodule Orbis.NIF do
   def sp3_position(_handle, _system_letter, _prn, _scale, _jd_whole, _jd_fraction),
     do: :erlang.nif_error(:nif_not_loaded)
 
+  def klobuchar_delay(
+        _lat_rad,
+        _lon_rad,
+        _elevation_rad,
+        _azimuth_rad,
+        _jd_whole,
+        _jd_fraction,
+        _frequency_hz,
+        _alpha,
+        _beta
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def ionex_parse(_bytes), do: :erlang.nif_error(:nif_not_loaded)
+
+  def ionex_slant(
+        _handle,
+        _lat_rad,
+        _lon_rad,
+        _elevation_rad,
+        _azimuth_rad,
+        _epoch_j2000_s,
+        _frequency_hz
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def tropo_zenith_delay(_lat_rad, _height_m, _pressure_hpa, _temperature_k, _relative_humidity),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def tropo_mapping_factors(_elevation_rad, _lat_rad, _height_m, _jd_whole, _jd_fraction),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def tropo_slant_delay(
+        _elevation_rad,
+        _lat_rad,
+        _lon_rad,
+        _height_m,
+        _pressure_hpa,
+        _temperature_k,
+        _relative_humidity,
+        _jd_whole,
+        _jd_fraction
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
   def iod_gauss(
         _decl1,
         _decl2,

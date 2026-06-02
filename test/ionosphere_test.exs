@@ -1,0 +1,148 @@
+defmodule Orbis.IonosphereTest do
+  use ExUnit.Case, async: true
+
+  alias Orbis.Ionosphere
+
+  # Synthetic 7x7 two-map IONEX grid (committed fixture): latitudes 60..-60 step
+  # -20, longitudes -180..180 step 60, two epochs at 2020-06-24 00:00 and 02:00.
+  # Same bytes the parity generator uses, so the slant delay below can be checked
+  # against the IONEX parity golden.
+  @ionex_path Path.join(__DIR__, "fixtures/synthetic_2map_7x7.20i")
+  @ionex File.read!(@ionex_path)
+
+  # GPS broadcast coefficients used across the Klobuchar parity fixtures.
+  @klobuchar_params %{
+    alpha:
+      {0.1490116119384766e-7, 0.2235174179077148e-7, -0.1192092895507813e-6,
+       -0.1192092895507813e-6},
+    beta: {0.96256e5, 0.131072e6, -0.65536e5, -0.589824e6}
+  }
+
+  describe "klobuchar_delay/7" do
+    test "returns a positive L1 group delay in meters" do
+      assert {:ok, delay_m} =
+               Ionosphere.klobuchar_delay(
+                 @klobuchar_params,
+                 40.0,
+                 -100.0,
+                 30.0,
+                 85.0,
+                 {{2020, 6, 24}, {14, 0, 0}},
+                 1_575_420_000.0
+               )
+
+      assert is_float(delay_m)
+      assert delay_m > 0.0
+    end
+
+    test "an L2 carrier delay exceeds the L1 delay (dispersive 1/f^2 scaling)" do
+      epoch = {{2020, 6, 24}, {14, 0, 0}}
+
+      {:ok, l1} =
+        Ionosphere.klobuchar_delay(
+          @klobuchar_params,
+          40.0,
+          -100.0,
+          30.0,
+          85.0,
+          epoch,
+          1_575_420_000.0
+        )
+
+      {:ok, l2} =
+        Ionosphere.klobuchar_delay(
+          @klobuchar_params,
+          40.0,
+          -100.0,
+          30.0,
+          85.0,
+          epoch,
+          1_227_600_000.0
+        )
+
+      assert l2 > l1
+    end
+
+    test "rejects malformed coefficient parameters" do
+      assert {:error, :bad_klobuchar_params} =
+               Ionosphere.klobuchar_delay(
+                 %{},
+                 40.0,
+                 -100.0,
+                 30.0,
+                 85.0,
+                 {{2020, 6, 24}, {0, 0, 0}},
+                 1_575_420_000.0
+               )
+
+      assert {:error, :bad_coefficients} =
+               Ionosphere.klobuchar_delay(
+                 %{alpha: {1, 2, 3}, beta: {1, 2, 3, 4}},
+                 40.0,
+                 -100.0,
+                 30.0,
+                 85.0,
+                 {{2020, 6, 24}, {0, 0, 0}},
+                 1_575_420_000.0
+               )
+    end
+  end
+
+  describe "parse_ionex/1 and ionex_slant_delay/7" do
+    setup do
+      {:ok, handle} = Ionosphere.parse_ionex(@ionex)
+      {:ok, handle: handle}
+    end
+
+    test "parse_ionex/1 returns a resource handle" do
+      assert {:ok, handle} = Ionosphere.parse_ionex(@ionex)
+      assert is_reference(handle)
+    end
+
+    test "parse_ionex/1 errors on a malformed buffer" do
+      assert {:error, _reason} = Ionosphere.parse_ionex("not an ionex file\n")
+    end
+
+    test "slant delay matches the parity-fixture L1 value bit-for-bit", %{handle: handle} do
+      # Same inputs as the IONEX parity golden 'interior_l1': lat 45, lon 10,
+      # az 60, el 60, L1, epoch 2020-06-24 01:00:00.
+      assert {:ok, delay_m} =
+               Ionosphere.ionex_slant_delay(
+                 handle,
+                 45.0,
+                 10.0,
+                 60.0,
+                 60.0,
+                 {{2020, 6, 24}, {1, 0, 0}},
+                 1_575_420_000.0
+               )
+
+      assert delay_m == 2.9414773797764737
+    end
+
+    test "an L2 slant delay exceeds the L1 slant delay", %{handle: handle} do
+      epoch = {{2020, 6, 24}, {1, 0, 0}}
+
+      {:ok, l1} =
+        Ionosphere.ionex_slant_delay(handle, 45.0, 10.0, 60.0, 60.0, epoch, 1_575_420_000.0)
+
+      {:ok, l2} =
+        Ionosphere.ionex_slant_delay(handle, 45.0, 10.0, 60.0, 60.0, epoch, 1_227_600_000.0)
+
+      assert l2 > l1
+    end
+
+    test "rejects a non-integer-second epoch (IONEX axis is integer seconds)", %{handle: handle} do
+      assert {:error, :non_integer_second_epoch} =
+               Ionosphere.ionex_slant_delay(
+                 handle,
+                 45.0,
+                 10.0,
+                 60.0,
+                 60.0,
+                 ~N[2020-06-24 01:00:00.500],
+                 1_575_420_000.0
+               )
+    end
+  end
+end
