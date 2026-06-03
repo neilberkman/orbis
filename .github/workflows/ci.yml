@@ -19,9 +19,6 @@ jobs:
             os: ubuntu-latest
           - elixir: "1.19"
             otp: "28"
-            os: ubuntu-24.04-arm
-          - elixir: "1.19"
-            otp: "28"
             os: macos-latest
 
     steps:

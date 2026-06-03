@@ -1,0 +1,21 @@
+# Local-development override for the astrodynamics git dependencies.
+#
+# orbis_nif/Cargo.toml pins astrodynamics + astrodynamics-gnss to a published
+# git rev so CI and external builds resolve without a local checkout. When you
+# have the astrodynamics repo checked out locally and want orbis_nif to build
+# against your working tree (instead of the pinned rev), copy this file to
+# `config.toml` in this directory and set the two paths to your checkout.
+#
+# `config.toml` is gitignored — never commit a path override, or CI/external
+# builds break again.
+#
+#   cp config.toml.example config.toml
+#   # then edit the paths below to your local astrodynamics workspace
+#
+# `paths` overrides match by package name + version and apply to any source
+# (git or crates.io), so these replace the pinned git deps for local builds.
+
+paths = [
+  "/absolute/path/to/astrodynamics/crates/astrodynamics",
+  "/absolute/path/to/astrodynamics/crates/astrodynamics-gnss",
+]

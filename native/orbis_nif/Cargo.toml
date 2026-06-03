@@ -10,5 +10,10 @@ crate-type = ["cdylib"]
 [dependencies]
 rustler = "0.37.3"
 chrono = "0.4"
-astrodynamics = { path = "../../../astrodynamics/crates/astrodynamics" }
-astrodynamics-gnss = { path = "../../../astrodynamics/crates/astrodynamics-gnss" }
+# Pinned to a published commit of the astrodynamics repo so CI and external
+# builds resolve without a local sibling checkout. Bump the rev when the crate
+# advances; switch to crates.io versions at the v1 release. For local
+# development against the workspace, an uncommitted native/orbis_nif/.cargo/
+# config.toml overrides these with the local paths (see config.toml.example).
+astrodynamics = { git = "https://github.com/neilberkman/astrodynamics.git", rev = "32db6653607051d3c759dfde329df5fafb1cbe0c" }
+astrodynamics-gnss = { git = "https://github.com/neilberkman/astrodynamics.git", rev = "32db6653607051d3c759dfde329df5fafb1cbe0c" }
