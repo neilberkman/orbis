@@ -102,7 +102,7 @@
       "t_rx_j2000_s": "0x41c342aa00000000",
       "t_rx_j2000_s_int": 646272000,
       "t_rx_sod_s": "0x40e5180000000000",
-      "doy": "0x4066000000000000",
+      "doy": "0x4066100000000000",
       "rx_truth_geodetic": {
         "lat_deg": "0x4046800000000000",
         "lon_deg": "0x401c000000000000",
@@ -154,11 +154,11 @@
         },
         {
           "sat_id": "G07",
-          "p_meas_m": "0x417856f5e685f581"
+          "p_meas_m": "0x417856f5e6853d3d"
         },
         {
           "sat_id": "G08",
-          "p_meas_m": "0x4176b8c803c0b383"
+          "p_meas_m": "0x4176b8c803c0aae2"
         },
         {
           "sat_id": "G09",
@@ -166,7 +166,7 @@
         },
         {
           "sat_id": "G10",
-          "p_meas_m": "0x4175aa505b55f1a3"
+          "p_meas_m": "0x4175aa505b55f07d"
         },
         {
           "sat_id": "G11",
@@ -186,11 +186,11 @@
         },
         {
           "sat_id": "G15",
-          "p_meas_m": "0x417816ec5c918279"
+          "p_meas_m": "0x417816ec5c8e48be"
         },
         {
           "sat_id": "G16",
-          "p_meas_m": "0x417387ac44867610"
+          "p_meas_m": "0x417387ac44867608"
         },
         {
           "sat_id": "G17",
@@ -198,7 +198,7 @@
         },
         {
           "sat_id": "G18",
-          "p_meas_m": "0x4174c2898b0da6f3"
+          "p_meas_m": "0x4174c2898b0da670"
         },
         {
           "sat_id": "G19",
@@ -206,11 +206,11 @@
         },
         {
           "sat_id": "G20",
-          "p_meas_m": "0x4174439504abc303"
+          "p_meas_m": "0x4174439504abc2c0"
         },
         {
           "sat_id": "G21",
-          "p_meas_m": "0x4173d840c8c902a0"
+          "p_meas_m": "0x4173d840c8c9029e"
         },
         {
           "sat_id": "G22",
@@ -226,11 +226,11 @@
         },
         {
           "sat_id": "G26",
-          "p_meas_m": "0x417425d59a9038a7"
+          "p_meas_m": "0x417425d59a90387a"
         },
         {
           "sat_id": "G27",
-          "p_meas_m": "0x41745a4bfec610b6"
+          "p_meas_m": "0x41745a4bfec6106d"
         },
         {
           "sat_id": "G28",
@@ -238,7 +238,7 @@
         },
         {
           "sat_id": "G29",
-          "p_meas_m": "0x41787aec5508a0d4"
+          "p_meas_m": "0x41787aec5501cef8"
         },
         {
           "sat_id": "G30",
@@ -513,7 +513,7 @@
             "iono_m": "0x40215d903b30a2c7",
             "tropo_m": "0x0000000000000000",
             "p_hat_m": "0x4176a49d5b00dafb",
-            "residual_m": "0x40d9b51918b0410b"
+            "residual_m": "0x40d9b51918a5411f"
           },
           {
             "prn": "G10",
@@ -538,7 +538,7 @@
             "iono_m": "0x401d930870964ad3",
             "tropo_m": "0x0000000000000000",
             "p_hat_m": "0x4175a622b7073c5f",
-            "residual_m": "0x40c2ad9edf18eb8b"
+            "residual_m": "0x40c2ad9edf13c946"
           },
           {
             "prn": "G16",
@@ -563,7 +563,7 @@
             "iono_m": "0x40117ecf5c6516ac",
             "tropo_m": "0x0000000000000000",
             "p_hat_m": "0x417378eeac00569f",
-            "residual_m": "0x40ec3acc4a2fd567"
+            "residual_m": "0x40ec3acc4a2fc615"
           },
           {
             "prn": "G18",
@@ -588,7 +588,7 @@
             "iono_m": "0x4017e42830871d43",
             "tropo_m": "0x0000000000000000",
             "p_hat_m": "0x4174bfe6af28f79f",
-            "residual_m": "0x40bc7c0c315b1108"
+            "residual_m": "0x40bc7c0c3155898a"
           },
           {
             "prn": "G20",
@@ -613,7 +613,7 @@
             "iono_m": "0x4015f9825d8c96fc",
             "tropo_m": "0x0000000000000000",
             "p_hat_m": "0x417440f53532af6c",
-            "residual_m": "0x40c022c84c6288f2"
+            "residual_m": "0x40c022c84c60ecfb"
           },
           {
             "prn": "G21",
@@ -638,7 +638,7 @@
             "iono_m": "0x40113ea2ef367e31",
             "tropo_m": "0x0000000000000000",
             "p_hat_m": "0x4173cebc238cecf8",
-            "residual_m": "0x40e2c054e2363e17"
+            "residual_m": "0x40e2c054e2363a27"
           },
           {
             "prn": "G26",
@@ -663,7 +663,7 @@
             "iono_m": "0x40149dbb7abc1372",
             "tropo_m": "0x0000000000000000",
             "p_hat_m": "0x41741be90792f505",
-            "residual_m": "0x40e0521af29dc5ec"
+            "residual_m": "0x40e0521af29d7beb"
           },
           {
             "prn": "G27",
@@ -688,20 +688,20 @@
             "iono_m": "0x4014c4e1d1da3adc",
             "tropo_m": "0x0000000000000000",
             "p_hat_m": "0x417448ad0c846577",
-            "residual_m": "0x40eb0ae502f600ae"
+            "residual_m": "0x40eb0ae502f590a6"
           }
         ],
         "residual": [
-          "0x40d9b51918b0410b",
-          "0x40c2ad9edf18eb8b",
-          "0x40ec3acc4a2fd567",
-          "0x40bc7c0c315b1108",
-          "0x40c022c84c6288f2",
-          "0x40e2c054e2363e17",
-          "0x40e0521af29dc5ec",
-          "0x40eb0ae502f600ae"
+          "0x40d9b51918a5411f",
+          "0x40c2ad9edf13c946",
+          "0x40ec3acc4a2fc615",
+          "0x40bc7c0c3155898a",
+          "0x40c022c84c60ecfb",
+          "0x40e2c054e2363a27",
+          "0x40e0521af29d7beb",
+          "0x40eb0ae502f590a6"
         ],
-        "cost": "0x41f27454666b3e2d",
+        "cost": "0x41f274546669b0f8",
         "fd_2point": {
           "rel_step": "0x3e50000000000000",
           "perturbations": [
@@ -717,14 +717,14 @@
                 "0x0000000000000000"
               ],
               "f_perturbed": [
-                "0x40d9b519440841fa",
-                "0x40c2ada2fec07ed3",
-                "0x40ec3acdbb19d339",
-                "0x40bc7c0d58795e2a",
-                "0x40c022cc70a8b771",
-                "0x40e2c05627ca37e0",
-                "0x40e0521caa5e966d",
-                "0x40eb0ae5a687d136"
+                "0x40d9b51943fd420e",
+                "0x40c2ada2febb5c8e",
+                "0x40ec3acdbb19c3e7",
+                "0x40bc7c0d5873d6ac",
+                "0x40c022cc70a71b7a",
+                "0x40e2c05627ca33ef",
+                "0x40e0521caa5e4c6c",
+                "0x40eb0ae5a687612d"
               ],
               "jac_column": [
                 "0x3fa4331ccca7846e",
@@ -732,9 +732,9 @@
                 "0x3fe57da50eeee005",
                 "0x3fb1311fc124c925",
                 "0x3fdee1fa208bc07b",
-                "0x3fe2f75f1a984997",
+                "0x3fe2f75f1a895fd7",
                 "0x3fe99e1323eff90a",
-                "0x3fd30ea72af3228a"
+                "0x3fd30ea72ad54f0b"
               ]
             },
             {
@@ -749,22 +749,22 @@
                 "0x0000000000000000"
               ],
               "f_perturbed": [
-                "0x40d9b518f5d52412",
-                "0x40c2ad9f22d92e2c",
-                "0x40ec3acc3dcab8bb",
-                "0x40bc7c0cf93b8602",
-                "0x40c022c8caef9a96",
-                "0x40e2c054ee6414e8",
-                "0x40e0521af9ac51c8",
-                "0x40eb0ae4ea5d7efe"
+                "0x40d9b518f5ca2426",
+                "0x40c2ad9f22d40be8",
+                "0x40ec3acc3dcaa969",
+                "0x40bc7c0cf935fe84",
+                "0x40c022c8caedfe9f",
+                "0x40e2c054ee6410f7",
+                "0x40e0521af9ac07c7",
+                "0x40eb0ae4ea5d0ef6"
               ],
               "jac_column": [
                 "0xbfd24647fa1a0cf2",
-                "0x3fd1c2b19a847b24",
+                "0x3fd1c2b19ac79703",
                 "0xbfc9fe7f88765ba7",
                 "0x3fda32c082491afc",
                 "0x3fe096593ee5eedd",
-                "0x3fc98a9522a6f3f5",
+                "0x3fc98a95208e1501",
                 "0x3fbd993458cd20b0",
                 "0xbfd9ca5d9e40c847"
               ]
@@ -781,14 +781,14 @@
                 "0x0000000000000000"
               ],
               "f_perturbed": [
-                "0x40d9b519ae02619b",
-                "0x40c2ad9e4d2f4795",
-                "0x40ec3acdb023fc30",
-                "0x40bc7c1557426422",
-                "0x40c022cadc9c3310",
-                "0x40e2c0568442e206",
-                "0x40e0521b43e64089",
-                "0x40eb0ae64235747c"
+                "0x40d9b519adf761af",
+                "0x40c2ad9e4d2a2550",
+                "0x40ec3acdb023ecde",
+                "0x40bc7c15573cdca4",
+                "0x40c022cadc9a9719",
+                "0x40e2c0568442de16",
+                "0x40e0521b43e5f688",
+                "0x40eb0ae642350473"
               ],
               "jac_column": [
                 "0x3fc165aaa76788bd",
@@ -798,7 +798,7 @@
                 "0x3fd31d2b8dccc4e1",
                 "0x3fe85a6777700298",
                 "0x3fc2f0ba1e9829e6",
-                "0x3fe298f81ba08753"
+                "0x3fe298f81b919d93"
               ]
             },
             {
@@ -813,24 +813,24 @@
                 "0x3e50000000000000"
               ],
               "f_perturbed": [
-                "0x40d9b51918b03bf2",
-                "0x40c2ad9edf18d9aa",
-                "0x40ec3acc4a2fcdbe",
-                "0x40bc7c0c315ae5d0",
-                "0x40c022c84c62705a",
-                "0x40e2c054e2363636",
-                "0x40e0521af29dbf58",
-                "0x40eb0ae502f5fa8b"
+                "0x40d9b51918a53c05",
+                "0x40c2ad9edf13b765",
+                "0x40ec3acc4a2fbe6c",
+                "0x40bc7c0c31555e51",
+                "0x40c022c84c60d463",
+                "0x40e2c054e2363245",
+                "0x40e0521af29d7557",
+                "0x40eb0ae502f58a82"
               ],
               "jac_column": [
-                "0xbfd4640000000000",
+                "0xbfd4680000000000",
                 "0xbfe1e10000000000",
                 "0xbfeea40000000000",
-                "0xbfe59c0000000000",
+                "0xbfe59c8000000000",
                 "0xbfe8980000000000",
-                "0xbfef840000000000",
+                "0xbfef880000000000",
                 "0xbfea500000000000",
-                "0xbfe88c0000000000"
+                "0xbfe8900000000000"
               ]
             }
           ],
@@ -839,11 +839,11 @@
               "0x3fa4331ccca7846e",
               "0xbfd24647fa1a0cf2",
               "0x3fc165aaa76788bd",
-              "0xbfd4640000000000"
+              "0xbfd4680000000000"
             ],
             [
               "0x3fdebf87f9b1a8b4",
-              "0x3fd1c2b19a847b24",
+              "0x3fd1c2b19ac79703",
               "0xbfb10003b945a7da",
               "0xbfe1e10000000000"
             ],
@@ -857,7 +857,7 @@
               "0x3fb1311fc124c925",
               "0x3fda32c082491afc",
               "0x3fe10d9fef963d4d",
-              "0xbfe59c0000000000"
+              "0xbfe59c8000000000"
             ],
             [
               "0x3fdee1fa208bc07b",
@@ -866,10 +866,10 @@
               "0xbfe8980000000000"
             ],
             [
-              "0x3fe2f75f1a984997",
-              "0x3fc98a9522a6f3f5",
+              "0x3fe2f75f1a895fd7",
+              "0x3fc98a95208e1501",
               "0x3fe85a6777700298",
-              "0xbfef840000000000"
+              "0xbfef880000000000"
             ],
             [
               "0x3fe99e1323eff90a",
@@ -878,35 +878,35 @@
               "0xbfea500000000000"
             ],
             [
-              "0x3fd30ea72af3228a",
+              "0x3fd30ea72ad54f0b",
               "0xbfd9ca5d9e40c847",
-              "0x3fe298f81ba08753",
-              "0xbfe88c0000000000"
+              "0x3fe298f81b919d93",
+              "0xbfe8900000000000"
             ]
           ],
           "scipy_approx_derivative_bit_identical": true
         },
         "grad_JT_f": [
-          "0x40fc10377e0ab082",
-          "0xc0d3a7ba9fcd9608",
-          "0x40fbab0fba1507de",
-          "0xc106f7bd0c1ebc2a"
+          "0x40fc10377dff46b0",
+          "0xc0d3a7baa05f574a",
+          "0x40fbab0fba0dfae6",
+          "0xc106f9625fa0a3f5"
         ],
-        "grad_inf_norm": "0x4106f7bd0c1ebc2a"
+        "grad_inf_norm": "0x4106f9625fa0a3f5"
       },
       {
         "trace_index": 1,
         "x": [
-          "0x41511aff2414992a",
-          "0x4120cd34c6a9bf47",
-          "0x41511e5c4365ce09",
-          "0x40dd522e5354076e"
+          "0x41511afc9ce1698f",
+          "0x4120cd24a81c5036",
+          "0x41511e5da6e6634b",
+          "0x40dd4f9691b86e08"
         ],
         "per_sat": [
           {
             "prn": "G08",
             "sqrt_w": "0x3fd4655fe65eb8a1",
-            "tau_s": "0x3fb44f44e63d327b",
+            "tau_s": "0x3fb44f446eda886e",
             "t_tx_j2000_s": "0x41c342a9fff5d85e",
             "sat_ecef_m": [
               "0x415c5fadf0cfd1b1",
@@ -914,24 +914,24 @@
               "0x416be3296ba031d7"
             ],
             "dt_sat_s": "0xbf04431cdfa5471d",
-            "theta_rad": "0x3ed843c68b94acfa",
+            "theta_rad": "0x3ed843c5fcf23bd7",
             "sat_rot_ecef_m": [
-              "0x415c5f8fe958579c",
-              "0xc173cd10ba7033e7",
+              "0x415c5f8fe9590821",
+              "0xc173cd10ba702418",
               "0x416be3296ba031d7"
             ],
-            "rho_m": "0x4176ae9f3b557ce5",
-            "az_rad": "0x401418888cc6c981",
-            "el_rad": "0x3fd4411420575170",
-            "iono_m": "0x4021925ec9d21665",
-            "tropo_m": "0x401e6ae0a2f2beb4",
-            "p_hat_m": "0x4176b8c8ee6f3476",
-            "residual_m": "0xc012b290d5cd565c"
+            "rho_m": "0x4176ae9eb60068dd",
+            "az_rad": "0x401418880b5e5892",
+            "el_rad": "0x3fd4411beb74f8f7",
+            "iono_m": "0x4021925a0ef37d90",
+            "tropo_m": "0x401e6acfad99d480",
+            "p_hat_m": "0x4176b8c7c3294fdb",
+            "residual_m": "0x3ff4959c1701b228"
           },
           {
             "prn": "G10",
             "sqrt_w": "0x3fe1e19680fa0055",
-            "tau_s": "0x3fb346b3efacb460",
+            "tau_s": "0x3fb346b4aef2962e",
             "t_tx_j2000_s": "0x41c342a9fff65ca6",
             "sat_ecef_m": [
               "0x4176cfbdf0c04604",
@@ -939,24 +939,24 @@
               "0x413bb51945e6a567"
             ],
             "dt_sat_s": "0xbf38f0dc8cf1b073",
-            "theta_rad": "0x3ed707b008b0e210",
+            "theta_rad": "0x3ed707b0ed36635b",
             "sat_rot_ecef_m": [
-              "0x4176cfc1f62119f6",
-              "0x41665936307d68be",
+              "0x4176cfc1f62141dd",
+              "0x41665936307cc5d6",
               "0x413bb51945e6a567"
             ],
-            "rho_m": "0x4175872481776421",
-            "az_rad": "0x40053e64f45db577",
-            "el_rad": "0x3fe324f2b27e593e",
-            "iono_m": "0x401d79c191364c41",
-            "tropo_m": "0x4010f3b403f9c6f2",
-            "p_hat_m": "0x4175aa547a8dc3fa",
-            "residual_m": "0xc0426d24597f4742"
+            "rho_m": "0x41758725571518b7",
+            "az_rad": "0x40053e645b8b26c7",
+            "el_rad": "0x3fe324edd5f98fa6",
+            "iono_m": "0x401d79c4331d26eb",
+            "tropo_m": "0x4010f3b616952d68",
+            "p_hat_m": "0x4175aa54aa3b247b",
+            "residual_m": "0xc043424613211705"
           },
           {
             "prn": "G16",
             "sqrt_w": "0x3feea43ba534a032",
-            "tau_s": "0x3fb16abf128165e4",
+            "tau_s": "0x3fb16abf29377888",
             "t_tx_j2000_s": "0x41c342a9fff74aa0",
             "sat_ecef_m": [
               "0x4171e9ecf326df5e",
@@ -964,24 +964,24 @@
               "0x4171824fcebaee50"
             ],
             "dt_sat_s": "0xbf26db8a9a116122",
-            "theta_rad": "0x3ed4cf0b155d806f",
+            "theta_rad": "0x3ed4cf0b307fced2",
             "sat_rot_ecef_m": [
-              "0x4171e9ebc3fc52fd",
-              "0xc14d23804afe9c7d",
+              "0x4171e9ebc3fc5172",
+              "0xc14d23804afed93f",
               "0x4171824fcebaee50"
             ],
-            "rho_m": "0x417373977ad6d56d",
-            "az_rad": "0x4012f2a33afddec0",
-            "el_rad": "0x3ff449c9fcc0d92f",
-            "iono_m": "0x401198d97ff7c8ac",
-            "tropo_m": "0x40040e1db58fb187",
-            "p_hat_m": "0x417387afff8ad560",
-            "residual_m": "0xc04c93cc1eafd6d8"
+            "rho_m": "0x417373979433e1c5",
+            "az_rad": "0x4012f2a0eec7bee9",
+            "el_rad": "0x3ff449cb8ce3414c",
+            "iono_m": "0x401198d71d4463a5",
+            "tropo_m": "0x40040e1bb01edaba",
+            "p_hat_m": "0x417387af72f76d3c",
+            "residual_m": "0xc0485eeec605213a"
           },
           {
             "prn": "G18",
             "sqrt_w": "0x3fe59c4f2414d437",
-            "tau_s": "0x3fb29f1c8dee6809",
+            "tau_s": "0x3fb29f1ca35767c4",
             "t_tx_j2000_s": "0x41c342a9fff6b072",
             "sat_ecef_m": [
               "0x4159720a0ce636e1",
@@ -989,24 +989,24 @@
               "0x4174b78c3c5d44c2"
             ],
             "dt_sat_s": "0x3f2e005afa885e04",
-            "theta_rad": "0x3ed63f75a42d5c01",
+            "theta_rad": "0x3ed63f75bdc1ba97",
             "sat_rot_ecef_m": [
-              "0x4159721c41d63c35",
-              "0x416a2fff9566940d",
+              "0x4159721c41d65124",
+              "0x416a2fff95668ef7",
               "0x4174b78c3c5d44c2"
             ],
-            "rho_m": "0x4174cbf921253108",
-            "az_rad": "0x3fedd2ce50653132",
-            "el_rad": "0x3fe7fc830df790bc",
-            "iono_m": "0x4017cc2d7dff9096",
-            "tropo_m": "0x400c0f61bd8ffbcd",
-            "p_hat_m": "0x4174c28d807686fb",
-            "residual_m": "0xc0456317e4d7cd90"
+            "rho_m": "0x4174cbf9390e8845",
+            "az_rad": "0x3fedd2d1f9db57f2",
+            "el_rad": "0x3fe7fc83f25264b3",
+            "iono_m": "0x4017cc2a2029aae8",
+            "tropo_m": "0x400c0f5e84360e0e",
+            "p_hat_m": "0x4174c28cf26f6368",
+            "residual_m": "0xc04263c45c5e4545"
           },
           {
             "prn": "G20",
             "sqrt_w": "0x3fe8984d3950af75",
-            "tau_s": "0x3fb2410107d06ab1",
+            "tau_s": "0x3fb2410191a2505a",
             "t_tx_j2000_s": "0x41c342a9fff6df7f",
             "sat_ecef_m": [
               "0x41711a1c56687213",
@@ -1014,24 +1014,24 @@
               "0x416870c1e4eefb1a"
             ],
             "dt_sat_s": "0x3f41488c91635112",
-            "theta_rad": "0x3ed5cf0687d221de",
+            "theta_rad": "0x3ed5cf072c7ad4c8",
             "sat_rot_ecef_m": [
-              "0x41711a2130771c68",
-              "0x416c79e233374efc",
+              "0x41711a2130774108",
+              "0x416c79e23336f6fb",
               "0x416870c1e4eefb1a"
             ],
-            "rho_m": "0x417462df646fbb67",
-            "az_rad": "0x3ffeee87d3c8903b",
-            "el_rad": "0x3fec5f28644498c0",
-            "iono_m": "0x4015dfaad1e07bc7",
-            "tropo_m": "0x4008af6d1986453a",
-            "p_hat_m": "0x41744399ad1044bb",
-            "residual_m": "0xc04ca3b3e1dd9d78"
+            "rho_m": "0x417462dffe5b0d84",
+            "az_rad": "0x3ffeee891c4f948c",
+            "el_rad": "0x3fec5f246389241e",
+            "iono_m": "0x4015dfaabebe7224",
+            "tropo_m": "0x4008af6dacd622a9",
+            "p_hat_m": "0x41744399a10b30cc",
+            "residual_m": "0xc04c59cbc2dc1ffc"
           },
           {
             "prn": "G21",
             "sqrt_w": "0x3fef855afc689737",
-            "tau_s": "0x3fb1bf59a16ead89",
+            "tau_s": "0x3fb1bf59d2461a8e",
             "t_tx_j2000_s": "0x41c342a9fff72053",
             "sat_ecef_m": [
               "0x417036665d356b1c",
@@ -1039,24 +1039,24 @@
               "0x4173992c0e093692"
             ],
             "dt_sat_s": "0x3ef04d2d8278741f",
-            "theta_rad": "0x3ed5341f6ebc9896",
+            "theta_rad": "0x3ed5341fa916f0dd",
             "sat_rot_ecef_m": [
-              "0x41703667da0c9ecc",
-              "0x4151f601aabde637",
+              "0x41703667da0ca2e4",
+              "0x4151f601aabdab16",
               "0x4173992c0e093692"
             ],
-            "rho_m": "0x4173d213769ca6e1",
-            "az_rad": "0x3febb0e348afee36",
-            "el_rad": "0x3ff67d7327394f3c",
-            "iono_m": "0x40114a09fb0369f6",
-            "tropo_m": "0x4003689c0a95502f",
-            "p_hat_m": "0x4173d845238ed71c",
-            "residual_m": "0xc051285536e2e9f3"
+            "rho_m": "0x4173d213ad289023",
+            "az_rad": "0x3febb1038025b5a1",
+            "el_rad": "0x3ff67d73b6783ce6",
+            "iono_m": "0x40114a07fcbe3e29",
+            "tropo_m": "0x4003689a95048a51",
+            "p_hat_m": "0x4173d844b42a4e94",
+            "residual_m": "0xc04ee2dd9730ce5e"
           },
           {
             "prn": "G26",
             "sqrt_w": "0x3fea50154ffc6136",
-            "tau_s": "0x3fb212f3720fe1cb",
+            "tau_s": "0x3fb212f400bd509d",
             "t_tx_j2000_s": "0x41c342a9fff6f686",
             "sat_ecef_m": [
               "0x4177eef99bf4bf5b",
@@ -1064,437 +1064,24 @@
               "0x415fb041713c21a4"
             ],
             "dt_sat_s": "0x3f2e4f0b3c8ba921",
-            "theta_rad": "0x3ed598010a4326db",
+            "theta_rad": "0x3ed59801b4b98d84",
             "sat_rot_ecef_m": [
-              "0x4177eefaba2d340b",
-              "0x414a8251b444fbc3",
+              "0x4177eefaba2d3cde",
+              "0x414a8251b442fdc9",
               "0x415fb041713c21a4"
             ],
-            "rho_m": "0x41742f7175db8fb1",
-            "az_rad": "0x4008df7a536c6100",
-            "el_rad": "0x3feeee9b6eb2271c",
-            "iono_m": "0x4014a9b955e5184b",
-            "tropo_m": "0x40073ff02999a063",
-            "p_hat_m": "0x417425d9ce528b36",
-            "residual_m": "0xc04ba490aad83e3f"
+            "rho_m": "0x41742f72153381da",
+            "az_rad": "0x4008df78bbc99665",
+            "el_rad": "0x3feeee96bf3884b1",
+            "iono_m": "0x4014a9b94d069976",
+            "tropo_m": "0x40073ff0beabaf8b",
+            "p_hat_m": "0x417425d9c7ba177f",
+            "residual_m": "0xc04b792dafac349c"
           },
           {
             "prn": "G27",
             "sqrt_w": "0x3fe88e14dd53965a",
-            "tau_s": "0x3fb21d37361abac5",
-            "t_tx_j2000_s": "0x41c342a9fff6f164",
-            "sat_ecef_m": [
-              "0x416840ad0b569f04",
-              "0xc164407a1ae4469f",
-              "0x4173953e390643d9"
-            ],
-            "dt_sat_s": "0xbf358c23556244ff",
-            "theta_rad": "0x3ed5a44489911b8f",
-            "sat_rot_ecef_m": [
-              "0x416840a63232424b",
-              "0xc16440824e5b9a34",
-              "0x4173953e390643d9"
-            ],
-            "rho_m": "0x41743ae90afa6d45",
-            "az_rad": "0x4014d4cb9887ed68",
-            "el_rad": "0x3febb7d1d316242f",
-            "iono_m": "0x4014fa1b0b248084",
-            "tropo_m": "0x40091b655e8be04b",
-            "p_hat_m": "0x41745a4e9ca22372",
-            "residual_m": "0xc040101a1b15dca8"
-          }
-        ],
-        "residual": [
-          "0xc012b290d5cd565c",
-          "0xc0426d24597f4742",
-          "0xc04c93cc1eafd6d8",
-          "0xc0456317e4d7cd90",
-          "0xc04ca3b3e1dd9d78",
-          "0xc051285536e2e9f3",
-          "0xc04ba490aad83e3f",
-          "0xc040101a1b15dca8"
-        ],
-        "cost": "0x40c21ef39681b686",
-        "fd_2point": {
-          "rel_step": "0x3e50000000000000",
-          "perturbations": [
-            {
-              "param_index": 0,
-              "sign_x0": "0x3ff0000000000000",
-              "h": "0x3fb11aff2414992a",
-              "dx": "0x3fb11aff24000000",
-              "x_perturbed": [
-                "0x41511aff285b58f3",
-                "0x4120cd34c6a9bf47",
-                "0x41511e5c4365ce09",
-                "0x40dd522e5354076e"
-              ],
-              "f_perturbed": [
-                "0xc012afdb99f1619d",
-                "0xc0426906f75b9994",
-                "0xc04c8e0e3d067f8a",
-                "0xc0456283a671aaf3",
-                "0xc04c9f9127de74de",
-                "0xc05125cbd12f77d3",
-                "0xc04b9db767cb65f4",
-                "0xc0400d8e2daa212d"
-              ],
-              "jac_column": [
-                "0x3fa44376b2cb2e57",
-                "0x3fdeca75c1f68a7a",
-                "0x3fe57b8e6612b339",
-                "0x3fb1553a3c97c460",
-                "0x3fdef2716c998bbe",
-                "0x3fe2fb6f5eb6f723",
-                "0x3fe99fd2b4d80fa2",
-                "0x3fd30e5e40c79d4c"
-              ]
-            },
-            {
-              "param_index": 1,
-              "sign_x0": "0x3ff0000000000000",
-              "h": "0x3f80cd34c6a9bf47",
-              "dx": "0x3f80cd34c8000000",
-              "x_perturbed": [
-                "0x41511aff2414992a",
-                "0x4120cd34cadd0c79",
-                "0x41511e5c4365ce09",
-                "0x40dd522e5354076e"
-              ],
-              "f_perturbed": [
-                "0xc012b4f70502ac70",
-                "0xc0426cda0ac2e04d",
-                "0xc04c940344fbcfd7",
-                "0xc04562aa2cc8a134",
-                "0xc04ca328e62def50",
-                "0xc051283aba29fdf7",
-                "0xc04ba47221363a3f",
-                "0xc0401086b6547fc4"
-              ],
-              "jac_column": [
-                "0xbfd2470eefe624e5",
-                "0x3fd1b0cb8dfaa6ab",
-                "0xbfca425d14030c6d",
-                "0x3fda1f006a7db608",
-                "0x3fe08b46e5ef9109",
-                "0x3fc9393891eb4be7",
-                "0x3fbd14a95b7398bc",
-                "0xbfd9db31ed7dee8e"
-              ]
-            },
-            {
-              "param_index": 2,
-              "sign_x0": "0x3ff0000000000000",
-              "h": "0x3fb11e5c4365ce09",
-              "dx": "0x3fb11e5c44000000",
-              "x_perturbed": [
-                "0x41511aff2414992a",
-                "0x4120cd34c6a9bf47",
-                "0x41511e5c47ad651a",
-                "0x40dd522e5354076e"
-              ],
-              "f_perturbed": [
-                "0xc012a944ac4ed9f1",
-                "0xc0426db5446205df",
-                "0xc04c8e391e43fc4e",
-                "0xc0455e86505a469b",
-                "0xc04ca123e7ec160a",
-                "0xc05125132593e3e7",
-                "0xc04ba34b8a301ec8",
-                "0xc0400b223254e42b"
-              ],
-              "jac_column": [
-                "0x3fc1614421f4baa8",
-                "0xbfb0ee566c98989d",
-                "0x3fe4d705f7c8d7cf",
-                "0x3fe1149edf1e6df0",
-                "0x3fd328e6005ca46f",
-                "0x3fe85c87fdc14bc8",
-                "0x3fc2fe1e991e7c93",
-                "0x3fe29330dd265ed8"
-              ]
-            },
-            {
-              "param_index": 3,
-              "sign_x0": "0x3ff0000000000000",
-              "h": "0x3f3d522e5354076e",
-              "dx": "0x3f3d522e54000000",
-              "x_perturbed": [
-                "0x41511aff2414992a",
-                "0x4120cd34c6a9bf47",
-                "0x41511e5c4365ce09",
-                "0x40dd522e5aa89303"
-              ],
-              "f_perturbed": [
-                "0xc012b2b6364fe384",
-                "0xc0426d2c8aadebb9",
-                "0xc04c93da2874454c",
-                "0xc0456321cb6c248b",
-                "0xc04ca3bf2676309c",
-                "0xc051285c6f56c76f",
-                "0xc04ba49cb8ec3ddc",
-                "0xc04010255affc63d"
-              ],
-              "jac_column": [
-                "0xbfd4656110174da5",
-                "0xbfe1e19785fc52d5",
-                "0xbfeea43d647aa378",
-                "0xbfe59c505f881950",
-                "0xbfe8984ea05438a0",
-                "0xbfef855cc887627e",
-                "0xbfea5016d0139d82",
-                "0xbfe88e1643c18912"
-              ]
-            }
-          ],
-          "jac": [
-            [
-              "0x3fa44376b2cb2e57",
-              "0xbfd2470eefe624e5",
-              "0x3fc1614421f4baa8",
-              "0xbfd4656110174da5"
-            ],
-            [
-              "0x3fdeca75c1f68a7a",
-              "0x3fd1b0cb8dfaa6ab",
-              "0xbfb0ee566c98989d",
-              "0xbfe1e19785fc52d5"
-            ],
-            [
-              "0x3fe57b8e6612b339",
-              "0xbfca425d14030c6d",
-              "0x3fe4d705f7c8d7cf",
-              "0xbfeea43d647aa378"
-            ],
-            [
-              "0x3fb1553a3c97c460",
-              "0x3fda1f006a7db608",
-              "0x3fe1149edf1e6df0",
-              "0xbfe59c505f881950"
-            ],
-            [
-              "0x3fdef2716c998bbe",
-              "0x3fe08b46e5ef9109",
-              "0x3fd328e6005ca46f",
-              "0xbfe8984ea05438a0"
-            ],
-            [
-              "0x3fe2fb6f5eb6f723",
-              "0x3fc9393891eb4be7",
-              "0x3fe85c87fdc14bc8",
-              "0xbfef855cc887627e"
-            ],
-            [
-              "0x3fe99fd2b4d80fa2",
-              "0x3fbd14a95b7398bc",
-              "0x3fc2fe1e991e7c93",
-              "0xbfea5016d0139d82"
-            ],
-            [
-              "0x3fd30e5e40c79d4c",
-              "0xbfd9db31ed7dee8e",
-              "0x3fe29330dd265ed8",
-              "0xbfe88e1643c18912"
-            ]
-          ],
-          "scipy_approx_derivative_bit_identical": true
-        },
-        "grad_JT_f": [
-          "0xc066ad99f1ea6021",
-          "0xc04982f6f399047e",
-          "0xc0634feb4e80589f",
-          "0x4071f6faa3fa815c"
-        ],
-        "grad_inf_norm": "0x4071f6faa3fa815c"
-      },
-      {
-        "trace_index": 2,
-        "x": [
-          "0x41511b07ff82e6be",
-          "0x4120cd6b5f8862cc",
-          "0x41511e62229df193",
-          "0x40dd4c000136984f"
-        ],
-        "per_sat": [
-          {
-            "prn": "G08",
-            "sqrt_w": "0x3fd4655fe65eb8a1",
-            "tau_s": "0x3fb44f45764d06a3",
-            "t_tx_j2000_s": "0x41c342a9fff5d85d",
-            "sat_ecef_m": [
-              "0x415c5fadf0cef424",
-              "0xc173cd0e09f72957",
-              "0x416be3296b9ddce2"
-            ],
-            "dt_sat_s": "0xbf04431cdfa54705",
-            "theta_rad": "0x3ed843c737b27cd7",
-            "sat_rot_ecef_m": [
-              "0x415c5f8fe956a50d",
-              "0xc173cd10ba712aaa",
-              "0x416be3296b9ddce2"
-            ],
-            "rho_m": "0x4176ae9fdc3a5469",
-            "az_rad": "0x40141889901bb0e7",
-            "el_rad": "0x3fd440fb09ab397a",
-            "iono_m": "0x402192694ccd0094",
-            "tropo_m": "0x401e6b2eadc73460",
-            "p_hat_m": "0x4176b8c803c110e0",
-            "residual_m": "0xbefdc0f2aa1c65ee"
-          },
-          {
-            "prn": "G10",
-            "sqrt_w": "0x3fe1e19680fa0055",
-            "tau_s": "0x3fb346b1a107f08e",
-            "t_tx_j2000_s": "0x41c342a9fff65ca7",
-            "sat_ecef_m": [
-              "0x4176cfbdf0c020e3",
-              "0x416659469b4a70bc",
-              "0x413bb51945ff56e1"
-            ],
-            "dt_sat_s": "0xbf38f0dc8cf1b08c",
-            "theta_rad": "0x3ed707ad47067aee",
-            "sat_rot_ecef_m": [
-              "0x4176cfc1f62079a1",
-              "0x41665936307f81ff",
-              "0x413bb51945ff56e1"
-            ],
-            "rho_m": "0x41758721edd40a21",
-            "az_rad": "0x40053e68193e643f",
-            "el_rad": "0x3fe324f6f678a5e6",
-            "iono_m": "0x401d79c10e1ace75",
-            "tropo_m": "0x4010f3c0623b8fdf",
-            "p_hat_m": "0x4175aa505b56120a",
-            "residual_m": "0xbef21b249d692506"
-          },
-          {
-            "prn": "G16",
-            "sqrt_w": "0x3feea43ba534a032",
-            "tau_s": "0x3fb16abd1d94c308",
-            "t_tx_j2000_s": "0x41c342a9fff74aa1",
-            "sat_ecef_m": [
-              "0x4171e9ecf327db73",
-              "0xc14d2351b28d5cc1",
-              "0x4171824fceba142e"
-            ],
-            "dt_sat_s": "0xbf26db8a9a116138",
-            "theta_rad": "0x3ed4cf08bee40b58",
-            "sat_rot_ecef_m": [
-              "0x4171e9ebc3fd7121",
-              "0xc14d23804af49ad0",
-              "0x4171824fceba142e"
-            ],
-            "rho_m": "0x417373954b67045f",
-            "az_rad": "0x4012f2a5ec16976e",
-            "el_rad": "0x3ff449c467c34c28",
-            "iono_m": "0x401198dde654168e",
-            "tropo_m": "0x40040e2f9600a429",
-            "p_hat_m": "0x417387ac4486b250",
-            "residual_m": "0xbf0cd89c26868acf"
-          },
-          {
-            "prn": "G18",
-            "sqrt_w": "0x3fe59c4f2414d437",
-            "tau_s": "0x3fb29f1a64b9b0b9",
-            "t_tx_j2000_s": "0x41c342a9fff6b073",
-            "sat_ecef_m": [
-              "0x4159720a0ce1c59e",
-              "0x416a300401a0ee0e",
-              "0x4174b78c3c5d203c"
-            ],
-            "dt_sat_s": "0x3f2e005afa885e32",
-            "theta_rad": "0x3ed63f730f3d678b",
-            "sat_rot_ecef_m": [
-              "0x4159721c41cfae11",
-              "0x416a2fff95689e58",
-              "0x4174b78c3c5d203c"
-            ],
-            "rho_m": "0x4174cbf6b750e62a",
-            "az_rad": "0x3fedd2cc20813c48",
-            "el_rad": "0x3fe7fc84ac0429d7",
-            "iono_m": "0x4017cc308e96b60e",
-            "tropo_m": "0x400c0f783ad507c8",
-            "p_hat_m": "0x4174c2898b0dedfe",
-            "residual_m": "0xbf07fd1ea9a14f01"
-          },
-          {
-            "prn": "G20",
-            "sqrt_w": "0x3fe8984d3950af75",
-            "tau_s": "0x3fb240fe3e585f5f",
-            "t_tx_j2000_s": "0x41c342a9fff6df81",
-            "sat_ecef_m": [
-              "0x41711a1c5666d556",
-              "0x416c79eddaff99c3",
-              "0x416870c1e4f3d440"
-            ],
-            "dt_sat_s": "0x3f41488c91635111",
-            "theta_rad": "0x3ed5cf0333692e6c",
-            "sat_rot_ecef_m": [
-              "0x41711a213074c208",
-              "0x416c79e23338bc96",
-              "0x416870c1e4f3d440"
-            ],
-            "rho_m": "0x417462dc479fcfce",
-            "az_rad": "0x3ffeee8b0b67eb28",
-            "el_rad": "0x3fec5f2fcf167de0",
-            "iono_m": "0x4015dfaa5075e266",
-            "tropo_m": "0x4008af7cbd7d97eb",
-            "p_hat_m": "0x4174439504abef08",
-            "residual_m": "0xbf00eaa0fd6ff2ee"
-          },
-          {
-            "prn": "G21",
-            "sqrt_w": "0x3fef855afc689737",
-            "tau_s": "0x3fb1bf571d76a1df",
-            "t_tx_j2000_s": "0x41c342a9fff72054",
-            "sat_ecef_m": [
-              "0x417036665d348a5c",
-              "0x4151f61726f92654",
-              "0x4173992c0e09c993"
-            ],
-            "dt_sat_s": "0x3ef04d2d827874c8",
-            "theta_rad": "0x3ed5341c6d5c75cd",
-            "sat_rot_ecef_m": [
-              "0x41703667da0b8811",
-              "0x4151f601aac434f3",
-              "0x4173992c0e09c993"
-            ],
-            "rho_m": "0x4173d210a76b6b44",
-            "az_rad": "0x3febb0afb2f40bdb",
-            "el_rad": "0x3ff67d7506033c65",
-            "iono_m": "0x40114a0caec7d59a",
-            "tropo_m": "0x400368aac2de99e1",
-            "p_hat_m": "0x4173d840c8c93c62",
-            "residual_m": "0xbf0c7251449a43b7"
-          },
-          {
-            "prn": "G26",
-            "sqrt_w": "0x3fea50154ffc6136",
-            "tau_s": "0x3fb212f111065f54",
-            "t_tx_j2000_s": "0x41c342a9fff6f687",
-            "sat_ecef_m": [
-              "0x4177eef99bf52d00",
-              "0x414a82924e57e6c5",
-              "0x415fb04171367d7f"
-            ],
-            "dt_sat_s": "0x3f2e4f0b3c8ba941",
-            "theta_rad": "0x3ed597fe329f05c8",
-            "sat_rot_ecef_m": [
-              "0x4177eefaba2d7c03",
-              "0x414a8251b45008d2",
-              "0x415fb04171367d7f"
-            ],
-            "rho_m": "0x41742f6ecdadbdae",
-            "az_rad": "0x4008df7fd680e643",
-            "el_rad": "0x3feeee9da01afa3d",
-            "iono_m": "0x4014a9bb8c00bc44",
-            "tropo_m": "0x40074001df60dcd1",
-            "p_hat_m": "0x417425d59a905e1b",
-            "residual_m": "0xbefecbfaf1bdc347"
-          },
-          {
-            "prn": "G27",
-            "sqrt_w": "0x3fe88e14dd53965a",
-            "tau_s": "0x3fb21d364082b723",
+            "tau_s": "0x3fb21d36f55458f3",
             "t_tx_j2000_s": "0x41c342a9fff6f165",
             "sat_ecef_m": [
               "0x416840ad0b57027b",
@@ -1502,127 +1089,540 @@
               "0x4173953e3906d13b"
             ],
             "dt_sat_s": "0xbf358c2355624516",
-            "theta_rad": "0x3ed5a44364256365",
+            "theta_rad": "0x3ed5a4443c2d7855",
             "sat_rot_ecef_m": [
-              "0x416840a63233029c",
-              "0xc16440824e589d00",
+              "0x416840a63232be40",
+              "0xc16440824e58eedc",
               "0x4173953e3906d13b"
             ],
-            "rho_m": "0x41743ae7f8b2ce4c",
-            "az_rad": "0x4014d4cc6e65d789",
-            "el_rad": "0x3febb7c4e3e8e32e",
-            "iono_m": "0x4014fa25251387b8",
-            "tropo_m": "0x40091b82b20f3333",
-            "p_hat_m": "0x41745a4bfec6602b",
-            "residual_m": "0xbf0e7c457f57ca66"
+            "rho_m": "0x41743ae8c2a2c847",
+            "az_rad": "0x4014d4cad6bda9df",
+            "el_rad": "0x3febb7d6bab0f0a3",
+            "iono_m": "0x4014fa160dd4ed71",
+            "tropo_m": "0x40091b60201cb08f",
+            "p_hat_m": "0x41745a4dae59f91b",
+            "residual_m": "0xc034b2b2840725f2"
           }
         ],
         "residual": [
-          "0xbefdc0f2aa1c65ee",
-          "0xbef21b249d692506",
-          "0xbf0cd89c26868acf",
-          "0xbf07fd1ea9a14f01",
-          "0xbf00eaa0fd6ff2ee",
-          "0xbf0c7251449a43b7",
-          "0xbefecbfaf1bdc347",
-          "0xbf0e7c457f57ca66"
+          "0x3ff4959c1701b228",
+          "0xc043424613211705",
+          "0xc0485eeec605213a",
+          "0xc04263c45c5e4545",
+          "0xc04c59cbc2dc1ffc",
+          "0xc04ee2dd9730ce5e",
+          "0xc04b792dafac349c",
+          "0xc034b2b2840725f2"
         ],
-        "cost": "0x3e3f095e8a809cba",
+        "cost": "0x40bea6185391c451",
         "fd_2point": {
           "rel_step": "0x3e50000000000000",
           "perturbations": [
             {
               "param_index": 0,
               "sign_x0": "0x3ff0000000000000",
-              "h": "0x3fb11b07ff82e6be",
-              "dx": "0x3fb11b0800000000",
+              "h": "0x3fb11afc9ce1698f",
+              "dx": "0x3fb11afc9c000000",
               "x_perturbed": [
-                "0x41511b0803c9a8be",
-                "0x4120cd6b5f8862cc",
-                "0x41511e62229df193",
-                "0x40dd4c000136984f"
+                "0x41511afca12828b6",
+                "0x4120cd24a81c5036",
+                "0x41511e5da6e6634b",
+                "0x40dd4f9691b86e08"
               ],
               "f_perturbed": [
-                "0x3f656e569aa3c346",
-                "0x3fa0734d8be195b7",
-                "0x3fa6f05b256c52c2",
-                "0x3f7257c9bf802113",
-                "0x3fa086b5978cfe94",
-                "0x3fa4441a825c3d39",
-                "0x3fab61419b5f07c0",
-                "0x3f945032fc691501"
+                "0x3ff4a07107b7db21",
+                "0xc0433e28b1abc0d3",
+                "0xc0485930e4fca825",
+                "0xc04263301de7ed6e",
+                "0xc04c55a909643d0a",
+                "0xc04eddcacc5fa38c",
+                "0xc04b72546da67d26",
+                "0xc034ad9aa9795939"
               ],
               "jac_column": [
-                "0x3fa443663dde8cc9",
-                "0x3fdeca757d92b41d",
-                "0x3fe57b8d3c9020d8",
-                "0x3fb155290c36d3d3",
-                "0x3fdef270da4b35b6",
-                "0x3fe2fb6e68242fad",
-                "0x3fe99fd3601f642c",
-                "0x3fd30e59c43ce967"
+                "0x3fa4437c14ecdfba",
+                "0x3fdeca7537cdddd0",
+                "0x3fe57b8f3a017451",
+                "0x3fb1553eb258e4f9",
+                "0x3fdef2720cb750cd",
+                "0x3fe2fb6ffd9dea5d",
+                "0x3fe99fd2a7113b22",
+                "0x3fd30e5fff0f5c20"
               ]
             },
             {
               "param_index": 1,
               "sign_x0": "0x3ff0000000000000",
-              "h": "0x3f80cd6b5f8862cc",
-              "dx": "0x3f80cd6b60000000",
+              "h": "0x3f80cd24a81c5036",
+              "dx": "0x3f80cd24a8000000",
               "x_perturbed": [
-                "0x41511b07ff82e6be",
-                "0x4120cd6b63bbbda4",
-                "0x41511e62229df193",
-                "0x40dd4c000136984f"
+                "0x41511afc9ce1698f",
+                "0x4120cd24ac4f9960",
+                "0x41511e5da6e6634b",
+                "0x40dd4f9691b86e08"
               ],
               "f_perturbed": [
-                "0xbf636d3aa9a58ba7",
-                "0x3f626fb2edab6b38",
-                "0xbf5c7a5247fcee1f",
-                "0x3f6b0e65c1acfba2",
-                "0x3f713dd993fcba69",
-                "0x3f5999713e8f6fb6",
-                "0x3f4d93911cb29643",
-                "0xbf6ba11fe5551963"
+                "0x3ff48c0363bbdecb",
+                "0xc04341fbc4b52736",
+                "0xc0485f25ec13d1c2",
+                "0xc0426356a4b5bf62",
+                "0xc04c5940c7ad9169",
+                "0xc04ee2a89dee3e6e",
+                "0xc04b790f262480b1",
+                "0xc034b38bb9b3b477"
               ],
               "jac_column": [
-                "0xbfd2470fa314e6a2",
-                "0x3fd1b0c969e1f203",
-                "0xbfca426a3bf3a988",
-                "0x3fda1efddbc7ee51",
-                "0x3fe08b474db38a7e",
-                "0x3fc9392de6dc4fcb",
-                "0x3fbd149609bcdb4a",
-                "0xbfd9db3885f606fe"
+                "0xbfd2470e45081179",
+                "0x3fd1b0c9604c8fed",
+                "0xbfca425919aa0bfa",
+                "0x3fda1f010c06c34c",
+                "0x3fe08b4767d8bf80",
+                "0x3fc9393a43d6d323",
+                "0x3fbd14ac359f6c88",
+                "0xbfd9db31e5d23979"
               ]
             },
             {
               "param_index": 2,
               "sign_x0": "0x3ff0000000000000",
-              "h": "0x3fb11e62229df193",
-              "dx": "0x3fb11e6224000000",
+              "h": "0x3fb11e5da6e6634b",
+              "dx": "0x3fb11e5da8000000",
               "x_perturbed": [
-                "0x41511b07ff82e6be",
-                "0x4120cd6b5f8862cc",
-                "0x41511e6226e58a1c",
-                "0x40dd4c000136984f"
+                "0x41511afc9ce1698f",
+                "0x4120cd24a81c5036",
+                "0x41511e5dab2dfab5",
+                "0x40dd4f9691b86e08"
               ],
               "f_perturbed": [
-                "0x3f8289758ab00401",
-                "0xbf722f8a7c20f636",
-                "0x3fa644d2f426f7b0",
-                "0x3fa2405984e67600",
-                "0x3f9477609300a23d",
-                "0x3faa0977fc96631a",
-                "0x3f8442a6297feee4",
-                "0x3fa3d809cc5d1714"
+                "0x3ff4baccbf884fd1",
+                "0xc04342d6fe23206a",
+                "0xc048595bc55bfe39",
+                "0xc0425f32c79fe963",
+                "0xc04c573bc8ea988e",
+                "0xc04edc59744bd638",
+                "0xc04b77e88f113d2f",
+                "0xc034a8c2b1f1e07a"
+              ],
+              "jac_column": [
+                "0x3fc16143e98867c4",
+                "0xbfb0ee58b46985be",
+                "0x3fe4d7052b8283dc",
+                "0x3fe1149e6e4ab058",
+                "0x3fd328e471ea0429",
+                "0x3fe85c870c48863a",
+                "0x3fc2fe1c4966391e",
+                "0x3fe293306e44e32d"
+              ]
+            },
+            {
+              "param_index": 3,
+              "sign_x0": "0x3ff0000000000000",
+              "h": "0x3f3d4f9691b86e08",
+              "dx": "0x3f3d4f9690000000",
+              "x_perturbed": [
+                "0x41511afc9ce1698f",
+                "0x4120cd24a81c5036",
+                "0x41511e5da6e6634b",
+                "0x40dd4f96990c53ac"
+              ],
+              "f_perturbed": [
+                "0x3ff49506a25a0478",
+                "0xc043424e4393fad1",
+                "0xc0485efcce87d33c",
+                "0xc04263ce420fb301",
+                "0xc04c59d7067273f5",
+                "0xc04ee2ec06cd9119",
+                "0xc04b7939bcabeb59",
+                "0xc034b2c901d75166"
+              ],
+              "jac_column": [
+                "0xbfd4655b555743e5",
+                "0xbfe1e19280183e4b",
+                "0xbfeea434c8f015ea",
+                "0xbfe59c4a4d6fb3be",
+                "0xbfe89847b79e1434",
+                "0xbfef8553edbb4405",
+                "0xbfea500f6bd30908",
+                "0xbfe88e0f5deadb60"
+              ]
+            }
+          ],
+          "jac": [
+            [
+              "0x3fa4437c14ecdfba",
+              "0xbfd2470e45081179",
+              "0x3fc16143e98867c4",
+              "0xbfd4655b555743e5"
+            ],
+            [
+              "0x3fdeca7537cdddd0",
+              "0x3fd1b0c9604c8fed",
+              "0xbfb0ee58b46985be",
+              "0xbfe1e19280183e4b"
+            ],
+            [
+              "0x3fe57b8f3a017451",
+              "0xbfca425919aa0bfa",
+              "0x3fe4d7052b8283dc",
+              "0xbfeea434c8f015ea"
+            ],
+            [
+              "0x3fb1553eb258e4f9",
+              "0x3fda1f010c06c34c",
+              "0x3fe1149e6e4ab058",
+              "0xbfe59c4a4d6fb3be"
+            ],
+            [
+              "0x3fdef2720cb750cd",
+              "0x3fe08b4767d8bf80",
+              "0x3fd328e471ea0429",
+              "0xbfe89847b79e1434"
+            ],
+            [
+              "0x3fe2fb6ffd9dea5d",
+              "0x3fc9393a43d6d323",
+              "0x3fe85c870c48863a",
+              "0xbfef8553edbb4405"
+            ],
+            [
+              "0x3fe99fd2a7113b22",
+              "0x3fbd14ac359f6c88",
+              "0x3fc2fe1c4966391e",
+              "0xbfea500f6bd30908"
+            ],
+            [
+              "0x3fd30e5fff0f5c20",
+              "0xbfd9db31e5d23979",
+              "0x3fe293306e44e32d",
+              "0xbfe88e0f5deadb60"
+            ]
+          ],
+          "scipy_approx_derivative_bit_identical": true
+        },
+        "grad_JT_f": [
+          "0xc064fd494c1a2625",
+          "0xc04bb25de80364c6",
+          "0xc0609a4b7492761e",
+          "0x407021d687eeff7b"
+        ],
+        "grad_inf_norm": "0x407021d687eeff7b"
+      },
+      {
+        "trace_index": 2,
+        "x": [
+          "0x41511b07ff8367b0",
+          "0x4120cd6b5f8c6825",
+          "0x41511e62229d77bd",
+          "0x40dd4c00006bb437"
+        ],
+        "per_sat": [
+          {
+            "prn": "G08",
+            "sqrt_w": "0x3fd4655fe65eb8a1",
+            "tau_s": "0x3fb44f45764d287c",
+            "t_tx_j2000_s": "0x41c342a9fff5d85d",
+            "sat_ecef_m": [
+              "0x415c5fadf0cef424",
+              "0xc173cd0e09f72957",
+              "0x416be3296b9ddce2"
+            ],
+            "dt_sat_s": "0xbf04431cdfa54705",
+            "theta_rad": "0x3ed843c737b2a547",
+            "sat_rot_ecef_m": [
+              "0x415c5f8fe956a50d",
+              "0xc173cd10ba712aaa",
+              "0x416be3296b9ddce2"
+            ],
+            "rho_m": "0x4176ae9fdc3a7a36",
+            "az_rad": "0x40141889901bd1c6",
+            "el_rad": "0x3fd440fb09a95b87",
+            "iono_m": "0x402192694cce2b29",
+            "tropo_m": "0x401e6b2c85710778",
+            "p_hat_m": "0x4176b8c803c0fb53",
+            "residual_m": "0xbef9a2badd492607"
+          },
+          {
+            "prn": "G10",
+            "sqrt_w": "0x3fe1e19680fa0055",
+            "tau_s": "0x3fb346b1a107c63a",
+            "t_tx_j2000_s": "0x41c342a9fff65ca7",
+            "sat_ecef_m": [
+              "0x4176cfbdf0c020e3",
+              "0x416659469b4a70bc",
+              "0x413bb51945ff56e1"
+            ],
+            "dt_sat_s": "0xbf38f0dc8cf1b08c",
+            "theta_rad": "0x3ed707ad4706485b",
+            "sat_rot_ecef_m": [
+              "0x4176cfc1f62079a1",
+              "0x41665936307f81ff",
+              "0x413bb51945ff56e1"
+            ],
+            "rho_m": "0x41758721edd3dadb",
+            "az_rad": "0x40053e68193e8cbe",
+            "el_rad": "0x3fe324f6f679ee37",
+            "iono_m": "0x401d79c10e1a14ff",
+            "tropo_m": "0x4010f3c018c3df85",
+            "p_hat_m": "0x4175aa505b55aee5",
+            "residual_m": "0x3f025394a0703a17"
+          },
+          {
+            "prn": "G16",
+            "sqrt_w": "0x3feea43ba534a032",
+            "tau_s": "0x3fb16abd1d94c784",
+            "t_tx_j2000_s": "0x41c342a9fff74aa1",
+            "sat_ecef_m": [
+              "0x4171e9ecf327db73",
+              "0xc14d2351b28d5cc1",
+              "0x4171824fceba142e"
+            ],
+            "dt_sat_s": "0xbf26db8a9a116138",
+            "theta_rad": "0x3ed4cf08bee410b4",
+            "sat_rot_ecef_m": [
+              "0x4171e9ebc3fd7121",
+              "0xc14d23804af49ad0",
+              "0x4171824fceba142e"
+            ],
+            "rho_m": "0x417373954b670961",
+            "az_rad": "0x4012f2a5ec172b2e",
+            "el_rad": "0x3ff449c467c2e7cc",
+            "iono_m": "0x401198dde654b08c",
+            "tropo_m": "0x40040e2f9205abe7",
+            "p_hat_m": "0x417387ac44868491",
+            "residual_m": "0xbeebd6126f449ec7"
+          },
+          {
+            "prn": "G18",
+            "sqrt_w": "0x3fe59c4f2414d437",
+            "tau_s": "0x3fb29f1a64b9b1fa",
+            "t_tx_j2000_s": "0x41c342a9fff6b073",
+            "sat_ecef_m": [
+              "0x4159720a0ce1c59e",
+              "0x416a300401a0ee0e",
+              "0x4174b78c3c5d203c"
+            ],
+            "dt_sat_s": "0x3f2e005afa885e32",
+            "theta_rad": "0x3ed63f730f3d690a",
+            "sat_rot_ecef_m": [
+              "0x4159721c41cfae11",
+              "0x416a2fff95689e58",
+              "0x4174b78c3c5d203c"
+            ],
+            "rho_m": "0x4174cbf6b750e791",
+            "az_rad": "0x3fedd2cc2080529c",
+            "el_rad": "0x3fe7fc84ac04024d",
+            "iono_m": "0x4017cc308e97833a",
+            "tropo_m": "0x400c0f77f94dfec6",
+            "p_hat_m": "0x4174c2898b0dbc29",
+            "residual_m": "0xbeed5707326c875e"
+          },
+          {
+            "prn": "G20",
+            "sqrt_w": "0x3fe8984d3950af75",
+            "tau_s": "0x3fb240fe3e584475",
+            "t_tx_j2000_s": "0x41c342a9fff6df81",
+            "sat_ecef_m": [
+              "0x41711a1c5666d556",
+              "0x416c79eddaff99c3",
+              "0x416870c1e4f3d440"
+            ],
+            "dt_sat_s": "0x3f41488c91635111",
+            "theta_rad": "0x3ed5cf0333690e44",
+            "sat_rot_ecef_m": [
+              "0x41711a213074c208",
+              "0x416c79e23338bc96",
+              "0x416870c1e4f3d440"
+            ],
+            "rho_m": "0x417462dc479fb1c0",
+            "az_rad": "0x3ffeee8b0b679cb4",
+            "el_rad": "0x3fec5f2fcf178f51",
+            "iono_m": "0x4015dfaa5075df27",
+            "tropo_m": "0x4008af7c9c2ed584",
+            "p_hat_m": "0x4174439504ab9dfe",
+            "residual_m": "0x3efc407234a63e8b"
+          },
+          {
+            "prn": "G21",
+            "sqrt_w": "0x3fef855afc689737",
+            "tau_s": "0x3fb1bf571d769fce",
+            "t_tx_j2000_s": "0x41c342a9fff72054",
+            "sat_ecef_m": [
+              "0x417036665d348a5c",
+              "0x4151f61726f92654",
+              "0x4173992c0e09c993"
+            ],
+            "dt_sat_s": "0x3ef04d2d827874c8",
+            "theta_rad": "0x3ed5341c6d5c7355",
+            "sat_rot_ecef_m": [
+              "0x41703667da0b8811",
+              "0x4151f601aac434f3",
+              "0x4173992c0e09c993"
+            ],
+            "rho_m": "0x4173d210a76b68f6",
+            "az_rad": "0x3febb0afb2ebe830",
+            "el_rad": "0x3ff67d7506031c67",
+            "iono_m": "0x40114a0caec855e7",
+            "tropo_m": "0x400368aac1c5ca4e",
+            "p_hat_m": "0x4173d840c8c90759",
+            "residual_m": "0xbed2a37aad00586a"
+          },
+          {
+            "prn": "G26",
+            "sqrt_w": "0x3fea50154ffc6136",
+            "tau_s": "0x3fb212f111064429",
+            "t_tx_j2000_s": "0x41c342a9fff6f687",
+            "sat_ecef_m": [
+              "0x4177eef99bf52d00",
+              "0x414a82924e57e6c5",
+              "0x415fb04171367d7f"
+            ],
+            "dt_sat_s": "0x3f2e4f0b3c8ba941",
+            "theta_rad": "0x3ed597fe329ee553",
+            "sat_rot_ecef_m": [
+              "0x4177eefaba2d7c03",
+              "0x414a8251b45008d2",
+              "0x415fb04171367d7f"
+            ],
+            "rho_m": "0x41742f6ecdad9f56",
+            "az_rad": "0x4008df7fd6814fce",
+            "el_rad": "0x3feeee9da01c311d",
+            "iono_m": "0x4014a9bb8c00bacd",
+            "tropo_m": "0x40074001c8e2a0e6",
+            "p_hat_m": "0x417425d59a900cdd",
+            "residual_m": "0x3f01ee5ac605c86f"
+          },
+          {
+            "prn": "G27",
+            "sqrt_w": "0x3fe88e14dd53965a",
+            "tau_s": "0x3fb21d364082cfbc",
+            "t_tx_j2000_s": "0x41c342a9fff6f165",
+            "sat_ecef_m": [
+              "0x416840ad0b57027b",
+              "0xc164407a1ae1b89b",
+              "0x4173953e3906d13b"
+            ],
+            "dt_sat_s": "0xbf358c2355624516",
+            "theta_rad": "0x3ed5a443642580c9",
+            "sat_rot_ecef_m": [
+              "0x416840a63233029c",
+              "0xc16440824e589d00",
+              "0x4173953e3906d13b"
+            ],
+            "rho_m": "0x41743ae7f8b2e9c4",
+            "az_rad": "0x4014d4cc6e66082c",
+            "el_rad": "0x3febb7c4e3e7afb4",
+            "iono_m": "0x4014fa252514c5b0",
+            "tropo_m": "0x40091b828d4341eb",
+            "p_hat_m": "0x41745a4bfec648a1",
+            "residual_m": "0xbf059045b29cf779"
+          }
+        ],
+        "residual": [
+          "0xbef9a2badd492607",
+          "0x3f025394a0703a17",
+          "0xbeebd6126f449ec7",
+          "0xbeed5707326c875e",
+          "0x3efc407234a63e8b",
+          "0xbed2a37aad00586a",
+          "0x3f01ee5ac605c86f",
+          "0xbf059045b29cf779"
+        ],
+        "cost": "0x3e28e7772be9c367",
+        "fd_2point": {
+          "rel_step": "0x3e50000000000000",
+          "perturbations": [
+            {
+              "param_index": 0,
+              "sign_x0": "0x3ff0000000000000",
+              "h": "0x3fb11b07ff8367b0",
+              "dx": "0x3fb11b0800000000",
+              "x_perturbed": [
+                "0x41511b0803ca29b0",
+                "0x4120cd6b5f8c6825",
+                "0x41511e62229d77bd",
+                "0x40dd4c00006bb437"
+              ],
+              "f_perturbed": [
+                "0x3f6576930a3d69c6",
+                "0x3fa07a25d59d5eea",
+                "0x3fa6f5d3ccaac475",
+                "0x3f727918793a2d6d",
+                "0x3fa08e784e12ef59",
+                "0x3fa44aa1fad7fbc7",
+                "0x3fab69967cce964b",
+                "0x3f9454a92d6b9c25"
+              ],
+              "jac_column": [
+                "0x3fa443663dde8cc9",
+                "0x3fdeca757d92b41b",
+                "0x3fe57b8d1fe6e4dc",
+                "0x3fb155290c36d3d3",
+                "0x3fdef270da4b35b6",
+                "0x3fe2fb6e68242fad",
+                "0x3fe99fd32ee5f9b5",
+                "0x3fd30e59f22c7e8c"
+              ]
+            },
+            {
+              "param_index": 1,
+              "sign_x0": "0x3ff0000000000000",
+              "h": "0x3f80cd6b5f8c6825",
+              "dx": "0x3f80cd6b60000000",
+              "x_perturbed": [
+                "0x41511b07ff8367b0",
+                "0x4120cd6b63bfc2fd",
+                "0x41511e62229d77bd",
+                "0x40dd4c00006bb437"
+              ],
+              "f_perturbed": [
+                "0xbf6364ff8061e38d",
+                "0x3f62dd378967fe6b",
+                "0xbf5bcb398ba74306",
+                "0x3f6b5101db5c2215",
+                "0x3f717bee8369d6c3",
+                "0x3f5a6a604e07417b",
+                "0x3f4fa8d6a0a0e0e4",
+                "0xbf6b7d6fe6222e18"
+              ],
+              "jac_column": [
+                "0xbfd24710d9d53f2b",
+                "0x3fd1b0c969e1f204",
+                "0xbfca426a3bf3a987",
+                "0x3fda1efc928637a2",
+                "0x3fe08b469256a08a",
+                "0x3fc9392de6dc4fca",
+                "0x3fbd149609bcdb4a",
+                "0xbfd9db3885f606ff"
+              ]
+            },
+            {
+              "param_index": 2,
+              "sign_x0": "0x3ff0000000000000",
+              "h": "0x3fb11e62229d77bd",
+              "dx": "0x3fb11e6224000000",
+              "x_perturbed": [
+                "0x41511b07ff8367b0",
+                "0x4120cd6b5f8c6825",
+                "0x41511e6226e51046",
+                "0x40dd4c00006bb437"
+              ],
+              "f_perturbed": [
+                "0x3f828b84a6966da1",
+                "0xbf71f8c82e42ac9d",
+                "0x3fa64a4bd8ade0ae",
+                "0x3fa244835c1db78b",
+                "0x3f9486e6000c83c6",
+                "0x3faa0fff94977ca4",
+                "0x3f8463fa81bed38e",
+                "0x3fa3da44cc5045c9"
               ],
               "jac_column": [
                 "0x3fc16140ff66d578",
                 "0xbfb0ee625eefadfa",
-                "0x3fe4d705c0791c9d",
-                "0x3fe1149f66894d5d",
+                "0x3fe4d705dd1cbbd9",
+                "0x3fe1149f66894d5c",
                 "0x3fd328e55a39c4e9",
-                "0x3fe85c89113bbfb4",
+                "0x3fe85c892eb1c824",
                 "0x3fc2fe199df87380",
                 "0x3fe2932ff52d76be"
               ]
@@ -1630,23 +1630,23 @@
             {
               "param_index": 3,
               "sign_x0": "0x3ff0000000000000",
-              "h": "0x3f3d4c000136984f",
+              "h": "0x3f3d4c00006bb437",
               "dx": "0x3f3d4c0000000000",
               "x_perturbed": [
-                "0x41511b07ff82e6be",
-                "0x4120cd6b5f8862cc",
-                "0x41511e62229df193",
-                "0x40dd4c000889984f"
+                "0x41511b07ff8367b0",
+                "0x4120cd6b5f8c6825",
+                "0x41511e62229d77bd",
+                "0x40dd4c0007beb437"
               ],
               "f_perturbed": [
-                "0xbf26646e01cc8506",
-                "0xbf31809a742b745e",
-                "0xbf3fa8afa030df84",
-                "0xbf36c89ec9dcbbaa",
-                "0xbf38a1c3d3073d01",
-                "0xbf403500aab4c4f4",
-                "0xbf3a03d132368bb4",
-                "0xbf3a4a9d0a0c6013"
+                "0xbf25e0a708321d09",
+                "0xbf2c28eb2c8db596",
+                "0xbf3cec4caeda3320",
+                "0xbf34b3b32e3bf605",
+                "0xbf34c068900edaba",
+                "0xbf3d2645178a42d3",
+                "0xbf35d9462a59f672",
+                "0xbf392d1d107505b6"
               ],
               "jac_column": [
                 "0xbfd4655fe65eb8a1",
@@ -1656,83 +1656,83 @@
                 "0xbfe8984d3950af75",
                 "0xbfef855afc689737",
                 "0xbfea50154ffc6136",
-                "0xbfe88e14dd539659"
+                "0xbfe88e14dd53965a"
               ]
             }
           ],
           "jac": [
             [
               "0x3fa443663dde8cc9",
-              "0xbfd2470fa314e6a2",
+              "0xbfd24710d9d53f2b",
               "0x3fc16140ff66d578",
               "0xbfd4655fe65eb8a1"
             ],
             [
-              "0x3fdeca757d92b41d",
-              "0x3fd1b0c969e1f203",
+              "0x3fdeca757d92b41b",
+              "0x3fd1b0c969e1f204",
               "0xbfb0ee625eefadfa",
               "0xbfe1e19680fa0055"
             ],
             [
-              "0x3fe57b8d3c9020d8",
-              "0xbfca426a3bf3a988",
-              "0x3fe4d705c0791c9d",
+              "0x3fe57b8d1fe6e4dc",
+              "0xbfca426a3bf3a987",
+              "0x3fe4d705dd1cbbd9",
               "0xbfeea43ba534a032"
             ],
             [
               "0x3fb155290c36d3d3",
-              "0x3fda1efddbc7ee51",
-              "0x3fe1149f66894d5d",
+              "0x3fda1efc928637a2",
+              "0x3fe1149f66894d5c",
               "0xbfe59c4f2414d437"
             ],
             [
               "0x3fdef270da4b35b6",
-              "0x3fe08b474db38a7e",
+              "0x3fe08b469256a08a",
               "0x3fd328e55a39c4e9",
               "0xbfe8984d3950af75"
             ],
             [
               "0x3fe2fb6e68242fad",
-              "0x3fc9392de6dc4fcb",
-              "0x3fe85c89113bbfb4",
+              "0x3fc9392de6dc4fca",
+              "0x3fe85c892eb1c824",
               "0xbfef855afc689737"
             ],
             [
-              "0x3fe99fd3601f642c",
+              "0x3fe99fd32ee5f9b5",
               "0x3fbd149609bcdb4a",
               "0x3fc2fe199df87380",
               "0xbfea50154ffc6136"
             ],
             [
-              "0x3fd30e59c43ce967",
-              "0xbfd9db3885f606fe",
+              "0x3fd30e59f22c7e8c",
+              "0xbfd9db3885f606ff",
               "0x3fe2932ff52d76be",
-              "0xbfe88e14dd539659"
+              "0xbfe88e14dd53965a"
             ]
           ],
           "scipy_approx_derivative_bit_identical": true
         },
         "grad_JT_f": [
-          "0xbf22194f21fce57a",
-          "0xbee7a4fa216b75b2",
-          "0xbf23ed9e7bc22cc8",
-          "0x3f30565c69cc7174"
+          "0x3f00871526bec160",
+          "0x3f08c0c134ae91b4",
+          "0xbf02cd05e48e5ead",
+          "0xbec4c5aaa721a5d0"
         ],
-        "grad_inf_norm": "0x3f30565c69cc7174"
+        "grad_inf_norm": "0x3f08c0c134ae91b4"
       },
       {
         "trace_index": 3,
         "x": [
-          "0x41511b07ff824403",
-          "0x4120cd6b5f861f37",
-          "0x41511e62229e1c2c",
-          "0x40dd4bfffffffe9f"
+          "0x41511b07ff824404",
+          "0x4120cd6b5f861f3d",
+          "0x41511e62229e1c32",
+          "0x40dd4c000000022d"
         ],
         "per_sat": [
           {
             "prn": "G08",
             "sqrt_w": "0x3fd4655fe65eb8a1",
-            "tau_s": "0x3fb44f45764cf892",
+            "tau_s": "0x3fb44f45764cf891",
             "t_tx_j2000_s": "0x41c342a9fff5d85d",
             "sat_ecef_m": [
               "0x415c5fadf0cef424",
@@ -1740,7 +1740,7 @@
               "0x416be3296b9ddce2"
             ],
             "dt_sat_s": "0xbf04431cdfa54705",
-            "theta_rad": "0x3ed843c737b26c08",
+            "theta_rad": "0x3ed843c737b26c07",
             "sat_rot_ecef_m": [
               "0x415c5f8fe956a50d",
               "0xc173cd10ba712aaa",
@@ -1748,11 +1748,11 @@
             ],
             "rho_m": "0x4176ae9fdc3a44b2",
             "az_rad": "0x40141889901b9b94",
-            "el_rad": "0x3fd440fb09ac86d2",
-            "iono_m": "0x402192694ccc2b4c",
-            "tropo_m": "0x401e6b2eadc3fcf8",
-            "p_hat_m": "0x4176b8c803c0b383",
-            "residual_m": "0x0000000000000000"
+            "el_rad": "0x3fd440fb09ac86d1",
+            "iono_m": "0x402192694ccc2b49",
+            "tropo_m": "0x401e6b2c856aee26",
+            "p_hat_m": "0x4176b8c803c0aae3",
+            "residual_m": "0xbe14655fe65eb8a1"
           },
           {
             "prn": "G10",
@@ -1772,17 +1772,17 @@
               "0x413bb51945ff56e1"
             ],
             "rho_m": "0x41758721edd43760",
-            "az_rad": "0x40053e68193e5b60",
-            "el_rad": "0x3fe324f6f677d15b",
-            "iono_m": "0x401d79c10e1b3ba8",
-            "tropo_m": "0x4010f3c0623bb241",
-            "p_hat_m": "0x4175aa505b55f1a3",
-            "residual_m": "0x0000000000000000"
+            "az_rad": "0x40053e68193e5b61",
+            "el_rad": "0x3fe324f6f677d156",
+            "iono_m": "0x401d79c10e1b3ba9",
+            "tropo_m": "0x4010f3c018c4e878",
+            "p_hat_m": "0x4175aa505b55f07e",
+            "residual_m": "0xbe21e19680fa0055"
           },
           {
             "prn": "G16",
             "sqrt_w": "0x3feea43ba534a032",
-            "tau_s": "0x3fb16abd1d94d29c",
+            "tau_s": "0x3fb16abd1d94d29b",
             "t_tx_j2000_s": "0x41c342a9fff74aa1",
             "sat_ecef_m": [
               "0x4171e9ecf327db73",
@@ -1790,24 +1790,24 @@
               "0x4171824fceba142e"
             ],
             "dt_sat_s": "0xbf26db8a9a116138",
-            "theta_rad": "0x3ed4cf08bee41df5",
+            "theta_rad": "0x3ed4cf08bee41df4",
             "sat_rot_ecef_m": [
               "0x4171e9ebc3fd7121",
               "0xc14d23804af49ad0",
               "0x4171824fceba142e"
             ],
-            "rho_m": "0x417373954b6715c5",
-            "az_rad": "0x4012f2a5ec16267a",
+            "rho_m": "0x417373954b6715c4",
+            "az_rad": "0x4012f2a5ec162678",
             "el_rad": "0x3ff449c467c38142",
-            "iono_m": "0x401198dde653acec",
-            "tropo_m": "0x40040e2f96000d77",
-            "p_hat_m": "0x417387ac44867610",
+            "iono_m": "0x401198dde653ace9",
+            "tropo_m": "0x40040e2f9204d727",
+            "p_hat_m": "0x417387ac44867608",
             "residual_m": "0x0000000000000000"
           },
           {
             "prn": "G18",
             "sqrt_w": "0x3fe59c4f2414d437",
-            "tau_s": "0x3fb29f1a64b9b6a4",
+            "tau_s": "0x3fb29f1a64b9b6a3",
             "t_tx_j2000_s": "0x41c342a9fff6b073",
             "sat_ecef_m": [
               "0x4159720a0ce1c59e",
@@ -1815,18 +1815,18 @@
               "0x4174b78c3c5d203c"
             ],
             "dt_sat_s": "0x3f2e005afa885e32",
-            "theta_rad": "0x3ed63f730f3d6e9d",
+            "theta_rad": "0x3ed63f730f3d6e9b",
             "sat_rot_ecef_m": [
               "0x4159721c41cfae11",
               "0x416a2fff95689e58",
               "0x4174b78c3c5d203c"
             ],
-            "rho_m": "0x4174cbf6b750ecc6",
-            "az_rad": "0x3fedd2cc208201ee",
-            "el_rad": "0x3fe7fc84ac048f3a",
-            "iono_m": "0x4017cc308e95f139",
-            "tropo_m": "0x400c0f783ad3e21a",
-            "p_hat_m": "0x4174c2898b0da6f4",
+            "rho_m": "0x4174cbf6b750ecc5",
+            "az_rad": "0x3fedd2cc208201f1",
+            "el_rad": "0x3fe7fc84ac048f3e",
+            "iono_m": "0x4017cc308e95f132",
+            "tropo_m": "0x400c0f77f94c912c",
+            "p_hat_m": "0x4174c2898b0da671",
             "residual_m": "0xbe259c4f2414d437"
           },
           {
@@ -1847,12 +1847,12 @@
               "0x416870c1e4f3d440"
             ],
             "rho_m": "0x417462dc479ff16f",
-            "az_rad": "0x3ffeee8b0b6851cb",
+            "az_rad": "0x3ffeee8b0b6851cf",
             "el_rad": "0x3fec5f2fcf15eef9",
-            "iono_m": "0x4015dfaa5075c8a7",
-            "tropo_m": "0x4008af7cbd7d4987",
-            "p_hat_m": "0x4174439504abc303",
-            "residual_m": "0x0000000000000000"
+            "iono_m": "0x4015dfaa5075c8a6",
+            "tropo_m": "0x4008af7c9c2f14f8",
+            "p_hat_m": "0x4174439504abc2c1",
+            "residual_m": "0xbe28984d3950af75"
           },
           {
             "prn": "G21",
@@ -1871,12 +1871,12 @@
               "0x4151f601aac434f3",
               "0x4173992c0e09c993"
             ],
-            "rho_m": "0x4173d210a76b7f29",
-            "az_rad": "0x3febb0afb2f9c7b6",
-            "el_rad": "0x3ff67d7506037132",
-            "iono_m": "0x40114a0caec77642",
-            "tropo_m": "0x400368aac2de123b",
-            "p_hat_m": "0x4173d840c8c902a1",
+            "rho_m": "0x4173d210a76b7f28",
+            "az_rad": "0x3febb0afb2f9c7d0",
+            "el_rad": "0x3ff67d7506037138",
+            "iono_m": "0x40114a0caec7763f",
+            "tropo_m": "0x400368aac1c52636",
+            "p_hat_m": "0x4173d840c8c9029f",
             "residual_m": "0xbe2f855afc689737"
           },
           {
@@ -1897,17 +1897,17 @@
               "0x415fb04171367d7f"
             ],
             "rho_m": "0x41742f6ecdade5e0",
-            "az_rad": "0x4008df7fd680b687",
-            "el_rad": "0x3feeee9da01a1476",
+            "az_rad": "0x4008df7fd680b688",
+            "el_rad": "0x3feeee9da01a1471",
             "iono_m": "0x4014a9bb8c00c01e",
-            "tropo_m": "0x40074001df60b3f6",
-            "p_hat_m": "0x417425d59a9038a7",
-            "residual_m": "0x0000000000000000"
+            "tropo_m": "0x40074001c8e2f80b",
+            "p_hat_m": "0x417425d59a90387b",
+            "residual_m": "0xbe2a50154ffc6136"
           },
           {
             "prn": "G27",
             "sqrt_w": "0x3fe88e14dd53965a",
-            "tau_s": "0x3fb21d364082b585",
+            "tau_s": "0x3fb21d364082b584",
             "t_tx_j2000_s": "0x41c342a9fff6f165",
             "sat_ecef_m": [
               "0x416840ad0b57027b",
@@ -1915,84 +1915,84 @@
               "0x4173953e3906d13b"
             ],
             "dt_sat_s": "0xbf358c2355624516",
-            "theta_rad": "0x3ed5a44364256177",
+            "theta_rad": "0x3ed5a44364256176",
             "sat_rot_ecef_m": [
               "0x416840a63233029c",
               "0xc16440824e589d00",
               "0x4173953e3906d13b"
             ],
-            "rho_m": "0x41743ae7f8b2cc7e",
-            "az_rad": "0x4014d4cc6e65b1e4",
-            "el_rad": "0x3febb7c4e3e9b823",
-            "iono_m": "0x4014fa252512a739",
-            "tropo_m": "0x40091b82b20dfa1c",
-            "p_hat_m": "0x41745a4bfec610b7",
+            "rho_m": "0x41743ae7f8b2cc7d",
+            "az_rad": "0x4014d4cc6e65b1e3",
+            "el_rad": "0x3febb7c4e3e9b824",
+            "iono_m": "0x4014fa252512a736",
+            "tropo_m": "0x40091b828d411e71",
+            "p_hat_m": "0x41745a4bfec6106e",
             "residual_m": "0xbe288e14dd53965a"
           }
         ],
         "residual": [
-          "0x0000000000000000",
-          "0x0000000000000000",
+          "0xbe14655fe65eb8a1",
+          "0xbe21e19680fa0055",
           "0x0000000000000000",
           "0xbe259c4f2414d437",
-          "0x0000000000000000",
+          "0xbe28984d3950af75",
           "0xbe2f855afc689737",
-          "0x0000000000000000",
+          "0xbe2a50154ffc6136",
           "0xbe288e14dd53965a"
         ],
-        "cost": "0x3c701f1163d566f9",
+        "cost": "0x3c7d911772887cd8",
         "fd_2point": {
           "rel_step": "0x3e50000000000000",
           "perturbations": [
             {
               "param_index": 0,
               "sign_x0": "0x3ff0000000000000",
-              "h": "0x3fb11b07ff824403",
+              "h": "0x3fb11b07ff824404",
               "dx": "0x3fb11b0800000000",
               "x_perturbed": [
-                "0x41511b0803c90603",
-                "0x4120cd6b5f861f37",
-                "0x41511e62229e1c2c",
-                "0x40dd4bfffffffe9f"
+                "0x41511b0803c90604",
+                "0x4120cd6b5f861f3d",
+                "0x41511e62229e1c32",
+                "0x40dd4c000000022d"
               ],
               "f_perturbed": [
                 "0x3f65a9d7dcccfcdf",
-                "0x3fa07590f07542dc",
-                "0x3fa6f7914c75f465",
+                "0x3fa07590de93ac5b",
+                "0x3fa6f7912dd1b8bf",
                 "0x3f7287c34ff0ea90",
                 "0x3fa08af03fcc5a91",
                 "0x3fa44b36f72808cd",
-                "0x3fab651ae61d14d9",
-                "0x3f945f70ee0c972b"
+                "0x3fab651acbccff89",
+                "0x3f945f711f28c0e6"
               ],
               "jac_column": [
-                "0x3fa44365a53f59bc",
+                "0x3fa443663dde8cc9",
                 "0x3fdeca757d92b41d",
-                "0x3fe57b8d3c9020d8",
+                "0x3fe57b8d1fe6e4dc",
                 "0x3fb155290c36d3d3",
-                "0x3fdef270da4b35b6",
+                "0x3fdef271084de95d",
                 "0x3fe2fb6e68242fac",
                 "0x3fe99fd32ee5f9b5",
-                "0x3fd30e59c43ce967"
+                "0x3fd30e59f22c7e8c"
               ]
             },
             {
               "param_index": 1,
               "sign_x0": "0x3ff0000000000000",
-              "h": "0x3f80cd6b5f861f37",
+              "h": "0x3f80cd6b5f861f3d",
               "dx": "0x3f80cd6b60000000",
               "x_perturbed": [
-                "0x41511b07ff824403",
-                "0x4120cd6b63b97a0f",
-                "0x41511e62229e1c2c",
-                "0x40dd4bfffffffe9f"
+                "0x41511b07ff824404",
+                "0x4120cd6b63b97a15",
+                "0x41511e62229e1c32",
+                "0x40dd4c000000022d"
               ],
               "f_perturbed": [
-                "0xbf6331b8c45152db",
-                "0x3f6293e818ccd573",
-                "0xbf5b938d66c8b9c9",
+                "0xbf6331b9677c520e",
+                "0x3f6293e6fab36d63",
+                "0xbf5b93913b502e6f",
                 "0x3f6b6e58e28e8e9c",
-                "0x3f715faed5f79a4f",
+                "0x3f715fae11353085",
                 "0x3f5a7cffd808e246",
                 "0x3f4e89ea603b305e",
                 "0xbf6b27305839080f"
@@ -2000,40 +2000,40 @@
               "jac_column": [
                 "0xbfd2470fa314e6a2",
                 "0x3fd1b0c859724519",
-                "0xbfca426a3bf3a988",
+                "0xbfca426de1a79309",
                 "0x3fda1efddbc7ee50",
-                "0x3fe08b474db38a7e",
+                "0x3fe08b474db38a7f",
                 "0x3fc9392de6dc4fca",
-                "0x3fbd148fc623aba3",
+                "0x3fbd149609bcdb4a",
                 "0xbfd9db3885f606ff"
               ]
             },
             {
               "param_index": 2,
               "sign_x0": "0x3ff0000000000000",
-              "h": "0x3fb11e62229e1c2c",
+              "h": "0x3fb11e62229e1c32",
               "dx": "0x3fb11e6224000000",
               "x_perturbed": [
-                "0x41511b07ff824403",
-                "0x4120cd6b5f861f37",
-                "0x41511e6226e5b4b5",
-                "0x40dd4bfffffffe9f"
+                "0x41511b07ff824404",
+                "0x4120cd6b5f861f3d",
+                "0x41511e6226e5b4bb",
+                "0x40dd4c000000022d"
               ],
               "f_perturbed": [
-                "0x3f829855db3a5267",
-                "0xbf721d6f57838d11",
-                "0x3fa64c091b309953",
-                "0x3fa24658b6f48f2f",
-                "0x3f947fd5e37f5a36",
+                "0x3f82985604051234",
+                "0xbf721d6fe6904119",
+                "0x3fa64c0939d4d4f8",
+                "0x3fa24658cc90de54",
+                "0x3f947fd5b24ebfc3",
                 "0x3faa109490e789ab",
-                "0x3f84520c26f8cdc6",
+                "0x3f84520bbdb87886",
                 "0x3fa3dfa8c52ed829"
               ],
               "jac_column": [
-                "0x3fc16140d9468165",
+                "0x3fc161412587298a",
                 "0xbfb0ee625eefadfa",
-                "0x3fe4d705c0791c9d",
-                "0x3fe1149f66894d5c",
+                "0x3fe4d705dd1cbbd9",
+                "0x3fe1149f7abc14ee",
                 "0x3fd328e55a39c4e9",
                 "0x3fe85c892eb1c824",
                 "0x3fc2fe199df87380",
@@ -2043,26 +2043,26 @@
             {
               "param_index": 3,
               "sign_x0": "0x3ff0000000000000",
-              "h": "0x3f3d4bfffffffe9f",
+              "h": "0x3f3d4c000000022d",
               "dx": "0x3f3d4c0000000000",
               "x_perturbed": [
-                "0x41511b07ff824403",
-                "0x4120cd6b5f861f37",
-                "0x41511e62229e1c2c",
-                "0x40dd4c000752fe9f"
+                "0x41511b07ff824404",
+                "0x4120cd6b5f861f3d",
+                "0x41511e62229e1c32",
+                "0x40dd4c000753022d"
               ],
               "f_perturbed": [
-                "0xbf22ac4fac88f848",
-                "0xbf305ee82a54e20e",
+                "0xbf22ac59df38eb78",
+                "0xbf305ef11b20228b",
                 "0xbf3c0d9c1b600e2a",
                 "0xbf33c905c2d023d4",
-                "0xbf36846fb3593ea3",
+                "0xbf36847bff7fdb4b",
                 "0xbf3cdbc6ef83bfa5",
-                "0xbf381711831aaf80",
+                "0xbf38171eab25577e",
                 "0xbf367b20a12bd570"
               ],
               "jac_column": [
-                "0xbfd4655fe65eb8a1",
+                "0xbfd4655fe65eb8a2",
                 "0xbfe1e19680fa0055",
                 "0xbfeea43ba534a032",
                 "0xbfe59c4f2414d437",
@@ -2075,10 +2075,10 @@
           ],
           "jac": [
             [
-              "0x3fa44365a53f59bc",
+              "0x3fa443663dde8cc9",
               "0xbfd2470fa314e6a2",
-              "0x3fc16140d9468165",
-              "0xbfd4655fe65eb8a1"
+              "0x3fc161412587298a",
+              "0xbfd4655fe65eb8a2"
             ],
             [
               "0x3fdeca757d92b41d",
@@ -2087,20 +2087,20 @@
               "0xbfe1e19680fa0055"
             ],
             [
-              "0x3fe57b8d3c9020d8",
-              "0xbfca426a3bf3a988",
-              "0x3fe4d705c0791c9d",
+              "0x3fe57b8d1fe6e4dc",
+              "0xbfca426de1a79309",
+              "0x3fe4d705dd1cbbd9",
               "0xbfeea43ba534a032"
             ],
             [
               "0x3fb155290c36d3d3",
               "0x3fda1efddbc7ee50",
-              "0x3fe1149f66894d5c",
+              "0x3fe1149f7abc14ee",
               "0xbfe59c4f2414d437"
             ],
             [
-              "0x3fdef270da4b35b6",
-              "0x3fe08b474db38a7e",
+              "0x3fdef271084de95d",
+              "0x3fe08b474db38a7f",
               "0x3fd328e55a39c4e9",
               "0xbfe8984d3950af75"
             ],
@@ -2112,12 +2112,12 @@
             ],
             [
               "0x3fe99fd32ee5f9b5",
-              "0x3fbd148fc623aba3",
+              "0x3fbd149609bcdb4a",
               "0x3fc2fe199df87380",
               "0xbfea50154ffc6136"
             ],
             [
-              "0x3fd30e59c43ce967",
+              "0x3fd30e59f22c7e8c",
               "0xbfd9db3885f606ff",
               "0x3fe2932ff52d76bd",
               "0xbfe88e14dd539659"
@@ -2126,12 +2126,12 @@
           "scipy_approx_derivative_bit_identical": true
         },
         "grad_JT_f": [
-          "0xbe2b78ef4686357c",
-          "0xbe0471ee4f6d8a14",
-          "0xbe38e47fafc1ada8",
-          "0x3e401f1163d566f9"
+          "0xbe415c4740fc3cf9",
+          "0xbe26d89ac1e356a6",
+          "0xbe3ea093e98e0e71",
+          "0x3e4d911772887cd8"
         ],
-        "grad_inf_norm": "0x3e401f1163d566f9"
+        "grad_inf_norm": "0x3e4d911772887cd8"
       }
     ],
     "accepted_steps": [
@@ -2139,36 +2139,36 @@
         "from_trace_index": 0,
         "to_trace_index": 1,
         "step": [
-          "0xc0cf11b7d6cdac00",
-          "0x40e8af4c6a9bf470",
-          "0xc0c857793463ee00",
-          "0x40dd522e5354076e"
+          "0xc0cf16c63d2ce200",
+          "0x40e8ae4a81c50360",
+          "0xc0c854b233396a00",
+          "0x40dd4f9691b86e08"
         ],
-        "step_inf_norm": "0x40e8af4c6a9bf470",
+        "step_inf_norm": "0x40e8ae4a81c50360",
         "accepted": true
       },
       {
         "from_trace_index": 1,
         "to_trace_index": 2,
         "step": [
-          "0x4041b6dc9b280000",
-          "0x403b4c6f51c28000",
-          "0x40377ce08e280000",
-          "0xc038b94875bc7c00"
+          "0x4046c543fc420000",
+          "0x4041addc05fbc000",
+          "0x4031eedc51c80000",
+          "0xc02cb48a65ce8800"
         ],
-        "step_inf_norm": "0x4041b6dc9b280000",
+        "step_inf_norm": "0x4046c543fc420000",
         "accepted": true
       },
       {
         "from_trace_index": 2,
         "to_trace_index": 3,
         "step": [
-          "0xbf04576000000000",
-          "0xbef21ca800000000",
-          "0x3ee54c8000000000",
-          "0xbf13699b00000000"
+          "0xbf123ac000000000",
+          "0xbf0923a000000000",
+          "0x3f048ea000000000",
+          "0xbefaec8280000000"
         ],
-        "step_inf_norm": "0x3f13699b00000000",
+        "step_inf_norm": "0x3f123ac000000000",
         "accepted": true
       }
     ],
@@ -2182,79 +2182,79 @@
           "0x0000000000000000"
         ],
         "residual": [
-          "0x40d9b51918b0410b",
-          "0x40c2ad9edf18eb8b",
-          "0x40ec3acc4a2fd567",
-          "0x40bc7c0c315b1108",
-          "0x40c022c84c6288f2",
-          "0x40e2c054e2363e17",
-          "0x40e0521af29dc5ec",
-          "0x40eb0ae502f600ae"
+          "0x40d9b51918a5411f",
+          "0x40c2ad9edf13c946",
+          "0x40ec3acc4a2fc615",
+          "0x40bc7c0c3155898a",
+          "0x40c022c84c60ecfb",
+          "0x40e2c054e2363a27",
+          "0x40e0521af29d7beb",
+          "0x40eb0ae502f590a6"
         ],
-        "cost": "0x41f27454666b3e2d",
+        "cost": "0x41f274546669b0f8",
         "outcome": "accepted_iterate"
       },
       {
         "objective_eval_index": 1,
         "x": [
-          "0x41511aff2414992a",
-          "0x4120cd34c6a9bf47",
-          "0x41511e5c4365ce09",
-          "0x40dd522e5354076e"
+          "0x41511afc9ce1698f",
+          "0x4120cd24a81c5036",
+          "0x41511e5da6e6634b",
+          "0x40dd4f9691b86e08"
         ],
         "residual": [
-          "0xc012b290d5cd565c",
-          "0xc0426d24597f4742",
-          "0xc04c93cc1eafd6d8",
-          "0xc0456317e4d7cd90",
-          "0xc04ca3b3e1dd9d78",
-          "0xc051285536e2e9f3",
-          "0xc04ba490aad83e3f",
-          "0xc040101a1b15dca8"
+          "0x3ff4959c1701b228",
+          "0xc043424613211705",
+          "0xc0485eeec605213a",
+          "0xc04263c45c5e4545",
+          "0xc04c59cbc2dc1ffc",
+          "0xc04ee2dd9730ce5e",
+          "0xc04b792dafac349c",
+          "0xc034b2b2840725f2"
         ],
-        "cost": "0x40c21ef39681b686",
+        "cost": "0x40bea6185391c451",
         "outcome": "accepted_iterate"
       },
       {
         "objective_eval_index": 2,
         "x": [
-          "0x41511b07ff82e6be",
-          "0x4120cd6b5f8862cc",
-          "0x41511e62229df193",
-          "0x40dd4c000136984f"
+          "0x41511b07ff8367b0",
+          "0x4120cd6b5f8c6825",
+          "0x41511e62229d77bd",
+          "0x40dd4c00006bb437"
         ],
         "residual": [
-          "0xbefdc0f2aa1c65ee",
-          "0xbef21b249d692506",
-          "0xbf0cd89c26868acf",
-          "0xbf07fd1ea9a14f01",
-          "0xbf00eaa0fd6ff2ee",
-          "0xbf0c7251449a43b7",
-          "0xbefecbfaf1bdc347",
-          "0xbf0e7c457f57ca66"
+          "0xbef9a2badd492607",
+          "0x3f025394a0703a17",
+          "0xbeebd6126f449ec7",
+          "0xbeed5707326c875e",
+          "0x3efc407234a63e8b",
+          "0xbed2a37aad00586a",
+          "0x3f01ee5ac605c86f",
+          "0xbf059045b29cf779"
         ],
-        "cost": "0x3e3f095e8a809cba",
+        "cost": "0x3e28e7772be9c367",
         "outcome": "accepted_iterate"
       },
       {
         "objective_eval_index": 3,
         "x": [
-          "0x41511b07ff824403",
-          "0x4120cd6b5f861f37",
-          "0x41511e62229e1c2c",
-          "0x40dd4bfffffffe9f"
+          "0x41511b07ff824404",
+          "0x4120cd6b5f861f3d",
+          "0x41511e62229e1c32",
+          "0x40dd4c000000022d"
         ],
         "residual": [
-          "0x0000000000000000",
-          "0x0000000000000000",
+          "0xbe14655fe65eb8a1",
+          "0xbe21e19680fa0055",
           "0x0000000000000000",
           "0xbe259c4f2414d437",
-          "0x0000000000000000",
+          "0xbe28984d3950af75",
           "0xbe2f855afc689737",
-          "0x0000000000000000",
+          "0xbe2a50154ffc6136",
           "0xbe288e14dd53965a"
         ],
-        "cost": "0x3c701f1163d566f9",
+        "cost": "0x3c7d911772887cd8",
         "outcome": "accepted_iterate"
       }
     ],
@@ -2271,7 +2271,7 @@
     "stopping": {
       "status": 3,
       "termination_reason": "xtol satisfied: relative step size below xtol",
-      "final_optimality_inf_norm": "0x3e401f1163d566f9",
+      "final_optimality_inf_norm": "0x3e4d911772887cd8",
       "gtol": "0x3ddb7cdfd9d7bdbb",
       "success": true,
       "nfev": 4,
@@ -2288,28 +2288,28 @@
     "final_solution": {
       "note": "trf SVD step is BLAS-bound (Apple Accelerate); the converged x is an independent-solve AGREEMENT target (sub-micron / ~1e-12), never 0 ULP.",
       "x": [
-        "0x41511b07ff824403",
-        "0x4120cd6b5f861f37",
-        "0x41511e62229e1c2c",
-        "0x40dd4bfffffffe9f"
+        "0x41511b07ff824404",
+        "0x4120cd6b5f861f3d",
+        "0x41511e62229e1c32",
+        "0x40dd4c000000022d"
       ],
       "residual": [
-        "0x0000000000000000",
-        "0x0000000000000000",
+        "0xbe14655fe65eb8a1",
+        "0xbe21e19680fa0055",
         "0x0000000000000000",
         "0xbe259c4f2414d437",
-        "0x0000000000000000",
+        "0xbe28984d3950af75",
         "0xbe2f855afc689737",
-        "0x0000000000000000",
+        "0xbe2a50154ffc6136",
         "0xbe288e14dd53965a"
       ],
-      "cost": "0x3c701f1163d566f9",
+      "cost": "0x3c7d911772887cd8",
       "recovered_geodetic": {
-        "lat_rad": "0x3fe921fb5432aa5e",
+        "lat_rad": "0x3fe921fb5432aa63",
         "lon_rad": "0x3fbf46bb9c109320",
-        "height_m": "0x4072bfffffff775b"
+        "height_m": "0x4072c0000000d3aa"
       },
-      "rx_clock_s": "0x3f1a3b884188e364",
+      "rx_clock_s": "0x3f1a3b884188e693",
       "truth_x": [
         "0x41511b07ff824402",
         "0x4120cd6b5f861f3b",
@@ -2318,11 +2318,11 @@
       ],
       "truth_rx_clock_s": "0x3f1a3b884188e4a0",
       "abs_err_x_m": [
-        "0x3e10000000000000",
-        "0x3e00000000000000",
-        "0x3e30000000000000"
+        "0x3e20000000000000",
+        "0x3df0000000000000",
+        "0x3e20000000000000"
       ],
-      "abs_err_clock_m": "0x3e16100000000000"
+      "abs_err_clock_m": "0x3e21680000000000"
     }
   }
 }

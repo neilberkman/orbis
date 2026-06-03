@@ -97,6 +97,7 @@ defmodule Orbis.PointPositioning do
     @type metadata :: %{
             iterations: non_neg_integer(),
             converged: boolean(),
+            status: atom(),
             ionosphere_applied: boolean(),
             troposphere_applied: boolean()
           }
@@ -227,10 +228,11 @@ defmodule Orbis.PointPositioning do
   defp dop_map({gdop, pdop, hdop, vdop, tdop}),
     do: %{gdop: gdop, pdop: pdop, hdop: hdop, vdop: vdop, tdop: tdop}
 
-  defp metadata_map({iterations, converged, iono, tropo}) do
+  defp metadata_map({iterations, converged, status, iono, tropo}) do
     %{
       iterations: iterations,
       converged: converged,
+      status: status,
       ionosphere_applied: iono,
       troposphere_applied: tropo
     }
@@ -238,8 +240,18 @@ defmodule Orbis.PointPositioning do
 
   # --- helpers -------------------------------------------------------------
 
-  # The crate takes seconds-since-J2000 as a float; `epoch_to_j2000_seconds`
-  # returns an exact integer for whole-second epochs (and an error otherwise).
+  # SPP receive time is a continuous f64 second-of-J2000, so sub-second epochs
+  # are supported: the whole-second part comes from the integer J2000-second
+  # conversion and the microsecond fraction is added on.
+  defp j2000_seconds(%NaiveDateTime{} = ndt) do
+    {micro, _precision} = ndt.microsecond
+
+    case GnssTime.epoch_to_j2000_seconds(%{ndt | microsecond: {0, 0}}) do
+      {:ok, seconds} -> {:ok, seconds + micro / 1_000_000.0}
+      {:error, _} = err -> err
+    end
+  end
+
   defp j2000_seconds(epoch) do
     case GnssTime.epoch_to_j2000_seconds(epoch) do
       {:ok, seconds} -> {:ok, seconds / 1.0}

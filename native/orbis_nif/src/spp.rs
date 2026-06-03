@@ -79,7 +79,7 @@ fn atom_from<'a>(env: Env<'a>, name: &str) -> Term<'a> {
 ///  [residual_m, ...],                    # post-fit residuals, used_sats order
 ///  ["G01", ...],                         # used satellites
 ///  [{"G07", :low_elevation}, ...],       # rejected satellites + reason atom
-///  {iterations, converged, ionosphere_applied, troposphere_applied}}
+///  {iterations, converged, status, ionosphere_applied, troposphere_applied}}
 /// ```
 fn encode_solution<'a>(env: Env<'a>, sol: &ReceiverSolution) -> Term<'a> {
     let pos = sol.position.as_array();
@@ -109,11 +109,29 @@ fn encode_solution<'a>(env: Env<'a>, sol: &ReceiverSolution) -> Term<'a> {
         })
         .collect();
 
-    let metadata = (
-        sol.metadata.iterations as i64,
-        sol.metadata.converged,
-        sol.metadata.ionosphere_applied,
-        sol.metadata.troposphere_applied,
+    let status = match sol.metadata.status {
+        astrodynamics::math::least_squares::Status::GradientTolerance => {
+            atom_from(env, "gradient_tolerance")
+        }
+        astrodynamics::math::least_squares::Status::CostTolerance => {
+            atom_from(env, "cost_tolerance")
+        }
+        astrodynamics::math::least_squares::Status::StepTolerance => {
+            atom_from(env, "step_tolerance")
+        }
+        astrodynamics::math::least_squares::Status::MaxEvaluations => {
+            atom_from(env, "max_evaluations")
+        }
+    };
+    let metadata = make_tuple(
+        env,
+        &[
+            (sol.metadata.iterations as i64).encode(env),
+            sol.metadata.converged.encode(env),
+            status,
+            sol.metadata.ionosphere_applied.encode(env),
+            sol.metadata.troposphere_applied.encode(env),
+        ],
     );
 
     // The body has eight fields, past the arity of the blanket tuple `Encoder`,
@@ -128,7 +146,7 @@ fn encode_solution<'a>(env: Env<'a>, sol: &ReceiverSolution) -> Term<'a> {
             sol.residuals_m.encode(env),
             used_sats.encode(env),
             rejected_sats.encode(env),
-            metadata.encode(env),
+            metadata,
         ],
     );
 

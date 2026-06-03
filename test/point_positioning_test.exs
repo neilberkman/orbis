@@ -72,6 +72,32 @@ defmodule Orbis.PointPositioningTest do
       assert sol.metadata.converged
       assert sol.metadata.ionosphere_applied
       assert sol.metadata.troposphere_applied
+
+      # The solver's termination status is surfaced as an atom.
+      assert sol.metadata.status in [
+               :gradient_tolerance,
+               :cost_tolerance,
+               :step_tolerance,
+               :max_evaluations
+             ]
+    end
+
+    test "accepts a sub-second receive epoch", ctx do
+      # SPP receive time is a continuous f64 second, so a fractional epoch must
+      # be accepted (not rejected as a non-integer-second epoch).
+      epoch = ~N[2020-06-24 12:00:00.250000]
+
+      assert {:ok, %Solution{}} =
+               PointPositioning.solve(ctx.sp3, ctx.observations, epoch,
+                 ionosphere: true,
+                 troposphere: true,
+                 klobuchar_alpha: ctx.alpha,
+                 klobuchar_beta: ctx.beta,
+                 pressure_hpa: ctx.pressure_hpa,
+                 temperature_k: ctx.temperature_k,
+                 relative_humidity: ctx.relative_humidity,
+                 initial_guess: {4_500_000.0, 500_000.0, 4_500_000.0, 0.0}
+               )
     end
 
     test "returns geodetic, DOP, residuals and used satellites", ctx do
