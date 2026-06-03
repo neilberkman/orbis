@@ -256,6 +256,23 @@ defmodule Orbis.PointPositioningTest do
       # GPS-only here, so the requirement is the classic four.
       assert required == 4
     end
+
+    test "a four-satellite GPS+Galileo set is too few (needs 3 + n_systems)" do
+      eph = Orbis.BroadcastEphemeris.load!(@nav_path)
+      # Two GPS + two Galileo: four usable satellites, but a two-system solve
+      # needs five (three position + one receiver clock per GNSS).
+      mixed_few =
+        Enum.take(@broadcast_obs, 2) ++
+          [{"E05", 27_038_058.346363213}, {"E09", 25_628_329.534503363}]
+
+      assert {:error, {:too_few_satellites, used, required}} =
+               PointPositioning.solve(eph, mixed_few, ~N[2020-06-25 12:00:00],
+                 initial_guess: {3_513_900.0, 779_500.0, 5_249_700.0, 0.0}
+               )
+
+      assert used == 4
+      assert required == 5
+    end
   end
 
   describe "solve/4 error paths" do

@@ -58,9 +58,11 @@ defmodule Orbis.PointPositioning do
     the same point as `%{lat_rad, lon_rad, height_m}` when geodetic output was
     requested (the default), otherwise `nil`. `rx_clock_s` is the reference-system
     receiver clock bias in seconds; `system_clocks_s` is a map of GNSS letter
-    (e.g. `"G"`, `"E"`) to that system's receiver clock in seconds (a single entry
-    for a one-system solve, one per constellation for a mixed solve — the extra
-    entries are the inter-system biases). `dop` carries the dilution-of-precision
+    (e.g. `"G"`, `"E"`) to that system's **absolute** receiver clock in seconds (a
+    single entry for a one-system solve, one per constellation for a mixed solve).
+    These are per-system clocks, not biases: the inter-system bias of a system is
+    its clock minus the reference system's (`rx_clock_s`). `dop` carries the
+    dilution-of-precision
     scalars when the geometry is full rank and single-system, otherwise `nil`
     (multi-system DOP is not yet computed). `residuals_m` are the post-fit
     pseudorange residuals in meters, in `used_sats` order. `used_sats` are the
