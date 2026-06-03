@@ -49,7 +49,6 @@ enum SppErrorReason {
     SingularGeometry,
     DuplicateObservation { satellite: String },
     EphemerisLost { satellite: String },
-    MixedConstellations,
 }
 
 impl SppErrorReason {
@@ -62,7 +61,6 @@ impl SppErrorReason {
             SppErrorReason::SingularGeometry => "singular_geometry",
             SppErrorReason::DuplicateObservation { .. } => "duplicate_observation",
             SppErrorReason::EphemerisLost { .. } => "ephemeris_lost",
-            SppErrorReason::MixedConstellations => "mixed_constellations",
         }
     }
 }
@@ -82,7 +80,6 @@ fn spp_error_reason(e: &SppError) -> SppErrorReason {
         SppError::EphemerisLost { satellite } => SppErrorReason::EphemerisLost {
             satellite: satellite.to_string(),
         },
-        SppError::MixedConstellations => SppErrorReason::MixedConstellations,
     }
 }
 
@@ -98,7 +95,6 @@ fn spp_error_term<'a>(env: Env<'a>, e: &SppError) -> Term<'a> {
             (atom::error(), tag, satellite).encode(env)
         }
         SppErrorReason::EphemerisLost { satellite } => (atom::error(), tag, satellite).encode(env),
-        SppErrorReason::MixedConstellations => (atom::error(), tag).encode(env),
     }
 }
 
@@ -392,10 +388,6 @@ mod mapping_tests {
                 satellite: "G12".to_string()
             }
         );
-        assert_eq!(
-            spp_error_reason(&SppError::MixedConstellations),
-            SppErrorReason::MixedConstellations
-        );
     }
 
     #[test]
@@ -421,10 +413,6 @@ mod mapping_tests {
             }
             .atom_name(),
             "ephemeris_lost"
-        );
-        assert_eq!(
-            SppErrorReason::MixedConstellations.atom_name(),
-            "mixed_constellations"
         );
     }
 

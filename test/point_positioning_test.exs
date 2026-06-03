@@ -209,15 +209,32 @@ defmodule Orbis.PointPositioningTest do
       assert sol.dop.pdop > 0.0
     end
 
-    test "a mixed GPS+Galileo observation set is rejected (single-clock solver)" do
+    test "solves a mixed GPS+Galileo set together with a per-system clock" do
       eph = Orbis.BroadcastEphemeris.load!(@nav_path)
-      # The 10 GPS pseudoranges plus one visible Galileo sat at the same epoch.
-      mixed = [{"E05", 27_038_058.346363213} | @broadcast_obs]
+      # The 10 GPS pseudoranges plus visible Galileo sats at the same epoch,
+      # synthesized with the same forward model.
+      galileo = [
+        {"E05", 27_038_058.346363213},
+        {"E09", 25_628_329.534503363},
+        {"E13", 25_860_944.73927032}
+      ]
 
-      assert {:error, :mixed_constellations} =
+      mixed = @broadcast_obs ++ galileo
+
+      assert {:ok, %Solution{} = sol} =
                PointPositioning.solve(eph, mixed, ~N[2020-06-25 12:00:00],
                  initial_guess: {3_513_900.0, 779_500.0, 5_249_700.0, 0.0}
                )
+
+      # Recovers the same receiver as the GPS-only solve, now using both systems.
+      assert_in_delta sol.position.x_m, @broadcast_truth.x_m, 1.0e-2
+      assert_in_delta sol.position.y_m, @broadcast_truth.y_m, 1.0e-2
+      assert_in_delta sol.position.z_m, @broadcast_truth.z_m, 1.0e-2
+
+      systems = sol.used_sats |> Enum.map(&String.first/1) |> Enum.uniq() |> Enum.sort()
+      assert systems == ["E", "G"], "both constellations must contribute"
+      # Multi-system DOP is not yet computed.
+      assert sol.dop == nil
     end
 
     test "a too-small broadcast observation set is rejected through the broadcast path" do
@@ -275,9 +292,6 @@ defmodule Orbis.PointPositioningTest do
 
       assert PointPositioning.map_solve_error({:error, :ephemeris_lost, "G07"}) ==
                {:error, {:ephemeris_lost, "G07"}}
-
-      assert PointPositioning.map_solve_error({:error, :mixed_constellations}) ==
-               {:error, :mixed_constellations}
     end
 
     test "an unrecognized NIF result is wrapped rather than dropped" do
