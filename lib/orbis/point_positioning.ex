@@ -212,11 +212,24 @@ defmodule Orbis.PointPositioning do
      }}
   end
 
-  defp decode({:error, :too_few_satellites, used}), do: {:error, {:too_few_satellites, used}}
-  defp decode({:error, :singular_geometry}), do: {:error, :singular_geometry}
-  defp decode({:error, :duplicate_observation, sat}), do: {:error, {:duplicate_observation, sat}}
-  defp decode({:error, :ephemeris_lost, sat}), do: {:error, {:ephemeris_lost, sat}}
-  defp decode(other), do: {:error, other}
+  defp decode(error), do: map_solve_error(error)
+
+  @doc false
+  # Map a raw NIF error tuple onto the public `{:error, reason}` contract.
+  # Exposed (undocumented) so the mapping for every advertised reason can be
+  # tested directly — including the defensive `:singular_geometry` and
+  # `:ephemeris_lost` paths, which the crate does not naturally reach from real
+  # SP3 inputs and so cannot be driven through a `solve/4` fixture.
+  def map_solve_error({:error, :too_few_satellites, used}),
+    do: {:error, {:too_few_satellites, used}}
+
+  def map_solve_error({:error, :singular_geometry}), do: {:error, :singular_geometry}
+
+  def map_solve_error({:error, :duplicate_observation, sat}),
+    do: {:error, {:duplicate_observation, sat}}
+
+  def map_solve_error({:error, :ephemeris_lost, sat}), do: {:error, {:ephemeris_lost, sat}}
+  def map_solve_error(other), do: {:error, other}
 
   defp position_map({x, y, z}), do: %{x_m: x, y_m: y, z_m: z}
 
@@ -248,6 +261,19 @@ defmodule Orbis.PointPositioning do
 
     case GnssTime.epoch_to_j2000_seconds(%{ndt | microsecond: {0, 0}}) do
       {:ok, seconds} -> {:ok, seconds + micro / 1_000_000.0}
+      {:error, _} = err -> err
+    end
+  end
+
+  # A `{{y, m, d}, {h, min, s}}` tuple with a fractional second: split the whole
+  # second off for the integer J2000 conversion and carry the fraction, so a
+  # sub-second tuple epoch is accepted on the same footing as a NaiveDateTime.
+  defp j2000_seconds({{_y, _mo, _d} = date, {hour, minute, second}}) when is_float(second) do
+    whole = trunc(second)
+    frac = second - whole
+
+    case GnssTime.epoch_to_j2000_seconds({date, {hour, minute, whole}}) do
+      {:ok, seconds} -> {:ok, seconds + frac}
       {:error, _} = err -> err
     end
   end

@@ -35,28 +35,77 @@ fn system_from_letter(letter: &str) -> NifResult<GnssSystem> {
         .ok_or_else(|| Error::Term(Box::new(format!("unknown GNSS system letter {letter:?}"))))
 }
 
-/// Translate an [`SppError`] into the atom the Elixir wrapper maps to a public
-/// `{:error, reason}`. The offending satellite (when the variant carries one) is
-/// rendered with the crate's canonical `Display` token (e.g. `"G01"`) so the
-/// reason term stays informative without leaking crate internals.
-fn spp_error_term<'a>(env: Env<'a>, e: &SppError) -> Term<'a> {
-    match e {
-        SppError::TooFewSatellites { used } => {
-            (atom::error(), atom_from(env, "too_few_satellites"), *used as i64).encode(env)
+/// The Elixir-facing reason for a failed solve, as a pure value with no `Env`
+/// dependency, so the `SppError` → public-reason mapping is unit-testable
+/// without the BEAM runtime. The satellite-carrying variants render the offender
+/// with the crate's canonical `Display` token (e.g. `"G01"`) so the reason stays
+/// informative without leaking crate internals. [`spp_error_term`] is the thin
+/// encoder that turns this into the actual `{:error, ...}` term.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SppErrorReason {
+    TooFewSatellites { used: i64 },
+    SingularGeometry,
+    DuplicateObservation { satellite: String },
+    EphemerisLost { satellite: String },
+}
+
+impl SppErrorReason {
+    /// The atom name the Elixir wrapper destructures as the error reason. These
+    /// strings are the public contract (`Orbis.PointPositioning.solve/4`), so a
+    /// rename here is a breaking change.
+    fn atom_name(&self) -> &'static str {
+        match self {
+            SppErrorReason::TooFewSatellites { .. } => "too_few_satellites",
+            SppErrorReason::SingularGeometry => "singular_geometry",
+            SppErrorReason::DuplicateObservation { .. } => "duplicate_observation",
+            SppErrorReason::EphemerisLost { .. } => "ephemeris_lost",
         }
-        SppError::Singular(_) => (atom::error(), atom_from(env, "singular_geometry")).encode(env),
-        SppError::DuplicateObservation { satellite } => (
-            atom::error(),
-            atom_from(env, "duplicate_observation"),
-            satellite.to_string(),
-        )
-            .encode(env),
-        SppError::EphemerisLost { satellite } => (
-            atom::error(),
-            atom_from(env, "ephemeris_lost"),
-            satellite.to_string(),
-        )
-            .encode(env),
+    }
+}
+
+/// Map an [`SppError`] onto its pure [`SppErrorReason`]. Total over the enum, so
+/// every variant — including the defensive `Singular` / `EphemerisLost` paths
+/// that real SP3 inputs do not naturally reach — has a tested mapping.
+fn spp_error_reason(e: &SppError) -> SppErrorReason {
+    match e {
+        SppError::TooFewSatellites { used } => SppErrorReason::TooFewSatellites { used: *used as i64 },
+        SppError::Singular(_) => SppErrorReason::SingularGeometry,
+        SppError::DuplicateObservation { satellite } => SppErrorReason::DuplicateObservation {
+            satellite: satellite.to_string(),
+        },
+        SppError::EphemerisLost { satellite } => SppErrorReason::EphemerisLost {
+            satellite: satellite.to_string(),
+        },
+    }
+}
+
+/// Translate an [`SppError`] into the `{:error, reason}` term the Elixir wrapper
+/// maps to a public reason. A thin `Env`-bound wrapper over [`spp_error_reason`].
+fn spp_error_term<'a>(env: Env<'a>, e: &SppError) -> Term<'a> {
+    let reason = spp_error_reason(e);
+    let tag = atom_from(env, reason.atom_name());
+    match reason {
+        SppErrorReason::TooFewSatellites { used } => (atom::error(), tag, used).encode(env),
+        SppErrorReason::SingularGeometry => (atom::error(), tag).encode(env),
+        SppErrorReason::DuplicateObservation { satellite } => {
+            (atom::error(), tag, satellite).encode(env)
+        }
+        SppErrorReason::EphemerisLost { satellite } => (atom::error(), tag, satellite).encode(env),
+    }
+}
+
+/// The atom name for a solver termination [`Status`]. Pure (no `Env`) so the
+/// status → atom mapping is unit-testable; the strings are the public contract
+/// surfaced as `Solution.metadata.status`.
+///
+/// [`Status`]: astrodynamics::math::least_squares::Status
+fn status_atom_name(status: astrodynamics::math::least_squares::Status) -> &'static str {
+    use astrodynamics::math::least_squares::Status;
+    match status {
+        Status::GradientTolerance => "gradient_tolerance",
+        Status::CostTolerance => "cost_tolerance",
+        Status::StepTolerance => "step_tolerance",
+        Status::MaxEvaluations => "max_evaluations",
     }
 }
 
@@ -109,20 +158,7 @@ fn encode_solution<'a>(env: Env<'a>, sol: &ReceiverSolution) -> Term<'a> {
         })
         .collect();
 
-    let status = match sol.metadata.status {
-        astrodynamics::math::least_squares::Status::GradientTolerance => {
-            atom_from(env, "gradient_tolerance")
-        }
-        astrodynamics::math::least_squares::Status::CostTolerance => {
-            atom_from(env, "cost_tolerance")
-        }
-        astrodynamics::math::least_squares::Status::StepTolerance => {
-            atom_from(env, "step_tolerance")
-        }
-        astrodynamics::math::least_squares::Status::MaxEvaluations => {
-            atom_from(env, "max_evaluations")
-        }
-    };
+    let status = atom_from(env, status_atom_name(sol.metadata.status));
     let metadata = make_tuple(
         env,
         &[
@@ -228,5 +264,75 @@ fn spp_solve<'a>(
     match solve_spp(&handle.sp3, &inputs, with_geodetic) {
         Ok(sol) => Ok(encode_solution(env, &sol)),
         Err(e) => Ok(spp_error_term(env, &e)),
+    }
+}
+
+#[cfg(test)]
+mod mapping_tests {
+    //! Mechanical coverage of the boundary mappings that term encoding wraps.
+    //! These exercise every `SppError` variant and every solver `Status`,
+    //! including the defensive `Singular` / `EphemerisLost` paths that a real
+    //! SP3 product does not naturally reach, so the advertised public reasons
+    //! stay correct without depending on a physics fixture to trigger them.
+    use super::*;
+    use astrodynamics::math::least_squares::{SolveError, Status};
+
+    fn gps(prn: u8) -> GnssSatelliteId {
+        GnssSatelliteId::new(GnssSystem::Gps, prn)
+    }
+
+    #[test]
+    fn spp_error_reason_is_total_over_every_variant() {
+        assert_eq!(
+            spp_error_reason(&SppError::TooFewSatellites { used: 3 }),
+            SppErrorReason::TooFewSatellites { used: 3 }
+        );
+        assert_eq!(
+            spp_error_reason(&SppError::Singular(SolveError::SingularJacobian)),
+            SppErrorReason::SingularGeometry
+        );
+        assert_eq!(
+            spp_error_reason(&SppError::DuplicateObservation { satellite: gps(7) }),
+            SppErrorReason::DuplicateObservation {
+                satellite: "G07".to_string()
+            }
+        );
+        assert_eq!(
+            spp_error_reason(&SppError::EphemerisLost { satellite: gps(12) }),
+            SppErrorReason::EphemerisLost {
+                satellite: "G12".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn error_reason_atom_names_are_the_documented_public_reasons() {
+        assert_eq!(
+            SppErrorReason::TooFewSatellites { used: 0 }.atom_name(),
+            "too_few_satellites"
+        );
+        assert_eq!(SppErrorReason::SingularGeometry.atom_name(), "singular_geometry");
+        assert_eq!(
+            SppErrorReason::DuplicateObservation {
+                satellite: String::new()
+            }
+            .atom_name(),
+            "duplicate_observation"
+        );
+        assert_eq!(
+            SppErrorReason::EphemerisLost {
+                satellite: String::new()
+            }
+            .atom_name(),
+            "ephemeris_lost"
+        );
+    }
+
+    #[test]
+    fn status_atom_names_cover_every_status() {
+        assert_eq!(status_atom_name(Status::GradientTolerance), "gradient_tolerance");
+        assert_eq!(status_atom_name(Status::CostTolerance), "cost_tolerance");
+        assert_eq!(status_atom_name(Status::StepTolerance), "step_tolerance");
+        assert_eq!(status_atom_name(Status::MaxEvaluations), "max_evaluations");
     }
 }

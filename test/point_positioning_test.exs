@@ -73,19 +73,36 @@ defmodule Orbis.PointPositioningTest do
       assert sol.metadata.ionosphere_applied
       assert sol.metadata.troposphere_applied
 
-      # The solver's termination status is surfaced as an atom.
-      assert sol.metadata.status in [
-               :gradient_tolerance,
-               :cost_tolerance,
-               :step_tolerance,
-               :max_evaluations
-             ]
+      # The solver's termination status is surfaced as an atom. For this fixture
+      # the trust-region solve stops on the step tolerance after 7 iterations;
+      # the value is deterministic, so pin it exactly rather than accepting any
+      # known status.
+      assert sol.metadata.status == :step_tolerance
+      assert sol.metadata.iterations == 7
     end
 
     test "accepts a sub-second receive epoch", ctx do
       # SPP receive time is a continuous f64 second, so a fractional epoch must
       # be accepted (not rejected as a non-integer-second epoch).
       epoch = ~N[2020-06-24 12:00:00.250000]
+
+      assert {:ok, %Solution{}} =
+               PointPositioning.solve(ctx.sp3, ctx.observations, epoch,
+                 ionosphere: true,
+                 troposphere: true,
+                 klobuchar_alpha: ctx.alpha,
+                 klobuchar_beta: ctx.beta,
+                 pressure_hpa: ctx.pressure_hpa,
+                 temperature_k: ctx.temperature_k,
+                 relative_humidity: ctx.relative_humidity,
+                 initial_guess: {4_500_000.0, 500_000.0, 4_500_000.0, 0.0}
+               )
+    end
+
+    test "accepts a sub-second receive epoch given as a tuple", ctx do
+      # The `{{y, m, d}, {h, min, s}}` epoch form must also carry a fractional
+      # second, on the same footing as a NaiveDateTime.
+      epoch = {{2020, 6, 24}, {12, 0, 0.25}}
 
       assert {:ok, %Solution{}} =
                PointPositioning.solve(ctx.sp3, ctx.observations, epoch,
@@ -132,6 +149,31 @@ defmodule Orbis.PointPositioningTest do
     end
   end
 
+  describe "solve/4 degenerate geometry" do
+    @degenerate_sp3 Path.join(__DIR__, "fixtures/sp3/degenerate_coincident_5sat.sp3")
+
+    test "a rank-deficient geometry returns a solution with no DOP, not a crash" do
+      sp3 = SP3.load!(@degenerate_sp3)
+
+      # All five satellites share one ECEF position, so every line of sight is
+      # identical and the geometry is rank-deficient. An identical pseudorange
+      # keeps the rows coincident.
+      observations = for prn <- 1..5, do: {"G0#{prn}", 20_181_863.0}
+
+      # A receive epoch inside the product's [00:00, 00:15] window.
+      epoch = ~N[2020-06-24 00:03:20]
+
+      assert {:ok, %Solution{} = sol} =
+               PointPositioning.solve(sp3, observations, epoch,
+                 initial_guess: {6_378_137.0, 0.0, 0.0, 0.0}
+               )
+
+      # The solver still returns a position, but a rank-deficient geometry must
+      # not report a dilution of precision.
+      assert sol.dop == nil
+    end
+  end
+
   describe "solve/4 error paths" do
     test "fewer than four observations is rejected", ctx do
       few = Enum.take(ctx.observations, 3)
@@ -154,6 +196,30 @@ defmodule Orbis.PointPositioningTest do
                )
 
       assert is_binary(sat)
+    end
+  end
+
+  describe "error reason mapping" do
+    # The `:too_few_satellites` and `:duplicate_observation` reasons are also
+    # covered end-to-end above; `:singular_geometry` and `:ephemeris_lost` are
+    # defensive crate paths that real SP3 inputs do not reach, so the mapping
+    # onto the public contract is exercised directly here.
+    test "every advertised NIF error reason maps to its public form" do
+      assert PointPositioning.map_solve_error({:error, :too_few_satellites, 3}) ==
+               {:error, {:too_few_satellites, 3}}
+
+      assert PointPositioning.map_solve_error({:error, :singular_geometry}) ==
+               {:error, :singular_geometry}
+
+      assert PointPositioning.map_solve_error({:error, :duplicate_observation, "G01"}) ==
+               {:error, {:duplicate_observation, "G01"}}
+
+      assert PointPositioning.map_solve_error({:error, :ephemeris_lost, "G07"}) ==
+               {:error, {:ephemeris_lost, "G07"}}
+    end
+
+    test "an unrecognized NIF result is wrapped rather than dropped" do
+      assert PointPositioning.map_solve_error(:boom) == {:error, :boom}
     end
   end
 
