@@ -9,8 +9,9 @@ defmodule Orbis.BroadcastEphemeris do
   of a precise SP3 product. The navigation file is parsed exactly once; the
   parsed product is held as a reference, not re-parsed per call.
 
-  Parsing covers GPS, Galileo, and BeiDou records (including BeiDou
-  geostationary satellites); other constellations in a mixed file are skipped.
+  Parsing covers RINEX 3.x and 4.xx files, GPS, Galileo, and BeiDou records
+  (including BeiDou geostationary satellites); other constellations in a mixed
+  file are skipped, as are version-4 CNAV-family messages.
   """
 
   alias Orbis.NIF
@@ -21,7 +22,7 @@ defmodule Orbis.BroadcastEphemeris do
   @type t :: %__MODULE__{handle: reference()}
 
   @doc """
-  Parse a RINEX 3 navigation file from disk.
+  Parse a RINEX 3.x or 4.xx navigation file from disk.
 
   Returns `{:ok, %Orbis.BroadcastEphemeris{}}` or `{:error, reason}`. The file
   is read and parsed once; the parsed product is held as a resource handle.
@@ -48,7 +49,7 @@ defmodule Orbis.BroadcastEphemeris do
   end
 
   @doc """
-  Parse an in-memory RINEX 3 navigation text buffer into a handle.
+  Parse an in-memory RINEX 3.x or 4.xx navigation text buffer into a handle.
   """
   @spec parse(String.t()) :: {:ok, t()} | {:error, term()}
   def parse(text) when is_binary(text) do

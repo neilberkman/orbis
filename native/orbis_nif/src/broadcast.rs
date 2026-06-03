@@ -16,7 +16,7 @@ pub struct BroadcastResource {
 #[rustler::resource_impl]
 impl rustler::Resource for BroadcastResource {}
 
-/// Parse RINEX 3 navigation text into a broadcast-ephemeris resource handle.
+/// Parse RINEX 3.x/4.xx navigation text into a broadcast-ephemeris resource handle.
 ///
 /// Dirty-CPU: parsing a full daily multi-GNSS file is unbounded relative to the
 /// 1 ms NIF budget. On a malformed file returns the parser's error as a term.
