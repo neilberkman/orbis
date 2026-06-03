@@ -243,6 +243,38 @@ defmodule Orbis.PointPositioningTest do
       assert sol.dop == nil
     end
 
+    test "solves a GPS+Galileo+BeiDou set, including a geostationary satellite" do
+      eph = Orbis.BroadcastEphemeris.load!(@nav_path)
+      # GPS + Galileo + BeiDou (C05 is geostationary, C13 IGSO, C19 MEO), all
+      # synthesized with the same forward model at the same epoch.
+      beidou = [
+        {"C05", 40_127_033.52503693},
+        {"C13", 39_200_124.95320755},
+        {"C19", 23_661_671.39784395}
+      ]
+
+      galileo = [
+        {"E05", 27_038_058.346363213},
+        {"E09", 25_628_329.534503363},
+        {"E13", 25_860_944.73927032}
+      ]
+
+      observations = @broadcast_obs ++ galileo ++ beidou
+
+      assert {:ok, %Solution{} = sol} =
+               PointPositioning.solve(eph, observations, ~N[2020-06-25 12:00:00],
+                 initial_guess: {3_513_900.0, 779_500.0, 5_249_700.0, 0.0}
+               )
+
+      assert_in_delta sol.position.x_m, @broadcast_truth.x_m, 1.0e-2
+      assert_in_delta sol.position.y_m, @broadcast_truth.y_m, 1.0e-2
+      assert_in_delta sol.position.z_m, @broadcast_truth.z_m, 1.0e-2
+
+      # All three constellations contribute and each gets a receiver clock.
+      assert Map.keys(sol.system_clocks_s) |> Enum.sort() == ["C", "E", "G"]
+      assert "C05" in sol.used_sats, "the geostationary satellite must be used"
+    end
+
     test "a too-small broadcast observation set is rejected through the broadcast path" do
       eph = Orbis.BroadcastEphemeris.load!(@nav_path)
       few = Enum.take(@broadcast_obs, 3)
