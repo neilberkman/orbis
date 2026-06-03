@@ -107,8 +107,7 @@ fn doppler_compute(
     ];
 
     // Ground station geodetic -> ITRS/ECEF
-    let (stn_x, stn_y, stn_z) =
-        geodetic_to_itrs(station_lat_deg, station_lon_deg, station_alt_km);
+    let (stn_x, stn_y, stn_z) = geodetic_to_itrs(station_lat_deg, station_lon_deg, station_alt_km);
 
     // Range vector: satellite - station
     let range_vec = [
@@ -118,10 +117,9 @@ fn doppler_compute(
     ];
 
     // Range magnitude
-    let range_mag = (range_vec[0] * range_vec[0]
-        + range_vec[1] * range_vec[1]
-        + range_vec[2] * range_vec[2])
-    .sqrt();
+    let range_mag =
+        (range_vec[0] * range_vec[0] + range_vec[1] * range_vec[1] + range_vec[2] * range_vec[2])
+            .sqrt();
 
     // Range unit vector
     let range_unit = [

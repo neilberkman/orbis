@@ -85,10 +85,7 @@ pub fn gibbs(
     let r1mr2 = magr1 - magr2;
     let r3mr1 = magr3 - magr1;
     let r2mr3 = magr2 - magr3;
-    let s = vadd(
-        &vadd(&smul(r1mr2, r3), &smul(r3mr1, r2)),
-        &smul(r2mr3, r1),
-    );
+    let s = vadd(&vadd(&smul(r1mr2, r3), &smul(r3mr1, r2)), &smul(r2mr3, r1));
 
     // B = D × r2
     let b = cross(&d, r2);
@@ -158,19 +155,13 @@ pub fn hgibbs(
 
 type Vec3 = (f64, f64, f64);
 
-pub(crate) fn gibbs_impl(
-    r1: Vec3,
-    r2: Vec3,
-    r3: Vec3,
-) -> NifResult<(Vec3, f64, f64, f64)> {
+pub(crate) fn gibbs_impl(r1: Vec3, r2: Vec3, r3: Vec3) -> NifResult<(Vec3, f64, f64, f64)> {
     let r1a = [r1.0, r1.1, r1.2];
     let r2a = [r2.0, r2.1, r2.2];
     let r3a = [r3.0, r3.1, r3.2];
 
     match gibbs(&r1a, &r2a, &r3a) {
-        Ok((v2, theta12, theta23, copa)) => {
-            Ok(((v2[0], v2[1], v2[2]), theta12, theta23, copa))
-        }
+        Ok((v2, theta12, theta23, copa)) => Ok(((v2[0], v2[1], v2[2]), theta12, theta23, copa)),
         Err(_) => Ok(((0.0, 0.0, 0.0), 0.0, 0.0, 0.0)),
     }
 }
@@ -188,9 +179,7 @@ pub(crate) fn hgibbs_impl(
     let r3a = [r3.0, r3.1, r3.2];
 
     match hgibbs(&r1a, &r2a, &r3a, jd1, jd2, jd3) {
-        Ok((v2, theta12, theta23, copa)) => {
-            Ok(((v2[0], v2[1], v2[2]), theta12, theta23, copa))
-        }
+        Ok((v2, theta12, theta23, copa)) => Ok(((v2[0], v2[1], v2[2]), theta12, theta23, copa)),
         Err(_) => Ok(((0.0, 0.0, 0.0), 0.0, 0.0, 0.0)),
     }
 }

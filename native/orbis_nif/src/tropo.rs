@@ -18,8 +18,8 @@
 //! day-of-year term.
 
 use astrodynamics::time::model::{Instant, JulianDateSplit, TimeScale};
-use astrodynamics_gnss::{tropo_mapping, tropo_slant, tropo_zenith, MappingModel, Met, TropoModel};
 use astrodynamics_gnss::Wgs84Geodetic;
+use astrodynamics_gnss::{tropo_mapping, tropo_slant, tropo_zenith, MappingModel, Met, TropoModel};
 use rustler::NifResult;
 
 /// Zenith hydrostatic and wet tropospheric delays (positive meters).

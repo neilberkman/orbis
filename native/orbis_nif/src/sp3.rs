@@ -67,8 +67,7 @@ fn time_scale_from_abbrev(abbrev: &str) -> NifResult<TimeScale> {
 /// malformed buffer returns the crate's parse-error reason as an Erlang term.
 #[rustler::nif(schedule = "DirtyCpu")]
 fn sp3_parse(bytes: rustler::Binary) -> NifResult<ResourceArc<Sp3Resource>> {
-    let sp3 = Sp3::parse(bytes.as_slice())
-        .map_err(|e| Error::Term(Box::new(e.to_string())))?;
+    let sp3 = Sp3::parse(bytes.as_slice()).map_err(|e| Error::Term(Box::new(e.to_string())))?;
     Ok(ResourceArc::new(Sp3Resource { sp3 }))
 }
 

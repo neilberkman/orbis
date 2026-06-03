@@ -98,8 +98,7 @@ fn exospheric_temperature(input: &NrlmsiseInput) -> f64 {
 
     // Solar zenith angle proxy
     let hour_angle = ((input.lst - 12.0) * 15.0).to_radians();
-    let cos_sza = lat_rad.sin() * decl.sin()
-        + lat_rad.cos() * decl.cos() * hour_angle.cos();
+    let cos_sza = lat_rad.sin() * decl.sin() + lat_rad.cos() * decl.cos() * hour_angle.cos();
 
     // Base exospheric temperature from F10.7
     // T_inf = 379 + 3.24 * F10.7a + 1.3 * (F10.7 - F10.7a)
@@ -298,8 +297,7 @@ fn nrlmsise00(input: &NrlmsiseInput) -> NrlmsiseOutput {
     let day_angle = (input.doy as f64 - 1.0) * std::f64::consts::TAU / 365.25;
     let decl = 23.44_f64.to_radians() * day_angle.sin();
     let hour_angle = ((input.lst - 12.0) * 15.0).to_radians();
-    let cos_sza = lat_rad.sin() * decl.sin()
-        + lat_rad.cos() * decl.cos() * hour_angle.cos();
+    let cos_sza = lat_rad.sin() * decl.sin() + lat_rad.cos() * decl.cos() * hour_angle.cos();
 
     // Compute density of each constituent at altitude
     let mut total_density = 0.0_f64;
@@ -493,10 +491,30 @@ mod tests {
         let d_400 = nrlmsise00(&make_input(400.0)).density;
         let d_800 = nrlmsise00(&make_input(800.0)).density;
 
-        assert!(d_0 > d_100, "density should decrease: {:.3e} > {:.3e}", d_0, d_100);
-        assert!(d_100 > d_200, "density should decrease: {:.3e} > {:.3e}", d_100, d_200);
-        assert!(d_200 > d_400, "density should decrease: {:.3e} > {:.3e}", d_200, d_400);
-        assert!(d_400 > d_800, "density should decrease: {:.3e} > {:.3e}", d_400, d_800);
+        assert!(
+            d_0 > d_100,
+            "density should decrease: {:.3e} > {:.3e}",
+            d_0,
+            d_100
+        );
+        assert!(
+            d_100 > d_200,
+            "density should decrease: {:.3e} > {:.3e}",
+            d_100,
+            d_200
+        );
+        assert!(
+            d_200 > d_400,
+            "density should decrease: {:.3e} > {:.3e}",
+            d_200,
+            d_400
+        );
+        assert!(
+            d_400 > d_800,
+            "density should decrease: {:.3e} > {:.3e}",
+            d_400,
+            d_800
+        );
     }
 
     #[test]

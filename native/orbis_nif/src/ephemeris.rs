@@ -90,7 +90,9 @@ fn read_record(file: &mut File, record_num: usize) -> Result<[u8; RECORD_SIZE], 
     let mut buf = [0u8; RECORD_SIZE];
     file.read_exact(&mut buf)
         .map_err(|e| format!("read error: {e}"))?;
-    buf[..].try_into().map_err(|_| "buffer conversion".to_string())
+    buf[..]
+        .try_into()
+        .map_err(|_| "buffer conversion".to_string())
 }
 
 /// Detect endianness from the DAF file record. The file record contains
@@ -132,7 +134,11 @@ fn parse_file_record(
 
 /// Parse all segment summaries from the DAF file by traversing the
 /// linked list of summary records.
-fn parse_summaries(file: &mut File, little_endian: bool, fward: usize) -> Result<Vec<Segment>, String> {
+fn parse_summaries(
+    file: &mut File,
+    little_endian: bool,
+    fward: usize,
+) -> Result<Vec<Segment>, String> {
     let mut segments = Vec::new();
     let mut current_record = fward;
 
@@ -194,8 +200,8 @@ pub(crate) fn open_spk(path: &str) -> Result<SpkFile, String> {
     let file_record = read_record(&mut file, 1)?;
 
     // Check magic: first 7 bytes should be "DAF/SPK"
-    let magic = std::str::from_utf8(&file_record[0..7])
-        .map_err(|_| "invalid file header".to_string())?;
+    let magic =
+        std::str::from_utf8(&file_record[0..7]).map_err(|_| "invalid file header".to_string())?;
     if magic != "DAF/SPK" {
         return Err(format!("not an SPK file: header is {magic:?}"));
     }
@@ -393,7 +399,6 @@ fn evaluate_type2_segment(
     // s = 2 * offset / intlen - 1
     let s = 2.0 * offset / meta.intlen - 1.0;
 
-
     let cx = &data[2..2 + n_coeffs];
     let cy = &data[2 + n_coeffs..2 + 2 * n_coeffs];
     let cz = &data[2 + 2 * n_coeffs..2 + 3 * n_coeffs];
@@ -403,7 +408,6 @@ fn evaluate_type2_segment(
         chebyshev_eval(cy, s),
         chebyshev_eval(cz, s),
     ];
-
 
     let velocity = if compute_velocity {
         let radius = meta.intlen / 2.0;
@@ -519,7 +523,8 @@ fn compute_position_chain(
         // cancellation of large intermediate values.
         let target_centers: Vec<i32> = target_steps.iter().map(|(c, _)| *c).collect();
 
-        let common = observer_steps.iter()
+        let common = observer_steps
+            .iter()
             .map(|(c, _)| *c)
             .find(|c| target_centers.contains(c))
             .unwrap_or(0);
@@ -529,7 +534,9 @@ fn compute_position_chain(
             target_sum[0] += pos[0];
             target_sum[1] += pos[1];
             target_sum[2] += pos[2];
-            if *center == common { break; }
+            if *center == common {
+                break;
+            }
         }
 
         let mut observer_sum = [0.0_f64; 3];
@@ -537,7 +544,9 @@ fn compute_position_chain(
             observer_sum[0] += pos[0];
             observer_sum[1] += pos[1];
             observer_sum[2] += pos[2];
-            if *center == common { break; }
+            if *center == common {
+                break;
+            }
         }
 
         Ok([
@@ -587,7 +596,6 @@ fn sum_positions(chain: &[(i32, [f64; 3])]) -> [f64; 3] {
     sum
 }
 
-
 fn find_body_as_target(
     spk: &SpkFile,
     body: i32,
@@ -598,7 +606,10 @@ fn find_body_as_target(
     for (&(target, center), segs) in &spk.segments {
         if target == body {
             // Use epoch_s for the range check (sufficient precision).
-            if let Some(seg) = segs.iter().find(|s| epoch_s >= s.start_epoch && epoch_s <= s.end_epoch) {
+            if let Some(seg) = segs
+                .iter()
+                .find(|s| epoch_s >= s.start_epoch && epoch_s <= s.end_epoch)
+            {
                 if seg.data_type != 2 {
                     return Err(format!(
                         "unsupported SPK type {} for body {body}",
@@ -610,8 +621,14 @@ fn find_body_as_target(
                     .map_err(|e| format!("cannot reopen {}: {e}", spk.path))?;
 
                 // Pass split JD for full-precision Chebyshev argument.
-                let (position, _) =
-                    evaluate_type2_segment(&mut file, seg, jd_whole, jd_fraction, spk.little_endian, false)?;
+                let (position, _) = evaluate_type2_segment(
+                    &mut file,
+                    seg,
+                    jd_whole,
+                    jd_fraction,
+                    spk.little_endian,
+                    false,
+                )?;
                 return Ok((center, position));
             }
         }
@@ -620,7 +637,6 @@ fn find_body_as_target(
         "no segment found for body {body} at the requested epoch"
     ))
 }
-
 
 // ---------------------------------------------------------------------------
 // NIF entry point
@@ -637,18 +653,23 @@ pub(crate) fn get_body_position_impl(
     jd_fraction: f64,
     skyfield_compat: bool,
 ) -> NifResult<(f64, f64, f64)> {
-    let target_code = body_name_to_code(&target_name)
-        .map_err(|e| rustler::Error::Term(Box::new(e)))?;
-    let observer_code = body_name_to_code(&observer_name)
-        .map_err(|e| rustler::Error::Term(Box::new(e)))?;
+    let target_code =
+        body_name_to_code(&target_name).map_err(|e| rustler::Error::Term(Box::new(e)))?;
+    let observer_code =
+        body_name_to_code(&observer_name).map_err(|e| rustler::Error::Term(Box::new(e)))?;
 
-    let spk = open_spk(&file_path)
-        .map_err(|e| rustler::Error::Term(Box::new(e)))?;
+    let spk = open_spk(&file_path).map_err(|e| rustler::Error::Term(Box::new(e)))?;
 
     let epoch_s = jd_to_spk_epoch_split(jd_whole, jd_fraction);
 
     let position = compute_position_chain(
-        &spk, target_code, observer_code, jd_whole, jd_fraction, epoch_s, skyfield_compat,
+        &spk,
+        target_code,
+        observer_code,
+        jd_whole,
+        jd_fraction,
+        epoch_s,
+        skyfield_compat,
     )
     .map_err(|e| rustler::Error::Term(Box::new(e)))?;
 

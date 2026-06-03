@@ -256,8 +256,7 @@ pub fn battin(
             x = xn;
             let temp = 1.0 / (2.0 * (l_ - x * x));
             let temp1 = x.sqrt();
-            let temp2 =
-                (nrev as f64 * PI * 0.5 + temp1.atan()) / temp1;
+            let temp2 = (nrev as f64 * PI * 0.5 + temp1.atan()) / temp1;
             let h1 = temp * (l_ + x) * (1.0 + 2.0 * x + l_);
             let h2 = temp * m * temp1 * ((l_ - x * x) * temp2 - (l_ + x));
 
@@ -276,9 +275,8 @@ pub fn battin(
         }
 
         let a_orbit = s * (1.0 + lam).powi(2) * (1.0 + xn) * (l_ + xn) / (8.0 * xn);
-        let p =
-            2.0 * magr1 * magr2 * (1.0 + xn) * (dnu * 0.5).sin().powi(2)
-                / (s * (1.0 + lam).powi(2) * (l_ + xn));
+        let p = 2.0 * magr1 * magr2 * (1.0 + xn) * (dnu * 0.5).sin().powi(2)
+            / (s * (1.0 + lam).powi(2) * (l_ + xn));
         let ecc = (1.0 - p / a_orbit).abs().sqrt();
         Ok(hodograph(r1, r2, v1, p, ecc, dnu, dtsec))
     } else {
@@ -294,9 +292,9 @@ pub fn battin(
 
             let (h1, h2) = if nrev > 0 {
                 let temp = 1.0 / ((1.0 + 2.0 * x + l_) * (4.0 * x * x));
-                let temp1 =
-                    (nrev as f64 * PI * 0.5 + x.sqrt().atan()) / x.sqrt();
-                let h1 = temp * (l_ + x).powi(2) * (3.0 * (1.0 + x).powi(2) * temp1 - (3.0 + 5.0 * x));
+                let temp1 = (nrev as f64 * PI * 0.5 + x.sqrt().atan()) / x.sqrt();
+                let h1 =
+                    temp * (l_ + x).powi(2) * (3.0 * (1.0 + x).powi(2) * temp1 - (3.0 + 5.0 * x));
                 let h2 = temp * m * ((x * x - x * (1.0 + l_) - 3.0 * l_) * temp1 + (3.0 * l_ + x));
                 (h1, h2)
             } else {

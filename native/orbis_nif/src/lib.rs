@@ -3,8 +3,8 @@ mod conjunction;
 mod doppler;
 mod ephemeris;
 mod gauss;
-mod iono;
 mod iod;
+mod iono;
 mod lambert;
 mod propagation;
 mod sp3;
@@ -41,7 +41,14 @@ fn time_scales_from_tuple(datetime_tuple: Term) -> NifResult<TimeScales> {
     let (year, month, day, hour, minute, second, microsecond) =
         parse_datetime_tuple(datetime_tuple)?;
     let second_with_micro = second as f64 + microsecond as f64 / 1_000_000.0;
-    Ok(TimeScales::from_utc(year, month, day, hour, minute, second_with_micro))
+    Ok(TimeScales::from_utc(
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        second_with_micro,
+    ))
 }
 
 #[rustler::nif]
@@ -68,7 +75,16 @@ fn teme_to_gcrs(
     skyfield_compat: bool,
 ) -> NifResult<(Vec3, Vec3)> {
     let ts = time_scales_from_tuple(datetime_tuple)?;
-    Ok(teme_to_gcrs_compute(x, y, z, vx, vy, vz, &ts, skyfield_compat))
+    Ok(teme_to_gcrs_compute(
+        x,
+        y,
+        z,
+        vx,
+        vy,
+        vz,
+        &ts,
+        skyfield_compat,
+    ))
 }
 
 #[rustler::nif]
@@ -84,11 +100,7 @@ fn gcrs_to_itrs(
 }
 
 #[rustler::nif]
-fn itrs_to_geodetic(
-    x: f64,
-    y: f64,
-    z: f64,
-) -> NifResult<(f64, f64, f64)> {
+fn itrs_to_geodetic(x: f64, y: f64, z: f64) -> NifResult<(f64, f64, f64)> {
     Ok(itrs_to_geodetic_compute(x, y, z))
 }
 
@@ -106,9 +118,14 @@ fn gcrs_to_topocentric(
 ) -> NifResult<(f64, f64, f64)> {
     let ts = time_scales_from_tuple(datetime_tuple)?;
     Ok(gcrs_to_topocentric_compute(
-        sat_x, sat_y, sat_z,
-        station_lat_deg, station_lon_deg, station_alt_km,
-        &ts, skyfield_compat,
+        sat_x,
+        sat_y,
+        sat_z,
+        station_lat_deg,
+        station_lon_deg,
+        station_alt_km,
+        &ts,
+        skyfield_compat,
     ))
 }
 
@@ -137,7 +154,14 @@ fn get_body_position(
     jd_fraction: f64,
     skyfield_compat: bool,
 ) -> NifResult<(f64, f64, f64)> {
-    ephemeris::get_body_position_impl(file_path, target_name, observer_name, jd_whole, jd_fraction, skyfield_compat)
+    ephemeris::get_body_position_impl(
+        file_path,
+        target_name,
+        observer_name,
+        jd_whole,
+        jd_fraction,
+        skyfield_compat,
+    )
 }
 
 #[rustler::nif]
@@ -215,17 +239,25 @@ fn iod_hgibbs(
 #[rustler::nif]
 #[allow(clippy::too_many_arguments)]
 fn iod_gauss(
-    decl1: f64, decl2: f64, decl3: f64,
-    rtasc1: f64, rtasc2: f64, rtasc3: f64,
-    jd1: f64, jdf1: f64,
-    jd2: f64, jdf2: f64,
-    jd3: f64, jdf3: f64,
-    rseci1: Vec3, rseci2: Vec3, rseci3: Vec3,
+    decl1: f64,
+    decl2: f64,
+    decl3: f64,
+    rtasc1: f64,
+    rtasc2: f64,
+    rtasc3: f64,
+    jd1: f64,
+    jdf1: f64,
+    jd2: f64,
+    jdf2: f64,
+    jd3: f64,
+    jdf3: f64,
+    rseci1: Vec3,
+    rseci2: Vec3,
+    rseci3: Vec3,
 ) -> NifResult<(Vec3, Vec3)> {
     gauss::gauss_impl(
-        decl1, decl2, decl3, rtasc1, rtasc2, rtasc3,
-        jd1, jdf1, jd2, jdf2, jd3, jdf3,
-        rseci1, rseci2, rseci3,
+        decl1, decl2, decl3, rtasc1, rtasc2, rtasc3, jd1, jdf1, jd2, jdf2, jd3, jdf3, rseci1,
+        rseci2, rseci3,
     )
 }
 
@@ -257,8 +289,15 @@ fn find_conjunctions<'a>(
     threshold_km: f64,
 ) -> NifResult<Term<'a>> {
     conjunction::conjunction_impl(
-        env, &line1_a, &line2_a, &line1_b, &line2_b,
-        start_min, end_min, step_min, threshold_km,
+        env,
+        &line1_a,
+        &line2_a,
+        &line1_b,
+        &line2_b,
+        start_min,
+        end_min,
+        step_min,
+        threshold_km,
     )
 }
 

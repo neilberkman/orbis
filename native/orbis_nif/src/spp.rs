@@ -68,7 +68,9 @@ impl SppErrorReason {
 /// that real SP3 inputs do not naturally reach — has a tested mapping.
 fn spp_error_reason(e: &SppError) -> SppErrorReason {
     match e {
-        SppError::TooFewSatellites { used } => SppErrorReason::TooFewSatellites { used: *used as i64 },
+        SppError::TooFewSatellites { used } => {
+            SppErrorReason::TooFewSatellites { used: *used as i64 }
+        }
         SppError::Singular(_) => SppErrorReason::SingularGeometry,
         SppError::DuplicateObservation { satellite } => SppErrorReason::DuplicateObservation {
             satellite: satellite.to_string(),
@@ -311,7 +313,10 @@ mod mapping_tests {
             SppErrorReason::TooFewSatellites { used: 0 }.atom_name(),
             "too_few_satellites"
         );
-        assert_eq!(SppErrorReason::SingularGeometry.atom_name(), "singular_geometry");
+        assert_eq!(
+            SppErrorReason::SingularGeometry.atom_name(),
+            "singular_geometry"
+        );
         assert_eq!(
             SppErrorReason::DuplicateObservation {
                 satellite: String::new()
@@ -330,7 +335,10 @@ mod mapping_tests {
 
     #[test]
     fn status_atom_names_cover_every_status() {
-        assert_eq!(status_atom_name(Status::GradientTolerance), "gradient_tolerance");
+        assert_eq!(
+            status_atom_name(Status::GradientTolerance),
+            "gradient_tolerance"
+        );
         assert_eq!(status_atom_name(Status::CostTolerance), "cost_tolerance");
         assert_eq!(status_atom_name(Status::StepTolerance), "step_tolerance");
         assert_eq!(status_atom_name(Status::MaxEvaluations), "max_evaluations");

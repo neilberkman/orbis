@@ -15,8 +15,8 @@
 //!   epoch; it never touches the filesystem.
 
 use astrodynamics_gnss::ionex::Ionex;
-use astrodynamics_gnss::{ionex_slant_delay, klobuchar_native, KlobucharParams};
 use astrodynamics_gnss::Wgs84Geodetic;
+use astrodynamics_gnss::{ionex_slant_delay, klobuchar_native, KlobucharParams};
 use rustler::{Error, NifResult, ResourceArc};
 
 /// Resource handle holding a parsed IONEX product across NIF calls.
