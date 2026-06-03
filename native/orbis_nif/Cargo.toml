@@ -15,5 +15,5 @@ chrono = "0.4"
 # advances; switch to crates.io versions at the v1 release. For local
 # development against the workspace, an uncommitted native/orbis_nif/.cargo/
 # config.toml overrides these with the local paths (see config.toml.example).
-astrodynamics = { git = "https://github.com/neilberkman/astrodynamics.git", rev = "3ea47ccf9f7172326953a290eae48dd053bfdf5d" }
-astrodynamics-gnss = { git = "https://github.com/neilberkman/astrodynamics.git", rev = "3ea47ccf9f7172326953a290eae48dd053bfdf5d" }
+astrodynamics = { git = "https://github.com/neilberkman/astrodynamics.git", rev = "085996a18d7c96fae2164f3678ef863be784a1e6" }
+astrodynamics-gnss = { git = "https://github.com/neilberkman/astrodynamics.git", rev = "085996a18d7c96fae2164f3678ef863be784a1e6" }

@@ -209,6 +209,17 @@ defmodule Orbis.PointPositioningTest do
       assert sol.dop.pdop > 0.0
     end
 
+    test "a mixed GPS+Galileo observation set is rejected (single-clock solver)" do
+      eph = Orbis.BroadcastEphemeris.load!(@nav_path)
+      # The 10 GPS pseudoranges plus one visible Galileo sat at the same epoch.
+      mixed = [{"E05", 27_038_058.346363213} | @broadcast_obs]
+
+      assert {:error, :mixed_constellations} =
+               PointPositioning.solve(eph, mixed, ~N[2020-06-25 12:00:00],
+                 initial_guess: {3_513_900.0, 779_500.0, 5_249_700.0, 0.0}
+               )
+    end
+
     test "a too-small broadcast observation set is rejected through the broadcast path" do
       eph = Orbis.BroadcastEphemeris.load!(@nav_path)
       few = Enum.take(@broadcast_obs, 3)
@@ -264,6 +275,9 @@ defmodule Orbis.PointPositioningTest do
 
       assert PointPositioning.map_solve_error({:error, :ephemeris_lost, "G07"}) ==
                {:error, {:ephemeris_lost, "G07"}}
+
+      assert PointPositioning.map_solve_error({:error, :mixed_constellations}) ==
+               {:error, :mixed_constellations}
     end
 
     test "an unrecognized NIF result is wrapped rather than dropped" do

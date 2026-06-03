@@ -153,7 +153,9 @@ defmodule Orbis.PointPositioning do
 
   Returns `{:ok, %Orbis.PointPositioning.Solution{}}` or `{:error, reason}`,
   where `reason` is one of `{:too_few_satellites, used}`, `:singular_geometry`,
-  `{:duplicate_observation, sat}`, or `{:ephemeris_lost, sat}`.
+  `{:duplicate_observation, sat}`, `{:ephemeris_lost, sat}`, or
+  `:mixed_constellations` (the usable satellites span more than one GNSS, which
+  the single-clock solver does not yet support).
   """
   @spec solve(SP3.t() | BroadcastEphemeris.t(), [observation()], epoch(), keyword()) ::
           {:ok, Solution.t()} | {:error, term()}
@@ -247,6 +249,7 @@ defmodule Orbis.PointPositioning do
     do: {:error, {:duplicate_observation, sat}}
 
   def map_solve_error({:error, :ephemeris_lost, sat}), do: {:error, {:ephemeris_lost, sat}}
+  def map_solve_error({:error, :mixed_constellations}), do: {:error, :mixed_constellations}
   def map_solve_error(other), do: {:error, other}
 
   defp position_map({x, y, z}), do: %{x_m: x, y_m: y, z_m: z}
