@@ -48,16 +48,20 @@ defmodule Orbis.Ionosphere do
           number()
         ) :: {:ok, float()} | {:error, term()}
   def klobuchar_delay(params, lat_deg, lon_deg, azimuth_deg, elevation_deg, epoch, frequency_hz) do
-    with {:ok, alpha, beta} <- klobuchar_coeffs(params),
-         {jd_whole, jd_fraction} <- Orbis.GnssTime.epoch_to_split_jd(epoch) do
+    with {:ok, alpha, beta} <- klobuchar_coeffs(params) do
+      # The model takes degrees and the GPS second-of-day directly. Passing the
+      # degree inputs through unchanged and forming the second-of-day from the
+      # epoch's integer clock fields (no split-Julian-date round trip) keeps the
+      # result bit-for-bit identical to the reference recipe.
+      t_gps_s = Orbis.GnssTime.second_of_day(epoch)
+
       delay =
         NIF.klobuchar_delay(
-          deg_to_rad(lat_deg),
-          deg_to_rad(lon_deg),
-          deg_to_rad(elevation_deg),
-          deg_to_rad(azimuth_deg),
-          jd_whole,
-          jd_fraction,
+          lat_deg / 1.0,
+          lon_deg / 1.0,
+          azimuth_deg / 1.0,
+          elevation_deg / 1.0,
+          t_gps_s,
           frequency_hz / 1.0,
           alpha,
           beta

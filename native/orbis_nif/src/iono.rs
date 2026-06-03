@@ -14,9 +14,8 @@
 //! - `ionex_slant_delay/7` operates on that handle plus an integer J2000-second
 //!   epoch; it never touches the filesystem.
 
-use astrodynamics::time::model::{Instant, JulianDateSplit, TimeScale};
 use astrodynamics_gnss::ionex::Ionex;
-use astrodynamics_gnss::{ionex_slant_delay, klobuchar, KlobucharParams};
+use astrodynamics_gnss::{ionex_slant_delay, klobuchar_native, KlobucharParams};
 use astrodynamics_gnss::Wgs84Geodetic;
 use rustler::{Error, NifResult, ResourceArc};
 
@@ -34,20 +33,21 @@ impl rustler::Resource for IonexResource {}
 
 /// GPS broadcast Klobuchar L1 ionospheric group delay (positive meters).
 ///
-/// The receiver geodetic latitude/longitude and the satellite azimuth/elevation
-/// arrive in radians; the eight broadcast coefficients arrive as the `alpha` and
-/// `beta` four-tuples. The epoch is a split Julian date in GPS time, so the
-/// crate can take the GPS second-of-day for the diurnal term. `frequency_hz` is
+/// All inputs arrive in the model's native boundary units: receiver
+/// latitude/longitude and satellite azimuth/elevation in **degrees**, and the
+/// GPS **second-of-day** in `[0, 86400)`. The Elixir wrapper supplies these
+/// directly (it has the degree inputs and forms the second-of-day from the
+/// epoch's integer clock fields), so no angle or time conversion happens at this
+/// boundary and the delay is bit-exact to the model reference. `frequency_hz` is
 /// the carrier on which the delay is reported (the model is dispersive).
 #[rustler::nif]
 #[allow(clippy::too_many_arguments)]
 fn klobuchar_delay(
-    lat_rad: f64,
-    lon_rad: f64,
-    elevation_rad: f64,
-    azimuth_rad: f64,
-    jd_whole: f64,
-    jd_fraction: f64,
+    lat_deg: f64,
+    lon_deg: f64,
+    azimuth_deg: f64,
+    elevation_deg: f64,
+    t_gps_s: f64,
     frequency_hz: f64,
     alpha: (f64, f64, f64, f64),
     beta: (f64, f64, f64, f64),
@@ -56,15 +56,13 @@ fn klobuchar_delay(
         alpha: [alpha.0, alpha.1, alpha.2, alpha.3],
         beta: [beta.0, beta.1, beta.2, beta.3],
     };
-    let receiver = Wgs84Geodetic::new(lat_rad, lon_rad, 0.0);
-    let epoch =
-        Instant::from_julian_date(TimeScale::Gpst, JulianDateSplit::new(jd_whole, jd_fraction));
-    Ok(klobuchar(
+    Ok(klobuchar_native(
         &params,
-        receiver,
-        elevation_rad,
-        azimuth_rad,
-        epoch,
+        lat_deg,
+        lon_deg,
+        azimuth_deg,
+        elevation_deg,
+        t_gps_s,
         frequency_hz,
     ))
 }

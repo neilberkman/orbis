@@ -86,6 +86,31 @@ defmodule Orbis.IonosphereTest do
                  1_575_420_000.0
                )
     end
+
+    test "matches the Klobuchar parity golden exactly (0 ULP) through the public path" do
+      # The exact inputs and coefficients of the `zenith_midlat_day` golden case
+      # (parity/fixtures/klobuchar_golden.json): 14:00:00 == second-of-day 50400.
+      # The public path passes degrees straight through and forms the
+      # second-of-day from the integer clock fields, so the result is bit-for-bit
+      # the golden delay (== compares the full f64).
+      params = %{
+        alpha: {1.024454832077e-08, 2.235174179077e-08, -5.960464477539e-08, -1.192092895508e-07},
+        beta: {96256.0, 131_072.0, -65536.0, -589_824.0}
+      }
+
+      {:ok, delay_m} =
+        Ionosphere.klobuchar_delay(
+          params,
+          40.0,
+          -100.0,
+          30.0,
+          85.0,
+          {{2020, 6, 24}, {14, 0, 0}},
+          1_575_420_000.0
+        )
+
+      assert delay_m == 2.2425167984123626
+    end
   end
 
   describe "parse_ionex/1 and ionex_slant_delay/7" do

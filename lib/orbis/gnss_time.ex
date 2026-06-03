@@ -47,6 +47,24 @@ defmodule Orbis.GnssTime do
   end
 
   @doc """
+  Seconds-of-day in `[0, 86400)`, formed from the epoch's integer clock fields.
+
+  Used by the Klobuchar diurnal term, which takes the GPS second-of-day
+  directly. Forming it from `hour`, `minute`, and `second` keeps it exact (no
+  split-Julian-date round trip), so the broadcast-model result is bit-for-bit
+  identical to the reference.
+  """
+  @spec second_of_day(NaiveDateTime.t() | tuple()) :: float()
+  def second_of_day(%NaiveDateTime{} = ndt) do
+    {micro, _precision} = ndt.microsecond
+    ndt.hour * 3600.0 + ndt.minute * 60.0 + ndt.second + micro / 1_000_000.0
+  end
+
+  def second_of_day({{_year, _month, _day}, {hour, minute, second}}) do
+    hour * 3600.0 + minute * 60.0 + second / 1.0
+  end
+
+  @doc """
   Convert an epoch to integer seconds since the J2000 epoch (JD 2451545.0).
 
   The seconds-of-day are formed from the integer clock fields, so a whole-second
