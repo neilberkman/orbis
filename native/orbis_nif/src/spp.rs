@@ -45,7 +45,7 @@ fn system_from_letter(letter: &str) -> NifResult<GnssSystem> {
 /// encoder that turns this into the actual `{:error, ...}` term.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum SppErrorReason {
-    TooFewSatellites { used: i64 },
+    TooFewSatellites { used: i64, required: i64 },
     SingularGeometry,
     DuplicateObservation { satellite: String },
     EphemerisLost { satellite: String },
@@ -70,9 +70,10 @@ impl SppErrorReason {
 /// that real SP3 inputs do not naturally reach — has a tested mapping.
 fn spp_error_reason(e: &SppError) -> SppErrorReason {
     match e {
-        SppError::TooFewSatellites { used } => {
-            SppErrorReason::TooFewSatellites { used: *used as i64 }
-        }
+        SppError::TooFewSatellites { used, required } => SppErrorReason::TooFewSatellites {
+            used: *used as i64,
+            required: *required as i64,
+        },
         SppError::Singular(_) => SppErrorReason::SingularGeometry,
         SppError::DuplicateObservation { satellite } => SppErrorReason::DuplicateObservation {
             satellite: satellite.to_string(),
@@ -89,7 +90,9 @@ fn spp_error_term<'a>(env: Env<'a>, e: &SppError) -> Term<'a> {
     let reason = spp_error_reason(e);
     let tag = atom_from(env, reason.atom_name());
     match reason {
-        SppErrorReason::TooFewSatellites { used } => (atom::error(), tag, used).encode(env),
+        SppErrorReason::TooFewSatellites { used, required } => {
+            (atom::error(), tag, used, required).encode(env)
+        }
         SppErrorReason::SingularGeometry => (atom::error(), tag).encode(env),
         SppErrorReason::DuplicateObservation { satellite } => {
             (atom::error(), tag, satellite).encode(env)
@@ -126,13 +129,14 @@ fn atom_from<'a>(env: Env<'a>, name: &str) -> Term<'a> {
 ///
 /// ```text
 /// {{x_m, y_m, z_m},                      # ITRF/IGS ECEF position, meters
-///  rx_clock_s,                           # receiver clock bias, seconds
+///  rx_clock_s,                           # reference-system clock bias, seconds
 ///  {lat_rad, lon_rad, height_m} | nil,   # geodetic, when requested
 ///  {gdop, pdop, hdop, vdop, tdop} | nil, # DOP, when the geometry is full rank
 ///  [residual_m, ...],                    # post-fit residuals, used_sats order
 ///  ["G01", ...],                         # used satellites
 ///  [{"G07", :low_elevation}, ...],       # rejected satellites + reason atom
-///  {iterations, converged, status, ionosphere_applied, troposphere_applied}}
+///  {iterations, converged, status, ionosphere_applied, troposphere_applied},
+///  [{"G", clock_s}, {"E", clock_s}]}     # per-system receiver clocks, seconds
 /// ```
 fn encode_solution<'a>(env: Env<'a>, sol: &ReceiverSolution) -> Term<'a> {
     let pos = sol.position.as_array();
@@ -162,6 +166,13 @@ fn encode_solution<'a>(env: Env<'a>, sol: &ReceiverSolution) -> Term<'a> {
         })
         .collect();
 
+    // Per-system receiver clocks as [{system_letter, clock_s}, ...].
+    let system_clocks: Vec<(String, f64)> = sol
+        .system_clocks_s
+        .iter()
+        .map(|(sys, clk)| (sys.letter().to_string(), *clk))
+        .collect();
+
     let status = atom_from(env, status_atom_name(sol.metadata.status));
     let metadata = make_tuple(
         env,
@@ -174,7 +185,7 @@ fn encode_solution<'a>(env: Env<'a>, sol: &ReceiverSolution) -> Term<'a> {
         ],
     );
 
-    // The body has eight fields, past the arity of the blanket tuple `Encoder`,
+    // The body has nine fields, past the arity of the blanket tuple `Encoder`,
     // so it is assembled with `make_tuple` over the already-encoded terms.
     let body = make_tuple(
         env,
@@ -187,6 +198,7 @@ fn encode_solution<'a>(env: Env<'a>, sol: &ReceiverSolution) -> Term<'a> {
             used_sats.encode(env),
             rejected_sats.encode(env),
             metadata,
+            system_clocks.encode(env),
         ],
     );
 
@@ -369,8 +381,14 @@ mod mapping_tests {
     #[test]
     fn spp_error_reason_is_total_over_every_variant() {
         assert_eq!(
-            spp_error_reason(&SppError::TooFewSatellites { used: 3 }),
-            SppErrorReason::TooFewSatellites { used: 3 }
+            spp_error_reason(&SppError::TooFewSatellites {
+                used: 3,
+                required: 5
+            }),
+            SppErrorReason::TooFewSatellites {
+                used: 3,
+                required: 5
+            }
         );
         assert_eq!(
             spp_error_reason(&SppError::Singular(SolveError::SingularJacobian)),
@@ -393,7 +411,11 @@ mod mapping_tests {
     #[test]
     fn error_reason_atom_names_are_the_documented_public_reasons() {
         assert_eq!(
-            SppErrorReason::TooFewSatellites { used: 0 }.atom_name(),
+            SppErrorReason::TooFewSatellites {
+                used: 0,
+                required: 4
+            }
+            .atom_name(),
             "too_few_satellites"
         );
         assert_eq!(

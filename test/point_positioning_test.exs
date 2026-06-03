@@ -233,6 +233,12 @@ defmodule Orbis.PointPositioningTest do
 
       systems = sol.used_sats |> Enum.map(&String.first/1) |> Enum.uniq() |> Enum.sort()
       assert systems == ["E", "G"], "both constellations must contribute"
+
+      # A per-system receiver clock is surfaced for each constellation; the
+      # reference (GPS) clock equals rx_clock_s.
+      assert Map.keys(sol.system_clocks_s) |> Enum.sort() == ["E", "G"]
+      assert_in_delta sol.system_clocks_s["G"], sol.rx_clock_s, 1.0e-15
+
       # Multi-system DOP is not yet computed.
       assert sol.dop == nil
     end
@@ -241,12 +247,14 @@ defmodule Orbis.PointPositioningTest do
       eph = Orbis.BroadcastEphemeris.load!(@nav_path)
       few = Enum.take(@broadcast_obs, 3)
 
-      assert {:error, {:too_few_satellites, used}} =
+      assert {:error, {:too_few_satellites, used, required}} =
                PointPositioning.solve(eph, few, ~N[2020-06-25 12:00:00],
                  initial_guess: {3_513_900.0, 779_500.0, 5_249_700.0, 0.0}
                )
 
       assert used < 4
+      # GPS-only here, so the requirement is the classic four.
+      assert required == 4
     end
   end
 
@@ -254,12 +262,13 @@ defmodule Orbis.PointPositioningTest do
     test "fewer than four observations is rejected", ctx do
       few = Enum.take(ctx.observations, 3)
 
-      assert {:error, {:too_few_satellites, used}} =
+      assert {:error, {:too_few_satellites, used, required}} =
                PointPositioning.solve(ctx.sp3, few, @epoch,
                  initial_guess: {4_500_000.0, 500_000.0, 4_500_000.0, 0.0}
                )
 
       assert used < 4
+      assert required == 4
     end
 
     test "a duplicated satellite observation is rejected", ctx do
@@ -281,8 +290,8 @@ defmodule Orbis.PointPositioningTest do
     # defensive crate paths that real SP3 inputs do not reach, so the mapping
     # onto the public contract is exercised directly here.
     test "every advertised NIF error reason maps to its public form" do
-      assert PointPositioning.map_solve_error({:error, :too_few_satellites, 3}) ==
-               {:error, {:too_few_satellites, 3}}
+      assert PointPositioning.map_solve_error({:error, :too_few_satellites, 3, 5}) ==
+               {:error, {:too_few_satellites, 3, 5}}
 
       assert PointPositioning.map_solve_error({:error, :singular_geometry}) ==
                {:error, :singular_geometry}

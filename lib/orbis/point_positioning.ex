@@ -56,9 +56,13 @@ defmodule Orbis.PointPositioning do
 
     `position` is the converged ITRF/IGS ECEF position in meters. `geodetic` is
     the same point as `%{lat_rad, lon_rad, height_m}` when geodetic output was
-    requested (the default), otherwise `nil`. `rx_clock_s` is the receiver clock
-    bias in seconds. `dop` carries the dilution-of-precision scalars when the
-    geometry is full rank, otherwise `nil`. `residuals_m` are the post-fit
+    requested (the default), otherwise `nil`. `rx_clock_s` is the reference-system
+    receiver clock bias in seconds; `system_clocks_s` is a map of GNSS letter
+    (e.g. `"G"`, `"E"`) to that system's receiver clock in seconds (a single entry
+    for a one-system solve, one per constellation for a mixed solve — the extra
+    entries are the inter-system biases). `dop` carries the dilution-of-precision
+    scalars when the geometry is full rank and single-system, otherwise `nil`
+    (multi-system DOP is not yet computed). `residuals_m` are the post-fit
     pseudorange residuals in meters, in `used_sats` order. `used_sats` are the
     contributing satellite id strings (e.g. `"G01"`); `rejected_sats` pairs each
     excluded satellite id with its reason atom (`:no_ephemeris` or
@@ -69,6 +73,7 @@ defmodule Orbis.PointPositioning do
       :position,
       :geodetic,
       :rx_clock_s,
+      :system_clocks_s,
       :dop,
       :residuals_m,
       :used_sats,
@@ -79,6 +84,7 @@ defmodule Orbis.PointPositioning do
       :position,
       :geodetic,
       :rx_clock_s,
+      :system_clocks_s,
       :dop,
       :residuals_m,
       :used_sats,
@@ -107,6 +113,7 @@ defmodule Orbis.PointPositioning do
             position: position(),
             geodetic: geodetic() | nil,
             rx_clock_s: float(),
+            system_clocks_s: %{String.t() => float()},
             dop: dop() | nil,
             residuals_m: [float()],
             used_sats: [String.t()],
@@ -156,8 +163,9 @@ defmodule Orbis.PointPositioning do
   only for single-system solves.
 
   Returns `{:ok, %Orbis.PointPositioning.Solution{}}` or `{:error, reason}`,
-  where `reason` is one of `{:too_few_satellites, used}`, `:singular_geometry`,
-  `{:duplicate_observation, sat}`, or `{:ephemeris_lost, sat}`.
+  where `reason` is one of `{:too_few_satellites, used, required}` (`required` is
+  `3 + n_systems`), `:singular_geometry`, `{:duplicate_observation, sat}`, or
+  `{:ephemeris_lost, sat}`.
   """
   @spec solve(SP3.t() | BroadcastEphemeris.t(), [observation()], epoch(), keyword()) ::
           {:ok, Solution.t()} | {:error, term()}
@@ -220,12 +228,17 @@ defmodule Orbis.PointPositioning do
 
   # --- decoding ------------------------------------------------------------
 
-  defp decode({:ok, {position, rx_clock_s, geodetic, dop, residuals, used, rejected, metadata}}) do
+  defp decode(
+         {:ok,
+          {position, rx_clock_s, geodetic, dop, residuals, used, rejected, metadata,
+           system_clocks}}
+       ) do
     {:ok,
      %Solution{
        position: position_map(position),
        geodetic: geodetic_map(geodetic),
        rx_clock_s: rx_clock_s,
+       system_clocks_s: Map.new(system_clocks),
        dop: dop_map(dop),
        residuals_m: residuals,
        used_sats: used,
@@ -242,8 +255,8 @@ defmodule Orbis.PointPositioning do
   # tested directly — including the defensive `:singular_geometry` and
   # `:ephemeris_lost` paths, which the crate does not naturally reach from real
   # SP3 inputs and so cannot be driven through a `solve/4` fixture.
-  def map_solve_error({:error, :too_few_satellites, used}),
-    do: {:error, {:too_few_satellites, used}}
+  def map_solve_error({:error, :too_few_satellites, used, required}),
+    do: {:error, {:too_few_satellites, used, required}}
 
   def map_solve_error({:error, :singular_geometry}), do: {:error, :singular_geometry}
 
