@@ -23,7 +23,7 @@ dependencies = [
 [[package]]
 name = "astrodynamics"
 version = "0.6.3"
-source = "git+https://github.com/neilberkman/astrodynamics.git?rev=32db6653607051d3c759dfde329df5fafb1cbe0c#32db6653607051d3c759dfde329df5fafb1cbe0c"
+source = "git+https://github.com/neilberkman/astrodynamics.git?rev=7fa5c8cc149eb912f5f3125d26180796c7c51cd8#7fa5c8cc149eb912f5f3125d26180796c7c51cd8"
 dependencies = [
  "cc",
  "nalgebra",
@@ -34,7 +34,7 @@ dependencies = [
 [[package]]
 name = "astrodynamics-gnss"
 version = "0.1.0"
-source = "git+https://github.com/neilberkman/astrodynamics.git?rev=32db6653607051d3c759dfde329df5fafb1cbe0c#32db6653607051d3c759dfde329df5fafb1cbe0c"
+source = "git+https://github.com/neilberkman/astrodynamics.git?rev=7fa5c8cc149eb912f5f3125d26180796c7c51cd8#7fa5c8cc149eb912f5f3125d26180796c7c51cd8"
 dependencies = [
  "astrodynamics",
  "nalgebra",

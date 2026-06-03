@@ -8,6 +8,7 @@ mod iod;
 mod lambert;
 mod propagation;
 mod sp3;
+mod spp;
 mod tropo;
 
 use rustler::{Env, NifResult, Term};

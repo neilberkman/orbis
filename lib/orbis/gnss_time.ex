@@ -102,4 +102,33 @@ defmodule Orbis.GnssTime do
   end
 
   def epoch_to_j2000_seconds(_other), do: {:error, :non_integer_second_epoch}
+
+  @doc """
+  Day-of-year of the epoch, as the `float` the Niell troposphere seasonal term
+  consumes.
+
+  January 1 is day 1. The value is the integer civil day-of-year (it is the
+  seasonal argument of the mapping function, which keys on the day, not the
+  within-day fraction), returned as a `float` to match the crate's
+  `SolveInputs.day_of_year` field.
+  """
+  @spec day_of_year(NaiveDateTime.t() | tuple()) :: float()
+  def day_of_year(%NaiveDateTime{} = ndt) do
+    day_of_year({{ndt.year, ndt.month, ndt.day}, {ndt.hour, ndt.minute, ndt.second}})
+  end
+
+  def day_of_year({{year, month, day}, {_hour, _minute, _second}}) do
+    # Julian Day Number of the epoch minus the JDN of January 1, plus one, in
+    # exact integer arithmetic, so the day count is independent of leap years.
+    jdn = jdn(year, month, day)
+    jan1 = jdn(year, 1, 1)
+    (jdn - jan1 + 1) / 1.0
+  end
+
+  defp jdn(year, month, day) do
+    a = div(14 - month, 12)
+    y = year + 4800 - a
+    m = month + 12 * a - 3
+    day + div(153 * m + 2, 5) + 365 * y + div(y, 4) - div(y, 100) + div(y, 400) - 32_045
+  end
 end
