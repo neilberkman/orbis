@@ -30,27 +30,29 @@ product family is the BKG / IGS MGEX archive.
 - decompressed (2359118 bytes, all six constellations):
   - sha256 `ad6af3c21d2f97a0cb538a77fcf0acad5a59ade9d0987fd523b0b7d483317a4b`
 
-### Committed copy: GPS + Galileo only
+### Committed copy: GPS + Galileo + BeiDou
 
-The committed file is the original decompressed product filtered to the GPS and
-Galileo ephemeris records (the constellations the broadcast evaluator currently
-supports), with the full original header preserved verbatim. The filter is a
-deterministic, reproducible pass — keep the header through `END OF HEADER`, then keep
-only records whose first line begins with `G` or `E` (continuation lines are
-space-indented and follow their record):
+The committed file is the original decompressed product filtered to the GPS,
+Galileo, and BeiDou ephemeris records (the Keplerian constellations the broadcast
+evaluator supports), with the full original header preserved verbatim. The filter
+is a deterministic, reproducible pass — keep the header through `END OF HEADER`,
+then keep only records whose first line begins with `G`, `E`, or `C` (continuation
+lines are space-indented and follow their record):
 
 ```sh
 awk '
   BEGIN { inhdr=1; keep=0 }
   inhdr { print; if ($0 ~ /END OF HEADER/) inhdr=0; next }
-  /^[A-Z][0-9][0-9] / { keep = ($0 ~ /^[GE]/) ? 1 : 0 }
+  /^[A-Z][0-9][0-9] / { keep = ($0 ~ /^[GEC]/) ? 1 : 0 }
   { if (keep) print }
 ' <decompressed> > ESBC00DNK_R_20201770000_01D_MN.rnx
 ```
 
-- committed `ESBC00DNK_R_20201770000_01D_MN.rnx` (1221392 bytes, GPS+Galileo):
-  - GPS records: 257, Galileo records: 1602
-  - sha256 `87f849e8c777dacf3b124fbf548823ab88e6a52483ff2693b78c972b74cc7ba2`
+- committed `ESBC00DNK_R_20201770000_01D_MN.rnx` (1452728 bytes, GPS+Galileo+BeiDou):
+  - GPS records: 257, Galileo records: 1602, BeiDou records: 357
+  - BeiDou PRNs span C05–C37 (C05 is a BDS-2 geostationary satellite, exercising
+    the GEO rotation branch; C06–C16 IGSO, C19+ MEO).
+  - sha256 `069f73afc10e9c1a8b87b7fbbb774f3eb9be94fb4da4ac365cfd4356c6ebfd36`
 
 ### Use in this workspace
 
