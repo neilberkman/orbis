@@ -15,9 +15,11 @@
 //! as the crate produces them.
 
 use astrodynamics_gnss::{
-    solve_spp, Corrections, GnssSatelliteId, GnssSystem, KlobucharCoeffs, Observation,
-    ReceiverSolution, RejectionReason, SolveInputs, SppError, SurfaceMet,
+    solve_spp, Corrections, EphemerisSource, GnssSatelliteId, GnssSystem, KlobucharCoeffs,
+    Observation, ReceiverSolution, RejectionReason, SolveInputs, SppError, SurfaceMet,
 };
+
+use crate::broadcast::BroadcastResource;
 use rustler::types::atom;
 use rustler::types::tuple::make_tuple;
 use rustler::{Encoder, Env, Error, NifResult, ResourceArc, Term};
@@ -205,11 +207,11 @@ fn encode_solution<'a>(env: Env<'a>, sol: &ReceiverSolution) -> Term<'a> {
 ///
 /// Returns `{:ok, solution}` (see [`encode_solution`]) or `{:error, reason}`
 /// where `reason` is the mapped [`SppError`] atom.
-#[rustler::nif(schedule = "DirtyCpu")]
+/// Decode the common SPP term arguments into a [`SolveInputs`]. Shared by the
+/// SP3-backed and broadcast-backed entry points, which differ only in the
+/// ephemeris source they pass to the solver.
 #[allow(clippy::too_many_arguments)]
-fn spp_solve<'a>(
-    env: Env<'a>,
-    handle: ResourceArc<Sp3Resource>,
+fn build_solve_inputs(
     observations: Vec<(String, f64)>,
     t_rx_j2000_s: f64,
     t_rx_second_of_day_s: f64,
@@ -222,8 +224,7 @@ fn spp_solve<'a>(
     pressure_hpa: f64,
     temperature_k: f64,
     relative_humidity: f64,
-    with_geodetic: bool,
-) -> NifResult<Term<'a>> {
+) -> NifResult<SolveInputs> {
     let mut obs = Vec::with_capacity(observations.len());
     for (token, pseudorange_m) in &observations {
         let (letter, rest) = token.split_at(token.char_indices().nth(1).map_or(0, |(i, _)| i));
@@ -237,7 +238,7 @@ fn spp_solve<'a>(
         });
     }
 
-    let inputs = SolveInputs {
+    Ok(SolveInputs {
         observations: obs,
         t_rx_j2000_s,
         t_rx_second_of_day_s,
@@ -261,12 +262,94 @@ fn spp_solve<'a>(
             temperature_k,
             relative_humidity,
         },
-    };
+    })
+}
 
-    match solve_spp(&handle.sp3, &inputs, with_geodetic) {
-        Ok(sol) => Ok(encode_solution(env, &sol)),
-        Err(e) => Ok(spp_error_term(env, &e)),
+/// Run the solve against any ephemeris source and encode the result term.
+fn solve_to_term<'a>(
+    env: Env<'a>,
+    eph: &dyn EphemerisSource,
+    inputs: &SolveInputs,
+    with_geodetic: bool,
+) -> Term<'a> {
+    match solve_spp(eph, inputs, with_geodetic) {
+        Ok(sol) => encode_solution(env, &sol),
+        Err(e) => spp_error_term(env, &e),
     }
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::too_many_arguments)]
+fn spp_solve<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<Sp3Resource>,
+    observations: Vec<(String, f64)>,
+    t_rx_j2000_s: f64,
+    t_rx_second_of_day_s: f64,
+    day_of_year: f64,
+    initial_guess: (f64, f64, f64, f64),
+    apply_iono: bool,
+    apply_tropo: bool,
+    alpha: (f64, f64, f64, f64),
+    beta: (f64, f64, f64, f64),
+    pressure_hpa: f64,
+    temperature_k: f64,
+    relative_humidity: f64,
+    with_geodetic: bool,
+) -> NifResult<Term<'a>> {
+    let inputs = build_solve_inputs(
+        observations,
+        t_rx_j2000_s,
+        t_rx_second_of_day_s,
+        day_of_year,
+        initial_guess,
+        apply_iono,
+        apply_tropo,
+        alpha,
+        beta,
+        pressure_hpa,
+        temperature_k,
+        relative_humidity,
+    )?;
+    Ok(solve_to_term(env, &handle.sp3, &inputs, with_geodetic))
+}
+
+/// As [`spp_solve`] but against a parsed broadcast-navigation product
+/// ([`BroadcastResource`]) instead of an SP3 precise product.
+#[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::too_many_arguments)]
+fn spp_solve_broadcast<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<BroadcastResource>,
+    observations: Vec<(String, f64)>,
+    t_rx_j2000_s: f64,
+    t_rx_second_of_day_s: f64,
+    day_of_year: f64,
+    initial_guess: (f64, f64, f64, f64),
+    apply_iono: bool,
+    apply_tropo: bool,
+    alpha: (f64, f64, f64, f64),
+    beta: (f64, f64, f64, f64),
+    pressure_hpa: f64,
+    temperature_k: f64,
+    relative_humidity: f64,
+    with_geodetic: bool,
+) -> NifResult<Term<'a>> {
+    let inputs = build_solve_inputs(
+        observations,
+        t_rx_j2000_s,
+        t_rx_second_of_day_s,
+        day_of_year,
+        initial_guess,
+        apply_iono,
+        apply_tropo,
+        alpha,
+        beta,
+        pressure_hpa,
+        temperature_k,
+        relative_humidity,
+    )?;
+    Ok(solve_to_term(env, &handle.store, &inputs, with_geodetic))
 }
 
 #[cfg(test)]

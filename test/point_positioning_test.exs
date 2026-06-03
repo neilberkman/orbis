@@ -174,6 +174,54 @@ defmodule Orbis.PointPositioningTest do
     end
   end
 
+  describe "solve/4 from broadcast ephemeris" do
+    @nav_path Path.join(__DIR__, "fixtures/nav/ESBC00DNK_R_20201770000_01D_MN.rnx")
+
+    # GPS pseudoranges synthesized from the committed broadcast NAV product with
+    # the same forward model the solver inverts, for a known receiver near the
+    # ESBC station at 2020-06-25 12:00 GPST. The solve must recover that truth.
+    @broadcast_truth %{x_m: 3_512_900.0, y_m: 780_500.0, z_m: 5_248_700.0}
+    @broadcast_obs [
+      {"G07", 24_602_022.181241553},
+      {"G08", 23_676_569.520090435},
+      {"G10", 23_359_996.74001386},
+      {"G15", 24_308_689.12412482},
+      {"G16", 20_729_337.624163955},
+      {"G18", 21_218_848.782066472},
+      {"G20", 21_331_195.197190672},
+      {"G21", 20_769_683.82405165},
+      {"G26", 22_031_046.45549123},
+      {"G27", 21_170_243.258043874}
+    ]
+
+    test "recovers a known receiver from broadcast GPS pseudoranges" do
+      eph = Orbis.BroadcastEphemeris.load!(@nav_path)
+
+      assert {:ok, %Solution{} = sol} =
+               PointPositioning.solve(eph, @broadcast_obs, ~N[2020-06-25 12:00:00],
+                 initial_guess: {3_513_900.0, 779_500.0, 5_249_700.0, 0.0}
+               )
+
+      assert_in_delta sol.position.x_m, @broadcast_truth.x_m, 1.0e-2
+      assert_in_delta sol.position.y_m, @broadcast_truth.y_m, 1.0e-2
+      assert_in_delta sol.position.z_m, @broadcast_truth.z_m, 1.0e-2
+      assert length(sol.used_sats) == 10
+      assert sol.dop.pdop > 0.0
+    end
+
+    test "a too-small broadcast observation set is rejected through the broadcast path" do
+      eph = Orbis.BroadcastEphemeris.load!(@nav_path)
+      few = Enum.take(@broadcast_obs, 3)
+
+      assert {:error, {:too_few_satellites, used}} =
+               PointPositioning.solve(eph, few, ~N[2020-06-25 12:00:00],
+                 initial_guess: {3_513_900.0, 779_500.0, 5_249_700.0, 0.0}
+               )
+
+      assert used < 4
+    end
+  end
+
   describe "solve/4 error paths" do
     test "fewer than four observations is rejected", ctx do
       few = Enum.take(ctx.observations, 3)

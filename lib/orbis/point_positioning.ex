@@ -45,6 +45,7 @@ defmodule Orbis.PointPositioning do
       solution.rx_clock_s
   """
 
+  alias Orbis.BroadcastEphemeris
   alias Orbis.GnssTime
   alias Orbis.NIF
   alias Orbis.SP3
@@ -132,10 +133,11 @@ defmodule Orbis.PointPositioning do
   @doc """
   Solve single-point positioning for one receive epoch.
 
-  `sp3` is a loaded `Orbis.SP3` handle, `observations` is a list of
-  `{satellite_id, pseudorange_m}` pairs (ids like `"G01"`, pseudoranges in
-  meters), and `epoch` is a `NaiveDateTime` or `{{y, m, d}, {h, min, s}}` tuple
-  in the SP3 product's time scale.
+  `source` is a loaded ephemeris product — an `Orbis.SP3` precise product or an
+  `Orbis.BroadcastEphemeris` broadcast-navigation product. `observations` is a
+  list of `{satellite_id, pseudorange_m}` pairs (ids like `"G01"`, pseudoranges
+  in meters), and `epoch` is a `NaiveDateTime` or `{{y, m, d}, {h, min, s}}`
+  tuple in the product's time scale.
 
   ## Options
 
@@ -153,9 +155,20 @@ defmodule Orbis.PointPositioning do
   where `reason` is one of `{:too_few_satellites, used}`, `:singular_geometry`,
   `{:duplicate_observation, sat}`, or `{:ephemeris_lost, sat}`.
   """
-  @spec solve(SP3.t(), [observation()], epoch(), keyword()) ::
+  @spec solve(SP3.t() | BroadcastEphemeris.t(), [observation()], epoch(), keyword()) ::
           {:ok, Solution.t()} | {:error, term()}
-  def solve(%SP3{handle: handle}, observations, epoch, opts \\ []) when is_list(observations) do
+  def solve(source, observations, epoch, opts \\ [])
+
+  def solve(%SP3{handle: handle}, observations, epoch, opts) when is_list(observations) do
+    run_solve(:sp3, handle, observations, epoch, opts)
+  end
+
+  def solve(%BroadcastEphemeris{handle: handle}, observations, epoch, opts)
+      when is_list(observations) do
+    run_solve(:broadcast, handle, observations, epoch, opts)
+  end
+
+  defp run_solve(source, handle, observations, epoch, opts) do
     with {:ok, t_rx_j2000_s} <- j2000_seconds(epoch) do
       sod = GnssTime.second_of_day(epoch)
       doy = GnssTime.day_of_year(epoch)
@@ -172,23 +185,28 @@ defmodule Orbis.PointPositioning do
 
       obs = Enum.map(observations, fn {sat, pr} -> {sat, pr / 1.0} end)
 
+      args = [
+        handle,
+        obs,
+        t_rx_j2000_s,
+        sod,
+        doy,
+        to_tuple4(initial_guess),
+        apply_iono,
+        apply_tropo,
+        to_tuple4(alpha),
+        to_tuple4(beta),
+        pressure / 1.0,
+        temperature / 1.0,
+        humidity / 1.0,
+        with_geodetic
+      ]
+
       result =
-        NIF.spp_solve(
-          handle,
-          obs,
-          t_rx_j2000_s,
-          sod,
-          doy,
-          to_tuple4(initial_guess),
-          apply_iono,
-          apply_tropo,
-          to_tuple4(alpha),
-          to_tuple4(beta),
-          pressure / 1.0,
-          temperature / 1.0,
-          humidity / 1.0,
-          with_geodetic
-        )
+        case source do
+          :sp3 -> apply(NIF, :spp_solve, args)
+          :broadcast -> apply(NIF, :spp_solve_broadcast, args)
+        end
 
       decode(result)
     end

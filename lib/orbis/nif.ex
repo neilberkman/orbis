@@ -62,10 +62,29 @@ defmodule Orbis.NIF do
 
   def sp3_time_scale(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
+  def broadcast_parse(_text), do: :erlang.nif_error(:nif_not_loaded)
+
   def sp3_position(_handle, _system_letter, _prn, _scale, _jd_whole, _jd_fraction),
     do: :erlang.nif_error(:nif_not_loaded)
 
   def spp_solve(
+        _handle,
+        _observations,
+        _t_rx_j2000_s,
+        _t_rx_second_of_day_s,
+        _day_of_year,
+        _initial_guess,
+        _apply_iono,
+        _apply_tropo,
+        _alpha,
+        _beta,
+        _pressure_hpa,
+        _temperature_k,
+        _relative_humidity,
+        _with_geodetic
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
+  def spp_solve_broadcast(
         _handle,
         _observations,
         _t_rx_j2000_s,
