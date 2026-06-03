@@ -284,15 +284,18 @@ defmodule Orbis.PointPositioningTest do
       assert sol.dop.tdop > 0.0
     end
 
-    test "an ionosphere-corrected solve with a BeiDou satellite is rejected" do
+    test "an ionosphere-corrected solve with a BeiDou satellite is accepted" do
       eph = Orbis.BroadcastEphemeris.load!(@nav_path)
 
       observations =
         @broadcast_obs ++ [{"C05", 40_127_033.52503693}, {"C19", 23_661_671.39784395}]
 
-      # The Klobuchar L1 model does not apply to BeiDou B1I, so requesting the
-      # ionosphere correction with a BeiDou satellite is rejected.
-      assert {:error, {:ionosphere_unsupported, sat}} =
+      # The broadcast Klobuchar L1 delay is now scaled to each carrier by
+      # (f_L1/f)^2 — exactly 1 for GPS L1, scaled for BeiDou B1I — so requesting
+      # the ionosphere correction with a BeiDou satellite is supported, not
+      # rejected. (These pseudoranges were synthesized without ionosphere, so
+      # the solve converges to within a small offset rather than exactly.)
+      assert {:ok, %Solution{} = sol} =
                PointPositioning.solve(eph, observations, ~N[2020-06-25 12:00:00],
                  ionosphere: true,
                  klobuchar_alpha: {1.0e-8, 0.0, 0.0, 0.0},
@@ -300,7 +303,19 @@ defmodule Orbis.PointPositioningTest do
                  initial_guess: {3_513_900.0, 779_500.0, 5_249_700.0, 0.0}
                )
 
-      assert String.first(sat) == "C"
+      assert sol.metadata.ionosphere_applied
+      # BeiDou contributed its own clock, and the position is sane (the small
+      # unmodeled ionosphere offset keeps it within a few hundred metres).
+      assert Map.has_key?(sol.system_clocks_s, "C")
+
+      err =
+        :math.sqrt(
+          (sol.position.x_m - @broadcast_truth.x_m) ** 2 +
+            (sol.position.y_m - @broadcast_truth.y_m) ** 2 +
+            (sol.position.z_m - @broadcast_truth.z_m) ** 2
+        )
+
+      assert err < 500.0, "position off by #{err} m"
     end
 
     test "a too-small broadcast observation set is rejected through the broadcast path" do
@@ -379,8 +394,8 @@ defmodule Orbis.PointPositioningTest do
       assert PointPositioning.map_solve_error({:error, :ephemeris_lost, "G07"}) ==
                {:error, {:ephemeris_lost, "G07"}}
 
-      assert PointPositioning.map_solve_error({:error, :ionosphere_unsupported, "C05"}) ==
-               {:error, {:ionosphere_unsupported, "C05"}}
+      assert PointPositioning.map_solve_error({:error, :ionosphere_unsupported, "R01"}) ==
+               {:error, {:ionosphere_unsupported, "R01"}}
     end
 
     test "an unrecognized NIF result is wrapped rather than dropped" do

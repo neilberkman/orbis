@@ -151,9 +151,10 @@ defmodule Orbis.PointPositioning do
 
   ## Options
 
-    * `:ionosphere` - apply the Klobuchar L1 ionosphere correction (default `false`);
-      valid for GPS L1 / Galileo E1, and rejected if the observations include a
-      BeiDou satellite (B1I is a different frequency)
+    * `:ionosphere` - apply the broadcast Klobuchar ionosphere correction (default
+      `false`); the L1 delay is scaled to each satellite's carrier by `(f_L1/f)^2`,
+      covering GPS L1, Galileo E1, and BeiDou B1I (a system with no modeled
+      single-frequency carrier, e.g. GLONASS, is rejected)
     * `:troposphere` - apply the Saastamoinen/Niell troposphere correction (default `false`)
     * `:klobuchar_alpha` - broadcast alpha coefficients, 4-tuple (default zeros)
     * `:klobuchar_beta` - broadcast beta coefficients, 4-tuple (default zeros)
@@ -172,7 +173,7 @@ defmodule Orbis.PointPositioning do
   where `reason` is one of `{:too_few_satellites, used, required}` (`required` is
   `3 + n_systems`), `:singular_geometry`, `{:duplicate_observation, sat}`,
   `{:ephemeris_lost, sat}`, or `{:ionosphere_unsupported, sat}` (the ionosphere
-  correction was requested with a BeiDou observation present).
+  correction was requested for a system with no modeled single-frequency carrier).
   """
   @spec solve(SP3.t() | BroadcastEphemeris.t(), [observation()], epoch(), keyword()) ::
           {:ok, Solution.t()} | {:error, term()}
