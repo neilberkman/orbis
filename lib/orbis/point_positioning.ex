@@ -164,10 +164,10 @@ defmodule Orbis.PointPositioning do
     * `:initial_guess` - `{x_m, y_m, z_m, b_m}` start point (default all zeros)
     * `:with_geodetic` - also return the geodetic position (default `true`)
 
-  A mixed GPS+Galileo+BeiDou observation set is solved together with one receiver
-  clock per GNSS (an inter-system bias is the difference between a system's clock
-  and the reference system's), and dilution of precision is reported for the
-  combined geometry as well.
+  A mixed GPS+Galileo+BeiDou+GLONASS observation set is solved together with one
+  receiver clock per GNSS (an inter-system bias is the difference between a
+  system's clock and the reference system's), and dilution of precision is
+  reported for the combined geometry as well.
 
   Returns `{:ok, %Orbis.PointPositioning.Solution{}}` or `{:error, reason}`,
   where `reason` is one of `{:too_few_satellites, used, required}` (`required` is

@@ -177,6 +177,7 @@ defmodule Orbis.PointPositioningTest do
   describe "solve/4 from broadcast ephemeris" do
     @nav_path Path.join(__DIR__, "fixtures/nav/ESBC00DNK_R_20201770000_01D_MN.rnx")
     @nav_v4_path Path.join(__DIR__, "fixtures/nav/KMS300DNK_R_20221591000_01H_MN.rnx")
+    @nav_glonass_path Path.join(__DIR__, "fixtures/nav/ESBC00DNK_R_20201770000_01D_RN.rnx")
 
     # GPS pseudoranges synthesized from the committed broadcast NAV product with
     # the same forward model the solver inverts, for a known receiver near the
@@ -194,6 +195,12 @@ defmodule Orbis.PointPositioningTest do
       {"G26", 22_031_046.45549123},
       {"G27", 21_170_243.258043874}
     ]
+
+    test "loads a GLONASS navigation file through the broadcast path" do
+      # GLONASS records (a PZ-90.11 state-vector model) parse through the NIF into
+      # a usable handle; the RK4 propagation and time mapping are handled in Rust.
+      assert %Orbis.BroadcastEphemeris{} = Orbis.BroadcastEphemeris.load!(@nav_glonass_path)
+    end
 
     test "loads a RINEX 4.00 navigation file through the broadcast path" do
       # A real v4.00 MIXED file parses through the NIF into a usable handle; the

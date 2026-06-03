@@ -72,3 +72,33 @@ parser test and the `Orbis.BroadcastEphemeris` wrapper test.
   SBAS (158), and STO/ION frames. Used to test version-4 frame-marker parsing on
   real bytes: the 174 supported Keplerian records (G/E/C) are parsed, everything
   else (GLONASS/QZSS/SBAS/STO/ION) is skipped.
+
+## `BRDC00GOP_R_20210010000_01D_MN.rnx` (RINEX 3, header-only)
+
+- **Source:** nav-solutions/data, `https://raw.githubusercontent.com/nav-solutions/data/main/NAV/V3/BRDC00GOP_R_20210010000_01D_MN.rnx.gz`.
+- **sha256** (`.gz`, as fetched): `1bb7bb0ca70fb1e11e366abd9126881d62b238b687ace7fba360002b61a12f09`.
+- **Content:** a merged BRDC header (GOP/Pecny) carrying `IONOSPHERIC CORR`
+  coefficients for GPS (`GPSA`/`GPSB`), Galileo (`GAL`), QZSS, NavIC, and — the
+  reason it is committed — **BeiDou** (`BDSA`/`BDSB`), which the other fixtures
+  lack. Used to test `parse_iono_corrections` extracting the BeiDou Klobuchar-8
+  coefficients. Vendored to the gnss crate only (header parse test). It has no
+  orbit records, so it is not a solve fixture.
+
+## `ESBC00DNK_R_20201770000_01D_RN.rnx` (GLONASS subset)
+
+- **Derivation:** the GLONASS (`R`) records of the same original ESBC00DNK MGEX
+  product as the committed MN file (decompressed sha256 `ad6af3c2…`), kept with
+  the original header verbatim. Same deterministic awk pass as the MN file but
+  keeping `^R` records instead of `^[GEC]`:
+  ```
+  awk 'BEGIN{inhdr=1;keep=0}
+       inhdr{print; if($0~/END OF HEADER/)inhdr=0; next}
+       /^[A-Z][0-9][0-9] /{keep=($0~/^R/)?1:0}
+       {if(keep)print}'
+  ```
+- **Content:** 510 GLONASS broadcast records (4-line PZ-90.11 state-vector
+  blocks: position km, velocity km/s, lunisolar acceleration km/s², plus −TauN /
+  +GammaN clock and the frequency-channel number). Header carries `LEAP SECONDS`
+  = 18, used for the GLONASS-time↔GPS-time mapping. Used by the GLONASS broadcast
+  recipe/golden/parser work (Phase 5b). GLONASS precise orbits for physical
+  validation are in `GBM0MGXRAP_…_ORB.SP3` (R01–R24).
