@@ -239,8 +239,13 @@ defmodule Orbis.PointPositioningTest do
       assert Map.keys(sol.system_clocks_s) |> Enum.sort() == ["E", "G"]
       assert_in_delta sol.system_clocks_s["G"], sol.rx_clock_s, 1.0e-15
 
-      # Multi-system DOP is not yet computed.
-      assert sol.dop == nil
+      # The mixed geometry still yields a dilution of precision (a multi-system
+      # inverse with one clock column per constellation).
+      assert sol.dop.gdop > 0.0
+      assert sol.dop.pdop > 0.0
+      assert sol.dop.hdop > 0.0
+      assert sol.dop.vdop > 0.0
+      assert sol.dop.tdop > 0.0
     end
 
     test "solves a GPS+Galileo+BeiDou set, including a geostationary satellite" do
@@ -273,6 +278,10 @@ defmodule Orbis.PointPositioningTest do
       # All three constellations contribute and each gets a receiver clock.
       assert Map.keys(sol.system_clocks_s) |> Enum.sort() == ["C", "E", "G"]
       assert "C05" in sol.used_sats, "the geostationary satellite must be used"
+
+      # A three-system geometry (three clock columns) still reports DOP.
+      assert sol.dop.pdop > 0.0
+      assert sol.dop.tdop > 0.0
     end
 
     test "an ionosphere-corrected solve with a BeiDou satellite is rejected" do

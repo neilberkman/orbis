@@ -62,9 +62,10 @@ defmodule Orbis.PointPositioning do
     single entry for a one-system solve, one per constellation for a mixed solve).
     These are per-system clocks, not biases: the inter-system bias of a system is
     its clock minus the reference system's (`rx_clock_s`). `dop` carries the
-    dilution-of-precision
-    scalars when the geometry is full rank and single-system, otherwise `nil`
-    (multi-system DOP is not yet computed). `residuals_m` are the post-fit
+    dilution-of-precision scalars for any full-rank geometry — a single-system
+    solve uses the bit-exact four-state cofactor, a multi-system solve a general
+    inverse with one clock column per constellation — and is `nil` only when the
+    geometry is rank-deficient. `residuals_m` are the post-fit
     pseudorange residuals in meters, in `used_sats` order. `used_sats` are the
     contributing satellite id strings (e.g. `"G01"`); `rejected_sats` pairs each
     excluded satellite id with its reason atom (`:no_ephemeris` or
@@ -164,8 +165,8 @@ defmodule Orbis.PointPositioning do
 
   A mixed GPS+Galileo+BeiDou observation set is solved together with one receiver
   clock per GNSS (an inter-system bias is the difference between a system's clock
-  and the reference system's), so dilution of precision is reported only for
-  single-system solves.
+  and the reference system's), and dilution of precision is reported for the
+  combined geometry as well.
 
   Returns `{:ok, %Orbis.PointPositioning.Solution{}}` or `{:error, reason}`,
   where `reason` is one of `{:too_few_satellites, used, required}` (`required` is
