@@ -150,7 +150,9 @@ defmodule Orbis.PointPositioning do
 
   ## Options
 
-    * `:ionosphere` - apply the Klobuchar L1 ionosphere correction (default `false`)
+    * `:ionosphere` - apply the Klobuchar L1 ionosphere correction (default `false`);
+      valid for GPS L1 / Galileo E1, and rejected if a BeiDou satellite is used
+      (B1I is a different frequency)
     * `:troposphere` - apply the Saastamoinen/Niell troposphere correction (default `false`)
     * `:klobuchar_alpha` - broadcast alpha coefficients, 4-tuple (default zeros)
     * `:klobuchar_beta` - broadcast beta coefficients, 4-tuple (default zeros)
@@ -160,15 +162,16 @@ defmodule Orbis.PointPositioning do
     * `:initial_guess` - `{x_m, y_m, z_m, b_m}` start point (default all zeros)
     * `:with_geodetic` - also return the geodetic position (default `true`)
 
-  A mixed GPS+Galileo observation set is solved together with one receiver clock
-  per GNSS (an inter-system bias is the difference between a system's clock and
-  the reference system's), so dilution of precision is reported only for
+  A mixed GPS+Galileo+BeiDou observation set is solved together with one receiver
+  clock per GNSS (an inter-system bias is the difference between a system's clock
+  and the reference system's), so dilution of precision is reported only for
   single-system solves.
 
   Returns `{:ok, %Orbis.PointPositioning.Solution{}}` or `{:error, reason}`,
   where `reason` is one of `{:too_few_satellites, used, required}` (`required` is
-  `3 + n_systems`), `:singular_geometry`, `{:duplicate_observation, sat}`, or
-  `{:ephemeris_lost, sat}`.
+  `3 + n_systems`), `:singular_geometry`, `{:duplicate_observation, sat}`,
+  `{:ephemeris_lost, sat}`, or `{:ionosphere_unsupported, sat}` (the ionosphere
+  correction was requested with a BeiDou satellite).
   """
   @spec solve(SP3.t() | BroadcastEphemeris.t(), [observation()], epoch(), keyword()) ::
           {:ok, Solution.t()} | {:error, term()}
@@ -267,6 +270,10 @@ defmodule Orbis.PointPositioning do
     do: {:error, {:duplicate_observation, sat}}
 
   def map_solve_error({:error, :ephemeris_lost, sat}), do: {:error, {:ephemeris_lost, sat}}
+
+  def map_solve_error({:error, :ionosphere_unsupported, sat}),
+    do: {:error, {:ionosphere_unsupported, sat}}
+
   def map_solve_error(other), do: {:error, other}
 
   defp position_map({x, y, z}), do: %{x_m: x, y_m: y, z_m: z}

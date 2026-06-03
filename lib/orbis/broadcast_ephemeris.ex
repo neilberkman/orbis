@@ -1,6 +1,7 @@
 defmodule Orbis.BroadcastEphemeris do
   @moduledoc """
-  A parsed RINEX broadcast-navigation product (GPS LNAV / Galileo I/NAV+F/NAV).
+  A parsed RINEX broadcast-navigation product (GPS LNAV, Galileo I/NAV+F/NAV,
+  BeiDou D1/D2).
 
   Holds the broadcast Keplerian elements and clock terms as a resource handle,
   the broadcast-ephemeris counterpart to `Orbis.SP3`. Pass a handle to
@@ -8,8 +9,8 @@ defmodule Orbis.BroadcastEphemeris do
   of a precise SP3 product. The navigation file is parsed exactly once; the
   parsed product is held as a reference, not re-parsed per call.
 
-  Parsing covers GPS and Galileo records; other constellations in a mixed file
-  are skipped.
+  Parsing covers GPS, Galileo, and BeiDou records (including BeiDou
+  geostationary satellites); other constellations in a mixed file are skipped.
   """
 
   alias Orbis.NIF

@@ -49,6 +49,7 @@ enum SppErrorReason {
     SingularGeometry,
     DuplicateObservation { satellite: String },
     EphemerisLost { satellite: String },
+    IonosphereUnsupported { satellite: String },
 }
 
 impl SppErrorReason {
@@ -61,6 +62,7 @@ impl SppErrorReason {
             SppErrorReason::SingularGeometry => "singular_geometry",
             SppErrorReason::DuplicateObservation { .. } => "duplicate_observation",
             SppErrorReason::EphemerisLost { .. } => "ephemeris_lost",
+            SppErrorReason::IonosphereUnsupported { .. } => "ionosphere_unsupported",
         }
     }
 }
@@ -81,6 +83,9 @@ fn spp_error_reason(e: &SppError) -> SppErrorReason {
         SppError::EphemerisLost { satellite } => SppErrorReason::EphemerisLost {
             satellite: satellite.to_string(),
         },
+        SppError::IonosphereUnsupported { satellite } => SppErrorReason::IonosphereUnsupported {
+            satellite: satellite.to_string(),
+        },
     }
 }
 
@@ -98,6 +103,9 @@ fn spp_error_term<'a>(env: Env<'a>, e: &SppError) -> Term<'a> {
             (atom::error(), tag, satellite).encode(env)
         }
         SppErrorReason::EphemerisLost { satellite } => (atom::error(), tag, satellite).encode(env),
+        SppErrorReason::IonosphereUnsupported { satellite } => {
+            (atom::error(), tag, satellite).encode(env)
+        }
     }
 }
 
@@ -406,6 +414,14 @@ mod mapping_tests {
                 satellite: "G12".to_string()
             }
         );
+        assert_eq!(
+            spp_error_reason(&SppError::IonosphereUnsupported {
+                satellite: GnssSatelliteId::new(GnssSystem::BeiDou, 5)
+            }),
+            SppErrorReason::IonosphereUnsupported {
+                satellite: "C05".to_string()
+            }
+        );
     }
 
     #[test]
@@ -435,6 +451,13 @@ mod mapping_tests {
             }
             .atom_name(),
             "ephemeris_lost"
+        );
+        assert_eq!(
+            SppErrorReason::IonosphereUnsupported {
+                satellite: String::new()
+            }
+            .atom_name(),
+            "ionosphere_unsupported"
         );
     }
 
