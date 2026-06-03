@@ -61,3 +61,14 @@ and `parity/generator/broadcast_golden_fixture.py`) to extract Keplerian element
 clock terms and emit the hex-float golden vectors. The same file is vendored into the
 consuming repos' test trees by `parity/sync_vendored_fixtures.sh` for the RINEX NAV
 parser test and the `Orbis.BroadcastEphemeris` wrapper test.
+
+## `KMS300DNK_R_20221591000_01H_MN.rnx` (RINEX 4.00)
+
+- **Source:** nav-solutions/data, `https://raw.githubusercontent.com/nav-solutions/data/main/NAV/V4/KMS300DNK_R_20221591000_01H_MN.rnx.gz`.
+- **sha256** (`.gz`, as fetched): `2bae4217cb71ad4a2b9c0067bd1c5b56915e42d2007a94e91eb408468cc4763f`.
+- **Content:** RINEX 4.00 MIXED navigation, 1-hour (2022 DOY 159), committed
+  verbatim (decompressed). EPH frames: GPS LNAV (30), Galileo INAV (55) +
+  FNAV (53), BeiDou D1 (33) + D2 (3); plus GLONASS FDMA (24), QZSS LNAV (1),
+  SBAS (158), and STO/ION frames. Used to test version-4 frame-marker parsing on
+  real bytes: the 174 supported Keplerian records (G/E/C) are parsed, everything
+  else (GLONASS/QZSS/SBAS/STO/ION) is skipped.
