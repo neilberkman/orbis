@@ -20,7 +20,15 @@ correction, time, and data-fetch layers.
   the solution reports position, geodetic position, per-system clocks, DOP,
   residuals, used/rejected satellites, and solver metadata.
 - **`Orbis.SP3`** — SP3-c/SP3-d precise orbit/clock loading and arbitrary-epoch
-  satellite position/clock interpolation.
+  satellite position/clock interpolation, plus `satellite_ids/1` to read the
+  product's declared satellite set.
+- **`Orbis.GnssConstellation`** — a GPS constellation catalog built from
+  CelesTrak `gps-ops` OMM identity and an optional NAVCEN status/SVN overlay
+  (PRN ↔ SVN ↔ NORAD ↔ SP3 id, active/usable flags). Merges sources only when
+  the block type matches, recording PRN-transition disagreements as conflicts
+  rather than corrupting identity; exports the compact mapping CSV and validates
+  a catalog (duplicate PRNs/NORAD ids, inactive/unusable PRNs, and missing/extra
+  satellites against a loaded `Orbis.SP3` product).
 - **`Orbis.BroadcastEphemeris`** — RINEX 3.x and 4.xx navigation parsing and
   broadcast orbit/clock evaluation: GPS LNAV, Galileo I/NAV and F/NAV, BeiDou
   D1/D2 (including geostationary satellites), and GLONASS (PZ-90.11 state-vector

@@ -3,6 +3,7 @@ defmodule Orbis.DoctestTest do
 
   doctest Orbis
   doctest Orbis.RF
+  doctest Orbis.GnssConstellation
   doctest Orbis.Format.TLE
   doctest Orbis.Format.OMM
 end

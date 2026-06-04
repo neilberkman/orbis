@@ -101,6 +101,27 @@ defmodule Orbis.SP3 do
   end
 
   @doc """
+  Return the SP3/RINEX satellite identifiers declared by the product header.
+
+  These are canonical three-character tokens such as `"G01"`, `"E12"`, or
+  `"C30"`. The list is read from the already-loaded SP3 handle; no file I/O or
+  interpolation is performed.
+
+  ## Examples
+
+      {:ok, sp3} = Orbis.SP3.parse(sp3_bytes)
+      ids = Orbis.SP3.satellite_ids(sp3)
+      "G01" in ids
+  """
+  @spec satellite_ids(t()) :: [String.t()]
+  def satellite_ids(%__MODULE__{handle: handle}) do
+    NIF.sp3_satellite_ids(handle)
+  rescue
+    e in ErlangError ->
+      raise ArgumentError, "could not read SP3 satellite ids: #{inspect(e.original)}"
+  end
+
+  @doc """
   Interpolate the state of satellite `sat_id` at `epoch`.
 
   `sat_id` is the canonical SP3/RINEX token, e.g. `"G01"` (GPS PRN 1), `"E12"`,

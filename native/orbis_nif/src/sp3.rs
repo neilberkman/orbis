@@ -11,6 +11,9 @@
 //!   once; nothing stores a path to re-open per call.
 //! - `sp3_position/6` operates on that handle plus a decoded epoch; it never
 //!   touches the filesystem.
+//! - `sp3_satellite_ids/1` exposes only the parsed header satellite tokens, so
+//!   Elixir validation code can compare product identity without re-reading the
+//!   file or probing interpolation.
 
 use astrodynamics::time::model::{Instant, JulianDateSplit, TimeScale};
 use astrodynamics_gnss::sp3::Sp3;
@@ -76,6 +79,17 @@ fn sp3_parse(bytes: rustler::Binary) -> NifResult<ResourceArc<Sp3Resource>> {
 #[rustler::nif]
 fn sp3_time_scale(handle: ResourceArc<Sp3Resource>) -> NifResult<String> {
     Ok(handle.sp3.header.time_scale.abbrev().to_string())
+}
+
+/// The SP3/RINEX satellite tokens declared in the product header, e.g. `"G01"`.
+#[rustler::nif]
+fn sp3_satellite_ids(handle: ResourceArc<Sp3Resource>) -> NifResult<Vec<String>> {
+    Ok(handle
+        .sp3
+        .satellites()
+        .iter()
+        .map(|sat| sat.to_string())
+        .collect())
 }
 
 /// Evaluate `sat`'s interpolated state at `epoch` against a loaded handle.

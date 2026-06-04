@@ -73,6 +73,7 @@ defmodule Orbis.MixProject do
         "guides/conjunction_screening.md",
         "guides/accuracy.md",
         "guides/batch_analysis.md",
+        "guides/gnss_constellation_catalog.md",
         "examples/iss_tracker.livemd",
         "examples/gnss_positioning.livemd"
       ],
@@ -90,6 +91,7 @@ defmodule Orbis.MixProject do
           Orbis.PointPositioning,
           Orbis.SP3,
           Orbis.BroadcastEphemeris,
+          Orbis.GnssConstellation,
           Orbis.Ionosphere,
           Orbis.Troposphere,
           Orbis.GnssTime

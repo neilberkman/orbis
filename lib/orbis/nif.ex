@@ -62,6 +62,8 @@ defmodule Orbis.NIF do
 
   def sp3_time_scale(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
+  def sp3_satellite_ids(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
   def broadcast_parse(_text), do: :erlang.nif_error(:nif_not_loaded)
 
   def sp3_position(_handle, _system_letter, _prn, _scale, _jd_whole, _jd_fraction),

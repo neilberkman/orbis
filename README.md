@@ -25,7 +25,7 @@ SGP4 propagation and high-accuracy coordinate transforms are handled by a Rust N
 | **Atmospheric density**    | NRLMSISE-00 model, surface to ~1000 km (Rust NIF)                                                                                                           |
 | **JPL ephemeris**          | SPK/BSP reader for Sun, Moon, planets (Rust NIF)                                                                                                            |
 | **GNSS positioning**       | Single-point positioning from SP3 or broadcast ephemeris — GPS, Galileo, BeiDou, GLONASS — with Klobuchar/Saastamoinen–Niell corrections and DOP (Rust NIF) |
-| **GNSS ephemeris & data**  | SP3 precise products, RINEX 3.x/4.xx broadcast navigation, and an optional fetch/cache of SP3/CLK/NAV/IONEX products from public archives                   |
+| **GNSS ephemeris & data**  | SP3 precise products, RINEX 3.x/4.xx broadcast navigation, GNSS constellation catalogs, and optional SP3/CLK/NAV/IONEX fetch/cache from public archives     |
 | **Live data**              | CelesTrak TLE/OMM fetching, constellation loading, name search                                                                                              |
 | **Real-time tracking**     | GenServer with PubSub-compatible broadcasts                                                                                                                 |
 | **RF primitives**          | FSPL, EIRP, C/N₀, link margin, dish gain                                                                                                                    |
@@ -219,6 +219,18 @@ product = Orbis.GnssData.mgex_sp3(:gfz, ~D[2020-06-24])
 ```
 
 A runnable walkthrough is in [`examples/gnss_positioning.livemd`](examples/gnss_positioning.livemd).
+
+A GPS constellation catalog (PRN ↔ SVN ↔ NORAD ↔ SP3 id, active/usable flags)
+is built from CelesTrak and an optional NAVCEN overlay:
+
+```elixir
+{:ok, records} = Orbis.GnssConstellation.fetch_gps()
+Orbis.GnssConstellation.to_csv(records)         # prn,norad_cat_id,active,sp3_id
+
+# Cross-check a catalog against the satellites a precise product actually carries
+report = Orbis.GnssConstellation.validate_sp3(records, sp3)
+Orbis.GnssConstellation.valid?(report)
+```
 
 ## Coordinate Frames
 

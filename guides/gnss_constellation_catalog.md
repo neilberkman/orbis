@@ -1,0 +1,65 @@
+# GNSS Constellation Catalogs
+
+`Orbis.GnssConstellation` builds identity tables for GNSS satellites and checks
+them against loaded GNSS products. The first supported system is GPS.
+
+The base GPS source is CelesTrak's public `gps-ops` OMM/JSON feed, which carries
+the current NORAD catalog id and a PRN in `OBJECT_NAME`. NAVCEN's GPS
+constellation page can be merged as a status overlay for SVN and active NANU
+usability.
+
+```elixir
+# Live fetch: CelesTrak gps-ops plus NAVCEN status overlay.
+{:ok, records} = Orbis.GnssConstellation.fetch_gps()
+
+record = hd(records)
+{record.system, record.prn, record.svn, record.norad_id, record.sp3_id}
+# {:gps, prn, svn_or_nil, norad_cat_id, "Gxx"}
+```
+
+For reproducible workflows, fetch bytes elsewhere and parse explicitly:
+
+```elixir
+{:ok, records} = Orbis.GnssConstellation.from_celestrak_omm(celestrak_omms)
+{:ok, navcen} = Orbis.GnssConstellation.parse_navcen_html(navcen_html)
+records = Orbis.GnssConstellation.merge_navcen(records, navcen)
+```
+
+NAVCEN rows are merged by PRN only when the NAVCEN block type is compatible
+with the CelesTrak object name. If a PRN is in transition and NAVCEN still
+carries a NANU for an older vehicle, the row is kept in
+`record.source.navcen_conflict` instead of being used as the normalized SVN.
+
+Export the compact CSV used by many GNSS workflows:
+
+```elixir
+csv = Orbis.GnssConstellation.to_csv(records)
+
+# prn,norad_cat_id,active,sp3_id
+# 1,62339,true,G01
+# ...
+```
+
+Validate the catalog before using it in a downstream pipeline:
+
+```elixir
+report = Orbis.GnssConstellation.validate(records)
+
+report.duplicate_prns
+report.duplicate_norad_ids
+report.inactive_unusable_prns
+```
+
+Compare active, usable catalog IDs against a loaded SP3 product:
+
+```elixir
+{:ok, sp3} = Orbis.GnssData.sp3(Orbis.GnssData.mgex_sp3(:gfz, ~D[2026-06-04]))
+report = Orbis.GnssConstellation.validate_sp3(records, sp3)
+
+report.missing_sp3_ids
+report.extra_sp3_ids
+```
+
+The catalog layer only reports data consistency. It does not change solver
+selection, infer cross-correlation, or apply application-specific satellite
+health policy.
