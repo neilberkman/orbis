@@ -14,31 +14,38 @@ SGP4 propagation and high-accuracy coordinate transforms are handled by a Rust N
 
 ## Features
 
-| Category | What it does |
-|----------|-------------|
-| **Propagation** | SGP4/SDP4 via the [`sgp4`](https://crates.io/crates/sgp4) Rust crate (Rust NIF) |
-| **Coordinate transforms** | TEME, GCRS, ITRS, geodetic, topocentric — 0 ULP Skyfield parity (Rust NIF) |
-| **Ground station** | Pass prediction, look angles, Doppler shift, RF link budget |
-| **Orbit determination** | Gibbs, Herrick-Gibbs, Gauss angles-only, Lambert/Battin (Rust NIF) |
-| **Conjunction assessment** | Closest approach finder validated against the Iridium 33 / Cosmos 2251 collision |
-| **Eclipse prediction** | Sunlit / penumbra / umbra with shadow fraction |
-| **Atmospheric density** | NRLMSISE-00 model, surface to ~1000 km (Rust NIF) |
-| **JPL ephemeris** | SPK/BSP reader for Sun, Moon, planets (Rust NIF) |
-| **Live data** | CelesTrak TLE/OMM fetching, constellation loading, name search |
-| **Real-time tracking** | GenServer with PubSub-compatible broadcasts |
-| **RF primitives** | FSPL, EIRP, C/N₀, link margin, dish gain |
-| **Batch analysis** | Nx-powered tensorized geometry, visibility, and RF (GPU-ready via EXLA/Torchx) |
-| **Formats** | `Orbis.Elements` with TLE and OMM parsers/encoders |
+| Category                   | What it does                                                                                                                                                |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Propagation**            | SGP4/SDP4 via the [`sgp4`](https://crates.io/crates/sgp4) Rust crate (Rust NIF)                                                                             |
+| **Coordinate transforms**  | TEME, GCRS, ITRS, geodetic, topocentric — 0 ULP Skyfield parity (Rust NIF)                                                                                  |
+| **Ground station**         | Pass prediction, look angles, Doppler shift, RF link budget                                                                                                 |
+| **Orbit determination**    | Gibbs, Herrick-Gibbs, Gauss angles-only, Lambert/Battin (Rust NIF)                                                                                          |
+| **Conjunction assessment** | Closest approach finder validated against the Iridium 33 / Cosmos 2251 collision                                                                            |
+| **Eclipse prediction**     | Sunlit / penumbra / umbra with shadow fraction                                                                                                              |
+| **Atmospheric density**    | NRLMSISE-00 model, surface to ~1000 km (Rust NIF)                                                                                                           |
+| **JPL ephemeris**          | SPK/BSP reader for Sun, Moon, planets (Rust NIF)                                                                                                            |
+| **GNSS positioning**       | Single-point positioning from SP3 or broadcast ephemeris — GPS, Galileo, BeiDou, GLONASS — with Klobuchar/Saastamoinen–Niell corrections and DOP (Rust NIF) |
+| **GNSS ephemeris & data**  | SP3 precise products, RINEX 3.x/4.xx broadcast navigation, and an optional fetch/cache of SP3/CLK/NAV/IONEX products from public archives                   |
+| **Live data**              | CelesTrak TLE/OMM fetching, constellation loading, name search                                                                                              |
+| **Real-time tracking**     | GenServer with PubSub-compatible broadcasts                                                                                                                 |
+| **RF primitives**          | FSPL, EIRP, C/N₀, link margin, dish gain                                                                                                                    |
+| **Batch analysis**         | Nx-powered tensorized geometry, visibility, and RF (GPU-ready via EXLA/Torchx)                                                                              |
+| **Formats**                | `Orbis.Elements` with TLE and OMM parsers/encoders                                                                                                          |
 
 ## Installation
 
 ```elixir
 def deps do
-  [{:orbis, "~> 0.5.0"}]
+  [{:orbis, "~> 0.7.0"}]
 end
 ```
 
-Requires Rust for compiling the NIF.
+Requires Rust for compiling the NIF. GNSS product fetching
+(`Orbis.GnssData`) additionally needs the optional `:req` dependency:
+
+```elixir
+{:req, "~> 0.5"}
+```
 
 ## Quick Start
 
@@ -177,27 +184,68 @@ eph = Orbis.Ephemeris.load("/path/to/de421.bsp")
 mars = Orbis.Ephemeris.position(eph, :mars, :earth, datetime)
 ```
 
+### GNSS Positioning
+
+```elixir
+# Precise ephemeris (SP3): interpolate a satellite's position/clock at any epoch
+sp3 = Orbis.SP3.load!("GBM0MGXRAP_20201760000_01D_05M_ORB.SP3")
+{:ok, state} = Orbis.SP3.position(sp3, "G01", ~N[2020-06-24 00:00:00])
+# %Orbis.SP3.State{x_m: ..., y_m: ..., z_m: ..., clock_s: ...}
+
+# Or broadcast navigation — GPS, Galileo, BeiDou, GLONASS (RINEX 3.x/4.xx)
+eph = Orbis.BroadcastEphemeris.load!("BRDC00IGS_20201770000_01D_MN.rnx")
+
+# Single-point position from one epoch of pseudoranges
+observations = [{"G07", 24_602_022.18}, {"G08", 23_676_569.52}, {"E05", 27_038_058.35}]
+
+{:ok, sol} =
+  Orbis.PointPositioning.solve(eph, observations, ~N[2020-06-25 12:00:00],
+    ionosphere: true,
+    troposphere: true,
+    klobuchar_alpha: {1.0e-8, 0.0, 0.0, 0.0},
+    klobuchar_beta: {9.0e4, 0.0, 0.0, 0.0}
+  )
+
+sol.position          # %{x_m: ..., y_m: ..., z_m: ...} — ITRF ECEF meters
+sol.dop.pdop          # position dilution of precision
+sol.system_clocks_s   # %{"G" => ..., "E" => ...} — one receiver clock per GNSS
+```
+
+Products can be fetched and cached (needs the optional `:req` dependency):
+
+```elixir
+product = Orbis.GnssData.mgex_sp3(:gfz, ~D[2020-06-24])
+{:ok, sp3} = Orbis.GnssData.sp3(product)   # downloads, verifies, caches, loads
+```
+
+A runnable walkthrough is in [`examples/gnss_positioning.livemd`](examples/gnss_positioning.livemd).
+
 ## Coordinate Frames
 
-| Frame | Description |
-|-------|-------------|
-| TEME | True Equator Mean Equinox — SGP4 output frame |
-| GCRS | Geocentric Celestial Reference System — inertial |
-| ITRS | International Terrestrial Reference System — Earth-fixed |
-| Geodetic | WGS84 latitude, longitude, altitude |
-| Topocentric | Azimuth, elevation, range from a ground station |
+| Frame       | Description                                              |
+| ----------- | -------------------------------------------------------- |
+| TEME        | True Equator Mean Equinox — SGP4 output frame            |
+| GCRS        | Geocentric Celestial Reference System — inertial         |
+| ITRS        | International Terrestrial Reference System — Earth-fixed |
+| Geodetic    | WGS84 latitude, longitude, altitude                      |
+| Topocentric | Azimuth, elevation, range from a ground station          |
 
 ## Accuracy
 
-| Component | Reference | Accuracy |
-|-----------|-----------|----------|
-| TEME→GCRS→ITRS | Skyfield | 0 ULP (bit-identical) |
-| SGP4 propagation | Skyfield | < 1 mm (via sgp4 crate) |
-| Gibbs / Herrick-Gibbs | Vallado Python | 0 ULP |
-| Gauss IOD | Vallado Python | 1e-12 relative |
-| Lambert (Battin) | Vallado Python | 1e-12 relative |
-| Conjunction | Iridium/Cosmos 2251 | < 2 km miss, < 1 min timing |
-| RF (FSPL) | Analytical (inverse square law) | Exact |
+| Component              | Reference                       | Accuracy                    |
+| ---------------------- | ------------------------------- | --------------------------- |
+| TEME→GCRS→ITRS         | Skyfield                        | 0 ULP (bit-identical)       |
+| SGP4 propagation       | Skyfield                        | < 1 mm (via sgp4 crate)     |
+| Gibbs / Herrick-Gibbs  | Vallado Python                  | 0 ULP                       |
+| Gauss IOD              | Vallado Python                  | 1e-12 relative              |
+| Lambert (Battin)       | Vallado Python                  | 1e-12 relative              |
+| Conjunction            | Iridium/Cosmos 2251             | < 2 km miss, < 1 min timing |
+| RF (FSPL)              | Analytical (inverse square law) | Exact                       |
+| SP3 interpolation      | gnssanalysis                    | 0 ULP                       |
+| Broadcast orbit/clock  | pinned IS-GPS-200 recipe        | 0 ULP (recipe); ~m vs SP3   |
+| Ionosphere/troposphere | Klobuchar / Saastamoinen–Niell  | 0 ULP                       |
+| GNSS DOP               | cofactor inverse                | 0 ULP                       |
+| Single-point position  | scipy least squares             | sub-micron agreement        |
 
 ## License
 

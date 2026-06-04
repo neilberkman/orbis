@@ -1,7 +1,7 @@
 defmodule Orbis.MixProject do
   use Mix.Project
 
-  @version "0.6.0"
+  @version "0.7.0"
   @source_url "https://github.com/neilberkman/orbis"
 
   def project do
@@ -54,6 +54,7 @@ defmodule Orbis.MixProject do
         "native/orbis_nif/Cargo*",
         "mix.exs",
         "README.md",
+        "CHANGELOG.md",
         "LICENSE"
       ],
       licenses: ["MIT"],
@@ -66,12 +67,14 @@ defmodule Orbis.MixProject do
       main: "Orbis",
       extras: [
         "README.md",
+        "CHANGELOG.md",
         "guides/track_iss.md",
         "guides/pass_prediction.md",
         "guides/conjunction_screening.md",
         "guides/accuracy.md",
         "guides/batch_analysis.md",
-        "examples/iss_tracker.livemd"
+        "examples/iss_tracker.livemd",
+        "examples/gnss_positioning.livemd"
       ],
       groups_for_extras: [
         Guides: Path.wildcard("guides/*.md")
@@ -83,6 +86,14 @@ defmodule Orbis.MixProject do
         "Orbit Determination": [Orbis.IOD, Orbis.Lambert],
         "Space Environment": [Orbis.Eclipse, Orbis.Atmosphere, Orbis.Ephemeris, Orbis.Angles],
         Conjunction: [Orbis.Conjunction],
+        "GNSS Positioning": [
+          Orbis.PointPositioning,
+          Orbis.SP3,
+          Orbis.BroadcastEphemeris,
+          Orbis.Ionosphere,
+          Orbis.Troposphere,
+          Orbis.GnssTime
+        ],
         "Data Sources": [
           Orbis.CelesTrak,
           Orbis.Constellation,
