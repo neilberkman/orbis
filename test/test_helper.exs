@@ -1,4 +1,4 @@
-ExUnit.start(exclude: [:skyfield_parity, :spk_file, :celestrak])
+ExUnit.start(exclude: [:skyfield_parity, :spk_file, :celestrak, :network])
 
 defmodule Orbis.TestHelpers do
   @moduledoc false

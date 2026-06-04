@@ -22,7 +22,7 @@ defmodule Orbis.MixProject do
   def application do
     [
       mod: {Orbis.Application, []},
-      extra_applications: [:logger]
+      extra_applications: [:logger, :ftp, :ssl]
     ]
   end
 
@@ -31,7 +31,7 @@ defmodule Orbis.MixProject do
       {:nx, "~> 0.7"},
       {:rustler, "~> 0.36"},
       {:astrodynamics, "~> 0.6.0"},
-      {:req, "~> 0.5"},
+      {:req, "~> 0.5", optional: true},
       {:jason, "~> 1.4"},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:quokka, "~> 2.12", only: [:dev, :test], runtime: false}
@@ -83,7 +83,15 @@ defmodule Orbis.MixProject do
         "Orbit Determination": [Orbis.IOD, Orbis.Lambert],
         "Space Environment": [Orbis.Eclipse, Orbis.Atmosphere, Orbis.Ephemeris, Orbis.Angles],
         Conjunction: [Orbis.Conjunction],
-        "Data Sources": [Orbis.CelesTrak, Orbis.Constellation],
+        "Data Sources": [
+          Orbis.CelesTrak,
+          Orbis.Constellation,
+          Orbis.GnssData,
+          Orbis.GnssData.Product,
+          Orbis.GnssData.Catalog,
+          Orbis.GnssData.Cache,
+          Orbis.GnssData.Download
+        ],
         "Batch Analysis": [
           Orbis.Nx,
           Orbis.Nx.Geometry,
