@@ -1,5 +1,8 @@
 defmodule Orbis.GnssDataTest do
-  use ExUnit.Case, async: true
+  # Not async: several tests exercise the app-config knobs (`:gnss_data_offline`,
+  # `:gnss_data_req_available`) by setting global application env, which must not
+  # race other tests.
+  use ExUnit.Case, async: false
 
   alias Orbis.GnssData
   alias Orbis.GnssData.Cache

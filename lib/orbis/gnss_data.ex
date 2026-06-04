@@ -82,8 +82,12 @@ defmodule Orbis.GnssData do
     * `:sha256` — expected SHA-256 (hex) of the **decompressed** file; verified
       on both cache hits and fresh downloads
     * `:max_decompressed_bytes` — gzip-bomb cap (default 500 MiB)
-    * `:timeout_ms`, `:retries`, `:backoff_ms` — network tuning (see
-      `Orbis.GnssData.Download`)
+    * `:timeout_ms` — per-attempt network timeout (default 30_000)
+    * `:retries` — attempts for transient network errors (default 3)
+    * `:backoff_ms` — base backoff between retries, doubled each attempt
+      (default 500)
+    * `:max_compressed_bytes` — cap on the compressed payload buffered into
+      memory while downloading (default 64 MiB)
 
   ## Typed errors
 

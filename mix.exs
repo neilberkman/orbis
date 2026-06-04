@@ -89,8 +89,7 @@ defmodule Orbis.MixProject do
           Orbis.GnssData,
           Orbis.GnssData.Product,
           Orbis.GnssData.Catalog,
-          Orbis.GnssData.Cache,
-          Orbis.GnssData.Download
+          Orbis.GnssData.Cache
         ],
         "Batch Analysis": [
           Orbis.Nx,
