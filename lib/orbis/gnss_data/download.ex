@@ -1,19 +1,18 @@
 defmodule Orbis.GnssData.Download do
-  @moduledoc """
-  Network transfer for GNSS products: HTTPS via `Req` and FTP via the Erlang
-  stdlib `:ftp` application, with bounded retries, sensible timeouts, and a
-  strict host allow-list.
-
-  This module is only reached when `offline: true` is **not** set and the
-  product is not already cached. It never accepts a caller-supplied URL: it is
-  given a URL built by `Orbis.GnssData.Catalog`, and it re-checks the URL's host
-  against `Catalog.allowed_hosts/0` before contacting it (defence in depth
-  against SSRF). Cross-host HTTP redirects are **refused** rather than followed,
-  so a compromised or on-path archive cannot redirect the fetch off the
-  allow-list. Both transports also cap the number of compressed bytes pulled
-  into memory (`:max_compressed_bytes`), since the remote file is untrusted (FTP
-  is plaintext, anonymous). All failures are mapped to typed errors.
-  """
+  # Internal: network transfer for GNSS products: HTTPS via `Req` and FTP via the
+  # Erlang stdlib `:ftp` application, with bounded retries, sensible timeouts, and
+  # a strict host allow-list. Not part of the public API — `Orbis.GnssData.fetch/2`
+  # is the entry point.
+  #
+  # This module is only reached when `offline: true` is not set and the product
+  # is not already cached. It is given a URL built by `Orbis.GnssData.Catalog`
+  # and, as defence in depth against SSRF, re-checks before contacting it that
+  # the host is on `Catalog.allowed_hosts/0` AND that the URL scheme matches the
+  # requested protocol. Cross-host HTTP redirects are refused rather than
+  # followed. Both transports cap the compressed bytes buffered into memory
+  # (`:max_compressed_bytes`), since the remote file is untrusted (FTP is
+  # plaintext, anonymous). All failures are mapped to typed errors.
+  @moduledoc false
 
   alias Orbis.GnssData.Catalog
 
@@ -26,26 +25,17 @@ defmodule Orbis.GnssData.Download do
   # response before the (output-side) decompression cap is even reached.
   @default_max_compressed_bytes 64 * 1024 * 1024
 
-  @doc """
-  Download the bytes at `url` using `protocol` (`:https` or `:ftp`).
-
-  Options:
-
-    * `:timeout_ms` — per-attempt timeout (default `30_000`)
-    * `:retries` — number of attempts for transient errors (default `3`)
-    * `:backoff_ms` — base backoff between retries, doubled each attempt
-      (default `500`); set to `0` in tests to avoid sleeping
-    * `:max_compressed_bytes` — cap on the compressed payload buffered into
-      memory (default 64 MiB); exceeding it yields
-      `{:error, {:download_size_exceeded, max, got}}`
-
-  Returns `{:ok, compressed_bytes}` or a typed error. A `404`/file-not-found is
-  treated as permanent and is **not** retried; transient network errors
-  (including `408`/`429`) are.
-  """
+  # Download the bytes at `url` using `protocol` (`:https` or `:ftp`). Options:
+  #   :timeout_ms (per-attempt, default 30_000), :retries (transient-error
+  #   attempts, default 3), :backoff_ms (base backoff, doubled per attempt,
+  #   default 500; 0 in tests), :max_compressed_bytes (buffered payload cap,
+  #   default 64 MiB; over it yields {:error, {:download_size_exceeded, max, got}}).
+  # Returns {:ok, compressed_bytes} or a typed error. 404/file-not-found is
+  # permanent (not retried); transient network errors (incl. 408/429) are.
+  @doc false
   @spec get(String.t(), :https | :ftp, keyword()) :: {:ok, binary()} | {:error, term()}
   def get(url, protocol, opts \\ []) when is_binary(url) and protocol in [:https, :ftp] do
-    with :ok <- check_host(url) do
+    with :ok <- check_host(url, protocol) do
       retries = Keyword.get(opts, :retries, @default_retries)
       backoff = Keyword.get(opts, :backoff_ms, @default_backoff_ms)
       attempt(url, protocol, opts, retries, backoff)
@@ -233,13 +223,21 @@ defmodule Orbis.GnssData.Download do
 
   # --- SSRF guard ----------------------------------------------------------
 
-  defp check_host(url) do
-    host = URI.parse(url).host
+  defp check_host(url, protocol) do
+    uri = URI.parse(url)
 
-    if is_binary(host) and MapSet.member?(Catalog.allowed_hosts(), host) do
-      :ok
-    else
-      {:error, {:unsupported_product, {:host_not_allowed, host}}}
+    cond do
+      not (is_binary(uri.host) and MapSet.member?(Catalog.allowed_hosts(), uri.host)) ->
+        {:error, {:unsupported_product, {:host_not_allowed, uri.host}}}
+
+      uri.scheme != scheme_for(protocol) ->
+        {:error, {:unsupported_product, {:scheme_mismatch, uri.scheme, protocol}}}
+
+      true ->
+        :ok
     end
   end
+
+  defp scheme_for(:https), do: "https"
+  defp scheme_for(:ftp), do: "ftp"
 end

@@ -44,20 +44,34 @@ defmodule Orbis.GnssData do
   `fetch/2` is cache-first:
 
     1. Resolve the canonical filename and cache path (pure, from the catalog).
-    2. If the decompressed file is already cached — and, when a SHA-256 is
-       known, verified — return it with **no network**.
+    2. If the file is already cached, verify it: against the caller's `:sha256`
+       when given, otherwise against the decompressed SHA-256 recorded in the
+       file's provenance sidecar (every downloaded file has one). A verified hit
+       returns with **no network**. A *corrupt* hit (checksum mismatch) or an
+       *unverifiable* one (no sidecar — e.g. a hand-placed file) is, online,
+       discarded and re-downloaded; offline, a corrupt hit is terminal and an
+       unverifiable one is returned as the best available.
     3. Otherwise (and only when not `offline:`) download the `.gz` over HTTPS
        (`Req`) or FTP (`:ftp`) to memory, decompress with a gzip-bomb cap,
        verify any known checksum, and **atomically** commit the decompressed
-       file into the cache (temp file + rename) with a `.provenance.json`
-       sidecar.
+       file into the cache (temp file + rename) together with its required
+       `.provenance.json` sidecar (the commit fails if the sidecar cannot be
+       written, so a cached file always carries its integrity hash).
 
   ## Offline mode
 
   Pass `offline: true` (or set `config :orbis, gnss_data_offline: true`) to
-  forbid all network access: a cache hit is returned (and checksum-verified if a
-  digest is known); a miss returns `{:error, {:offline_miss, name}}`. This is
-  how the test suite — and any user without connectivity — runs deterministically.
+  forbid all network access: a verified cache hit is returned, a corrupt hit
+  yields `{:error, {:checksum_mismatch, _, _}}`, and a miss returns
+  `{:error, {:offline_miss, name}}`. This is how the test suite — and any user
+  without connectivity — runs deterministically.
+
+  ## Network tests
+
+  Live-archive fetching is exercised by tests tagged `:network`, which are
+  **excluded by default** (including in CI, which has no network); the rest of
+  the suite is fully offline and deterministic. Run the live gate manually with
+  `mix test --include network`.
 
   ## Options
 
@@ -90,6 +104,9 @@ defmodule Orbis.GnssData do
     * `{:error, {:decompress_failed, reason}}` — corrupt gzip
     * `{:error, {:decompress_size_exceeded, max, got}}` — gzip-bomb cap hit
     * `{:error, {:cache_dir_not_writable, reason}}` — cannot create/write cache
+    * `{:error, {:provenance_write_failed, reason}}` — the product downloaded but
+      its required provenance sidecar could not be written (the product is rolled
+      back so nothing unverifiable is left in the cache)
     * `{:error, {:unsafe_cache_name, name}}` — filename failed path-safety checks
     * `{:error, {:temp_file_error, reason}}` — temp write/rename failure
   """
@@ -198,23 +215,32 @@ defmodule Orbis.GnssData do
 
     with {:ok, filename} <- Product.canonical_filename(product),
          {:ok, path} <- Cache.path_for(cache_dir, filename) do
-      case Cache.lookup(path, sha) do
-        {:ok, ^path} ->
+      case Cache.classify(path, sha) do
+        # Present and verified (against the caller's :sha256 if given, else the
+        # provenance sidecar's stored hash).
+        {:hit, ^path} ->
           {:ok, path}
 
-        # A checksum mismatch on a cache hit means the cached file is corrupt or
-        # stale. Offline, that is terminal (we have nothing better to offer).
-        # Online, we discard the poisoned entry and re-download — the atomic
-        # commit overwrites it — so one bad file does not permanently wedge the
-        # product. Any fresh download is itself verified before it is committed.
-        {:error, {:checksum_mismatch, _, _}} = err ->
-          if offline?(opts), do: err, else: fetch_miss(product, path, filename, sha, opts)
+        :absent ->
+          fetch_miss(product, path, filename, sha, opts)
+
+        # Present but unverifiable (no caller hash and no usable sidecar — a file
+        # placed by hand). Online, fetch a verified, provenance-stamped copy;
+        # offline, return it as the best available.
+        :unverified ->
+          if offline?(opts), do: {:ok, path}, else: download_and_cache(product, path, sha, opts)
+
+        # Corrupt or stale. Offline it is terminal (nothing better to offer);
+        # online we discard it and re-download — the atomic commit overwrites it,
+        # and the fresh copy is verified before commit — so one bad file does not
+        # permanently wedge the product.
+        {:stale, mismatch} ->
+          if offline?(opts),
+            do: {:error, mismatch},
+            else: download_and_cache(product, path, sha, opts)
 
         {:error, _} = err ->
           err
-
-        :miss ->
-          fetch_miss(product, path, filename, sha, opts)
       end
     end
   end

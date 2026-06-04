@@ -226,6 +226,58 @@ defmodule Orbis.GnssDataTest do
     end
   end
 
+  describe "default cache integrity (no caller checksum)" do
+    test "a default cache hit is verified against the provenance sidecar and self-heals online",
+         %{cache_dir: cache_dir} do
+      product = GnssData.mgex_sp3(:gfz, ~D[2020-06-24], sample: "15M")
+      {:ok, filename} = GnssData.Product.canonical_filename(product)
+      {:ok, path} = Cache.path_for(cache_dir, filename)
+      good = sp3_bytes()
+
+      # A committed file always carries its decompressed hash in the sidecar.
+      assert {:ok, ^path} =
+               Cache.commit(path, good, %{"sha256_decompressed" => Cache.sha256(good)})
+
+      # A clean default (no :sha256) hit is returned with no network.
+      assert {:ok, ^path} = GnssData.fetch(product, offline: true, cache_dir: cache_dir)
+
+      # Corrupt the cached file but leave the sidecar: the stored hash no longer
+      # matches the bytes, and the default hit must NOT trust it.
+      File.write!(path, "corrupted after caching")
+
+      # Offline: the sidecar mismatch is detected and is terminal.
+      assert {:error, {:checksum_mismatch, _, _}} =
+               GnssData.fetch(product, offline: true, cache_dir: cache_dir)
+
+      # Online: the poisoned entry is discarded and a fresh download attempted.
+      # Req disabled so it stops at :req_not_available — proving fetch did NOT
+      # serve the corrupt cached bytes.
+      Application.put_env(:orbis, :gnss_data_req_available, false)
+      on_exit(fn -> Application.delete_env(:orbis, :gnss_data_req_available) end)
+
+      assert {:error, :req_not_available} =
+               GnssData.fetch(product, cache_dir: cache_dir, retries: 1, backoff_ms: 0)
+    end
+
+    test "an unverifiable cache hit (no sidecar) is served offline but refreshed online",
+         %{cache_dir: cache_dir} do
+      product = GnssData.mgex_sp3(:gfz, ~D[2020-06-24], sample: "15M")
+      # seed/3 writes the product file but no provenance sidecar.
+      path = seed(cache_dir, product, sp3_bytes())
+
+      # Offline: nothing better to offer, so the unprovenanced file is returned.
+      assert {:ok, ^path} = GnssData.fetch(product, offline: true, cache_dir: cache_dir)
+
+      # Online: treated as a miss and re-downloaded rather than silently trusted
+      # (Req disabled -> stops at :req_not_available).
+      Application.put_env(:orbis, :gnss_data_req_available, false)
+      on_exit(fn -> Application.delete_env(:orbis, :gnss_data_req_available) end)
+
+      assert {:error, :req_not_available} =
+               GnssData.fetch(product, cache_dir: cache_dir, retries: 1, backoff_ms: 0)
+    end
+  end
+
   describe "req availability" do
     test "fetch surfaces :req_not_available for an HTTPS center when Req is disabled",
          %{cache_dir: cache_dir} do

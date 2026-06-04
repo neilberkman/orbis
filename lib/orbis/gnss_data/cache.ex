@@ -13,7 +13,12 @@ defmodule Orbis.GnssData.Cache do
 
   Alongside each cached file `<name>` a `<name>.provenance.json` sidecar records
   the source URL, the SHA-256 of both the compressed and decompressed bytes,
-  the byte sizes, and the fetch timestamp.
+  the byte sizes, and the fetch timestamp. The sidecar is **part of the commit
+  contract**: `commit/3` returns `{:ok, path}` only if both the product and its
+  sidecar are written (if the sidecar cannot be written the product is rolled
+  back), so a committed file always carries its integrity hash. `classify/2`
+  uses that stored hash to verify a cache hit when the caller supplies no
+  explicit checksum.
   """
 
   # Generous but finite cap on a single decompressed product (gzip-bomb guard).
@@ -40,27 +45,52 @@ defmodule Orbis.GnssData.Cache do
   end
 
   @doc """
-  Return the cached path if the file already exists, else `:miss`.
+  Classify the cache entry at `path` for integrity.
 
-  When `expected_sha256` is a hex string, the cached bytes are verified against
-  it; a mismatch returns `{:error, {:checksum_mismatch, expected, got}}` and the
-  caller should treat the entry as unusable.
+  Returns one of:
+
+    * `{:hit, path}` — present and verified: against `expected_sha256` when the
+      caller supplies one, otherwise against the provenance sidecar's stored
+      decompressed SHA-256;
+    * `:absent` — no cached file;
+    * `{:stale, {:checksum_mismatch, expected, got}}` — present but failed
+      verification (corrupt or stale);
+    * `:unverified` — present but no checksum is available to verify it (no
+      caller hash and no usable sidecar — e.g. a file placed by hand);
+    * `{:error, reason}` — the file exists but could not be read.
+
+  The caller decides what to do per mode: a `{:hit, _}` is always usable; online,
+  a `:stale` or `:unverified` entry should be re-downloaded; offline, a `:stale`
+  entry is terminal while an `:unverified` one is the best available.
   """
-  @spec lookup(String.t(), String.t() | nil) ::
-          {:ok, String.t()} | :miss | {:error, term()}
-  def lookup(path, expected_sha256 \\ nil) when is_binary(path) do
+  @spec classify(String.t(), String.t() | nil) ::
+          {:hit, String.t()} | :absent | {:stale, term()} | :unverified | {:error, term()}
+  def classify(path, expected_sha256 \\ nil) when is_binary(path) do
     case File.read(path) do
-      {:ok, bytes} ->
-        case verify_sha(bytes, expected_sha256) do
-          :ok -> {:ok, path}
-          {:error, _} = err -> err
-        end
+      {:ok, bytes} -> classify_bytes(path, bytes, expected_sha256)
+      {:error, :enoent} -> :absent
+      {:error, reason} -> {:error, {:temp_file_error, reason}}
+    end
+  end
 
-      {:error, :enoent} ->
-        :miss
+  defp classify_bytes(path, bytes, expected) when is_binary(expected) do
+    check(path, bytes, expected)
+  end
 
-      {:error, reason} ->
-        {:error, {:temp_file_error, reason}}
+  defp classify_bytes(path, bytes, nil) do
+    case read_provenance(path) do
+      {:ok, %{"sha256_decompressed" => hash}} when is_binary(hash) -> check(path, bytes, hash)
+      _ -> :unverified
+    end
+  end
+
+  defp check(path, bytes, expected) do
+    got = sha256(bytes)
+
+    if secure_equal?(got, String.downcase(expected)) do
+      {:hit, path}
+    else
+      {:stale, {:checksum_mismatch, expected, got}}
     end
   end
 
@@ -100,25 +130,28 @@ defmodule Orbis.GnssData.Cache do
   end
 
   @doc """
-  Atomically commit decompressed bytes (and a provenance sidecar) into the cache.
+  Atomically commit decompressed bytes **and** their provenance sidecar.
 
-  Writes to a unique temp file in the cache directory, fsync-free but
-  rename-atomic on POSIX, then renames into `path`. Creates the cache directory
-  if needed. Returns `{:ok, path}` or a typed error
+  Both files are staged to unique temp files in the cache directory and then
+  renamed into place (rename is atomic on POSIX). The sidecar is required: if it
+  cannot be encoded or renamed, the just-committed product is removed and an
+  error is returned, so a `{:ok, path}` result always has a matching sidecar
+  carrying the decompressed SHA-256 that `classify/2` later verifies against.
+  Creates the cache directory if needed. Returns `{:ok, path}` or a typed error
   (`{:error, {:cache_dir_not_writable, reason}}` /
+  `{:error, {:provenance_write_failed, reason}}` /
   `{:error, {:temp_file_error, reason}}`).
   """
   @spec commit(String.t(), binary(), map()) :: {:ok, String.t()} | {:error, term()}
   def commit(path, decompressed, provenance) when is_binary(path) and is_binary(decompressed) do
     dir = Path.dirname(path)
+    sidecar = provenance_path(path)
 
     with :ok <- ensure_dir(dir),
-         {:ok, tmp} <- write_temp(dir, decompressed),
-         :ok <- rename(tmp, path) do
-      # The sidecar is best-effort: a write failure here does not invalidate the
-      # already-committed product file.
-      write_provenance(path, provenance)
-      {:ok, path}
+         {:ok, json} <- encode_provenance(provenance),
+         {:ok, data_tmp} <- write_temp(dir, decompressed),
+         {:ok, prov_tmp} <- write_temp_or_cleanup(dir, json, data_tmp) do
+      commit_renames(data_tmp, prov_tmp, path, sidecar)
     end
   end
 
@@ -175,18 +208,6 @@ defmodule Orbis.GnssData.Cache do
   end
 
   defp traversal(name), do: {:error, {:unsafe_cache_name, name}}
-
-  defp verify_sha(_bytes, nil), do: :ok
-
-  defp verify_sha(bytes, expected) when is_binary(expected) do
-    got = sha256(bytes)
-
-    if secure_equal?(got, String.downcase(expected)) do
-      :ok
-    else
-      {:error, {:checksum_mismatch, expected, got}}
-    end
-  end
 
   # Constant-time comparison of two fixed-length hex digests.
   defp secure_equal?(a, b) when byte_size(a) == byte_size(b), do: :crypto.hash_equals(a, b)
@@ -249,35 +270,44 @@ defmodule Orbis.GnssData.Cache do
     end
   end
 
-  defp rename(tmp, path) do
-    case File.rename(tmp, path) do
-      :ok ->
-        :ok
+  # Stage the second temp; if it fails, remove the first so no orphan is left.
+  defp write_temp_or_cleanup(dir, bytes, other_tmp) do
+    case write_temp(dir, bytes) do
+      {:ok, tmp} ->
+        {:ok, tmp}
 
-      {:error, reason} ->
-        File.rm(tmp)
-        {:error, {:temp_file_error, reason}}
+      {:error, _} = err ->
+        File.rm(other_tmp)
+        err
     end
   end
 
-  defp write_provenance(path, provenance) do
-    sidecar = provenance_path(path)
+  # Rename the product in, then the sidecar. Any failure rolls back so we never
+  # leave a product without its sidecar (or a stray temp).
+  defp commit_renames(data_tmp, prov_tmp, path, sidecar) do
+    case File.rename(data_tmp, path) do
+      {:error, reason} ->
+        File.rm(data_tmp)
+        File.rm(prov_tmp)
+        {:error, {:temp_file_error, reason}}
 
-    case Jason.encode(provenance, pretty: true) do
-      {:ok, json} ->
-        tmp = sidecar <> ".tmp-#{System.unique_integer([:positive])}"
+      :ok ->
+        case File.rename(prov_tmp, sidecar) do
+          :ok ->
+            {:ok, path}
 
-        with :ok <- File.write(tmp, json),
-             :ok <- File.rename(tmp, sidecar) do
-          :ok
-        else
-          _ ->
-            File.rm(tmp)
-            :ok
+          {:error, reason} ->
+            File.rm(prov_tmp)
+            File.rm(path)
+            {:error, {:provenance_write_failed, reason}}
         end
+    end
+  end
 
-      {:error, _} ->
-        :ok
+  defp encode_provenance(provenance) do
+    case Jason.encode(provenance, pretty: true) do
+      {:ok, json} -> {:ok, json}
+      {:error, reason} -> {:error, {:provenance_write_failed, reason}}
     end
   end
 
