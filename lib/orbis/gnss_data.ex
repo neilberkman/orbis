@@ -34,7 +34,8 @@ defmodule Orbis.GnssData do
     * `:igs` — the IGS merged broadcast navigation file (`:nav`) and the combined
       global ionosphere map (`:ionex`), over FTP
 
-  Content types: `:sp3`, `:clk`, `:nav`, `:ionex`. Precise products and IONEX
+  Content types: `:sp3`, `:clk`, `:nav`, `:ionex`, `:obs` (station observation
+  data, RINEX 3 / CRINEX). Precise products and IONEX
   follow the IGS long-name convention `AAAVPPPTTT_YYYYDDDHHMM_LEN_SMP_CNT.EXT`;
   broadcast navigation uses the no-sampling RINEX long-name
   `BRDC00IGS_R_YYYYDDDHHMM_01D_MN.rnx`. See `Orbis.GnssData.Catalog`.
@@ -117,6 +118,7 @@ defmodule Orbis.GnssData do
 
   alias Orbis.BroadcastEphemeris
   alias Orbis.GnssData.{Cache, Catalog, Download, Product}
+  alias Orbis.RinexObs
   alias Orbis.SP3
 
   @typedoc "A fetch error, always a tagged tuple. See the module docs."
@@ -181,6 +183,29 @@ defmodule Orbis.GnssData do
   @spec mgex_ionex(atom(), Date.t(), keyword()) :: Product.t()
   def mgex_ionex(center, %Date{} = date, opts \\ []),
     do: build!(center, :ionex, date, Keyword.get(opts, :sample, "01H"))
+
+  @doc """
+  Build a daily **station observation** product (RINEX 3 CRINEX, 30 s default).
+
+  Station observation files are keyed by a 9-character site id (e.g.
+  `"ESBC00DNK"`), not an analysis-center token, and resolve on the ESA GSSC
+  anonymous archive's daily data tree. Override the sampling with `sample:`.
+
+  ## Examples
+
+      iex> p = Orbis.GnssData.station_obs("ESBC00DNK", ~D[2020-06-25])
+      iex> Orbis.GnssData.Product.canonical_filename(p)
+      {:ok, "ESBC00DNK_R_20201770000_01D_30S_MO.crx"}
+  """
+  @spec station_obs(String.t(), Date.t(), keyword()) :: Product.t()
+  def station_obs(station, %Date{} = date, opts \\ []) when is_binary(station) do
+    sample = Keyword.get(opts, :sample, "30S")
+
+    case Product.new(:gssc, :obs, date, sample, station: station) do
+      {:ok, p} -> p
+      {:error, reason} -> raise ArgumentError, "invalid station OBS product: #{inspect(reason)}"
+    end
+  end
 
   @doc """
   Build a `Product` for any center/content/date/sample, returning a tuple.
@@ -261,7 +286,7 @@ defmodule Orbis.GnssData do
     max_bytes = Keyword.get(opts, :max_decompressed_bytes, Cache.default_max_decompressed_bytes())
 
     with {:ok, url} <- Product.archive_url(product),
-         {:ok, protocol} <- Catalog.protocol(product.center),
+         {:ok, protocol} <- protocol_for(product),
          {:ok, compressed} <- Download.get(url, protocol, opts),
          {:ok, decompressed} <- Cache.gunzip(compressed, max_bytes),
          :ok <- verify(decompressed, sha),
@@ -270,6 +295,12 @@ defmodule Orbis.GnssData do
       {:ok, path}
     end
   end
+
+  # Station observation products are not analysis-center products; they resolve
+  # their protocol from the dedicated station archive path, not the @centers
+  # token table.
+  defp protocol_for(%Product{content: :obs}), do: {:ok, Catalog.station_obs_protocol()}
+  defp protocol_for(%Product{center: center}), do: Catalog.protocol(center)
 
   defp verify(_decompressed, nil), do: :ok
 
@@ -317,6 +348,19 @@ defmodule Orbis.GnssData do
   @spec broadcast(Product.t(), keyword()) :: {:ok, BroadcastEphemeris.t()} | error()
   def broadcast(%Product{content: :nav} = product, opts \\ []) do
     with {:ok, path} <- fetch(product, opts), do: BroadcastEphemeris.load(path)
+  end
+
+  @doc """
+  Fetch a station observation product and load it into an `Orbis.RinexObs`
+  handle.
+
+  `fetch/2` gunzips the `.gz`; the committed cache file is the (still Hatanaka)
+  CRINEX text, which `Orbis.RinexObs.load/1` decodes before parsing. Returns
+  `{:ok, %Orbis.RinexObs{}}` or a typed error.
+  """
+  @spec observations(Product.t(), keyword()) :: {:ok, RinexObs.t()} | error()
+  def observations(%Product{content: :obs} = product, opts \\ []) do
+    with {:ok, path} <- fetch(product, opts), do: RinexObs.load(path)
   end
 
   # --- option resolution ---------------------------------------------------

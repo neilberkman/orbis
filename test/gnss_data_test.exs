@@ -9,6 +9,7 @@ defmodule Orbis.GnssDataTest do
 
   @gz_fixture Path.join(__DIR__, "fixtures/gnss_data/GBM0MGXRAP_20201760000_01D_05M_ORB.SP3.gz")
   @nav_fixture Path.join(__DIR__, "fixtures/nav/ESBC00DNK_R_20201770000_01D_MN.rnx")
+  @obs_crx_fixture Path.join(__DIR__, "fixtures/obs/ESBC00DNK_R_20201770000_01D_30S_MO_trim.crx")
 
   setup do
     # A fresh, unique cache dir per test, removed afterwards. Never the user cache.
@@ -178,6 +179,39 @@ defmodule Orbis.GnssDataTest do
       assert {:error, {:offline_miss, _}} =
                GnssData.sp3(product, offline: true, cache_dir: cache_dir)
     end
+
+    test "station_obs/3 resolves the canonical RINEX-3 observation name" do
+      product = GnssData.station_obs("ESBC00DNK", ~D[2020-06-25])
+      assert product.content == :obs
+      assert product.station == "ESBC00DNK"
+
+      assert {:ok, "ESBC00DNK_R_20201770000_01D_30S_MO.crx"} =
+               GnssData.Product.canonical_filename(product)
+
+      assert {:ok,
+              "ftp://gssc.esa.int/gnss/data/daily/2020/177/" <>
+                "ESBC00DNK_R_20201770000_01D_30S_MO.crx.gz"} =
+               GnssData.Product.archive_url(product)
+    end
+
+    test "observations/2 returns a RinexObs handle from a cached CRINEX", %{cache_dir: cache_dir} do
+      # The cache holds the (gunzipped) CRINEX text exactly as fetch/2 commits it.
+      product = GnssData.station_obs("ESBC00DNK", ~D[2020-06-25])
+      seed(cache_dir, product, File.read!(@obs_crx_fixture))
+
+      assert {:ok, %Orbis.RinexObs{} = obs} =
+               GnssData.observations(product, offline: true, cache_dir: cache_dir)
+
+      {x, _y, _z} = Orbis.RinexObs.approx_position(obs)
+      assert_in_delta x, 3_582_105.291, 1.0e-3
+    end
+
+    test "an offline miss propagates through observations/2", %{cache_dir: cache_dir} do
+      product = GnssData.station_obs("ESBC00DNK", ~D[2020-06-25])
+
+      assert {:error, {:offline_miss, _}} =
+               GnssData.observations(product, offline: true, cache_dir: cache_dir)
+    end
   end
 
   describe "path-traversal safety" do
@@ -337,6 +371,19 @@ defmodule Orbis.GnssDataTest do
       assert {:ok, path} = GnssData.fetch(product, cache_dir: cache_dir)
       assert File.exists?(path)
       assert {:ok, %Orbis.BroadcastEphemeris{}} = Orbis.BroadcastEphemeris.load(path)
+    end
+
+    @tag :network
+    test "downloads a real daily station observation file over FTP", %{cache_dir: cache_dir} do
+      # A daily 30 s RINEX-3 observation file on the ESA GSSC anonymous mirror:
+      # ftp://gssc.esa.int/gnss/data/daily/2020/177/MYVA00ISL_R_20201770000_01D_30S_MO.crx.gz
+      product = GnssData.station_obs("MYVA00ISL", ~D[2020-06-25])
+
+      assert {:ok, %Orbis.RinexObs{} = obs} =
+               GnssData.observations(product, cache_dir: cache_dir)
+
+      assert is_tuple(Orbis.RinexObs.approx_position(obs)) or
+               is_nil(Orbis.RinexObs.approx_position(obs))
     end
   end
 end

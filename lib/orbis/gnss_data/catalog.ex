@@ -113,7 +113,8 @@ defmodule Orbis.GnssData.Catalog do
     sp3: %{code: "ORB", ext: "SP3", kind: :sampled},
     clk: %{code: "CLK", ext: "CLK", kind: :sampled},
     nav: %{code: "MN", ext: "rnx", kind: :nav},
-    ionex: %{code: "GIM", ext: "INX", kind: :sampled}
+    ionex: %{code: "GIM", ext: "INX", kind: :sampled},
+    obs: %{code: "MO", ext: "crx", kind: :obs_station}
   }
 
   @doc """
@@ -245,6 +246,52 @@ defmodule Orbis.GnssData.Catalog do
     do: {:error, {:unsupported_product, :bad_arguments}}
 
   @doc """
+  Build the canonical IGS long-name filename for a daily station observation
+  product (RINEX 3 CRINEX), e.g.
+  `ESBC00DNK_R_20201770000_01D_30S_MO.crx`.
+
+  Station observation files are keyed by a 9-character site id, not an
+  analysis-center token, so they have their own builder.
+
+  ## Examples
+
+      iex> Orbis.GnssData.Catalog.station_obs_filename("ESBC00DNK", ~D[2020-06-25], "30S")
+      {:ok, "ESBC00DNK_R_20201770000_01D_30S_MO.crx"}
+  """
+  @spec station_obs_filename(String.t(), Date.t(), String.t()) ::
+          {:ok, String.t()} | {:error, {:unsupported_product, term()}}
+  def station_obs_filename(station, %Date{} = date, sample)
+      when is_binary(station) and is_binary(sample) do
+    with :ok <- validate_station(station),
+         :ok <- validate_sample(sample),
+         {:ok, descriptor} <- content(:obs) do
+      {:ok, "#{station}_R_#{date_block(date)}_01D_#{sample}_#{descriptor.code}.#{descriptor.ext}"}
+    end
+  end
+
+  def station_obs_filename(_station, _date, _sample),
+    do: {:error, {:unsupported_product, :bad_arguments}}
+
+  @doc """
+  Build the full, compressed (`.gz`) archive URL for a daily station observation
+  product on the ESA GSSC anonymous archive (the same daily data tree the
+  broadcast navigation file uses).
+
+  ## Examples
+
+      iex> Orbis.GnssData.Catalog.station_obs_url("ESBC00DNK", ~D[2020-06-25], "30S")
+      {:ok, "ftp://gssc.esa.int/gnss/data/daily/2020/177/ESBC00DNK_R_20201770000_01D_30S_MO.crx.gz"}
+  """
+  @spec station_obs_url(String.t(), Date.t(), String.t()) ::
+          {:ok, String.t()} | {:error, {:unsupported_product, term()}}
+  def station_obs_url(station, %Date{} = date, sample) do
+    with {:ok, filename} <- station_obs_filename(station, date, sample) do
+      root = "ftp://gssc.esa.int/gnss"
+      {:ok, "#{root}/#{dir_path(:data_daily_year_doy, date)}/#{filename}.gz"}
+    end
+  end
+
+  @doc """
   Build the full, compressed (`.gz`) archive URL for a product.
 
   The directory follows the center/content layout; the filename is the canonical
@@ -344,6 +391,24 @@ defmodule Orbis.GnssData.Catalog do
   defp validate_sample(s), do: bad_sample(s)
 
   defp bad_sample(s), do: {:error, {:unsupported_product, {:sample, s}}}
+
+  # A RINEX 3 site id is a 9-character SSSSMRCCC token (4-char monument, marker,
+  # receiver, 3-char ISO country), upper-case alphanumeric. Validating it keeps
+  # the cache filename path-safe and the archive URL on the known host.
+  defp validate_station(<<_::binary-size(9)>> = s) do
+    if String.match?(s, ~r/\A[A-Z0-9]{9}\z/), do: :ok, else: bad_station(s)
+  end
+
+  defp validate_station(s), do: bad_station(s)
+
+  defp bad_station(s), do: {:error, {:unsupported_product, {:station, s}}}
+
+  @doc """
+  The transfer protocol for the daily station observation archive (`:ftp` on the
+  ESA GSSC mirror).
+  """
+  @spec station_obs_protocol() :: :ftp
+  def station_obs_protocol, do: :ftp
 
   # --- date arithmetic -----------------------------------------------------
 

@@ -8,6 +8,7 @@ mod iod;
 mod iono;
 mod lambert;
 mod propagation;
+mod rinex_obs;
 mod sp3;
 mod spp;
 mod tropo;

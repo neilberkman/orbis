@@ -10,9 +10,10 @@ crate-type = ["cdylib"]
 [dependencies]
 rustler = "0.37.3"
 chrono = "0.4"
-# Published crates.io releases, so CI and external builds resolve without a
-# local sibling checkout or a GitHub fetch. For local development against the
-# workspace, an uncommitted native/orbis_nif/.cargo/config.toml overrides these
-# with the local paths (see config.toml.example).
-astrodynamics = "0.7.0"
-astrodynamics-gnss = "0.7.0"
+# Tracks the astrodynamics repository between crates.io releases (the published
+# 0.7.0 crates predate the RINEX observation support these NIFs call); the next
+# coordinated release pins published versions again. For local development
+# against the workspace, an uncommitted native/orbis_nif/.cargo/config.toml
+# overrides these with the local paths (see config.toml.example).
+astrodynamics = { git = "https://github.com/neilberkman/astrodynamics", rev = "56aa4bbdd4f8003495847261533f83acf8c8a13e" }
+astrodynamics-gnss = { git = "https://github.com/neilberkman/astrodynamics", rev = "56aa4bbdd4f8003495847261533f83acf8c8a13e" }

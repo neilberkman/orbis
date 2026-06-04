@@ -69,6 +69,23 @@ defmodule Orbis.NIF do
   def sp3_position(_handle, _system_letter, _prn, _scale, _jd_whole, _jd_fraction),
     do: :erlang.nif_error(:nif_not_loaded)
 
+  def crinex_decode(_text), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_obs_parse(_text), do: :erlang.nif_error(:nif_not_loaded)
+
+  def crinex_obs_parse(_text), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_obs_approx_position(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_obs_codes(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_obs_epoch_count(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_obs_epochs(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_obs_pseudoranges(_handle, _epoch_index, _overrides),
+    do: :erlang.nif_error(:nif_not_loaded)
+
   def spp_solve(
         _handle,
         _observations,
