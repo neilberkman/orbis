@@ -202,6 +202,35 @@ defmodule Orbis.PointPositioningTest do
       assert %Orbis.BroadcastEphemeris{} = Orbis.BroadcastEphemeris.load!(@nav_glonass_path)
     end
 
+    # GLONASS pseudoranges synthesized (same forward model the solver inverts)
+    # from the committed GLONASS NAV product for the @broadcast_truth receiver at
+    # 2020-06-25 12:00 GPST. The end-to-end solve must recover that truth through
+    # the RK4 state-vector propagator.
+    @broadcast_obs_glonass [
+      {"R02", 22_163_462.853780},
+      {"R03", 21_451_975.793444},
+      {"R04", 23_499_605.720844},
+      {"R09", 20_452_460.139838},
+      {"R10", 20_967_543.625096},
+      {"R18", 21_065_842.276262},
+      {"R19", 19_294_047.490245},
+      {"R20", 22_280_594.596830}
+    ]
+
+    test "recovers a known receiver from broadcast GLONASS pseudoranges" do
+      eph = Orbis.BroadcastEphemeris.load!(@nav_glonass_path)
+
+      assert {:ok, %Solution{} = sol} =
+               PointPositioning.solve(eph, @broadcast_obs_glonass, ~N[2020-06-25 12:00:00],
+                 initial_guess: {3_513_900.0, 779_500.0, 5_249_700.0, 0.0}
+               )
+
+      assert_in_delta sol.position.x_m, @broadcast_truth.x_m, 1.0e-2
+      assert_in_delta sol.position.y_m, @broadcast_truth.y_m, 1.0e-2
+      assert_in_delta sol.position.z_m, @broadcast_truth.z_m, 1.0e-2
+      assert Map.keys(sol.system_clocks_s) == ["R"]
+    end
+
     test "loads a RINEX 4.00 navigation file through the broadcast path" do
       # A real v4.00 MIXED file parses through the NIF into a usable handle; the
       # version-4 frame markers are handled in Rust transparently to Elixir.

@@ -277,6 +277,9 @@ fn build_solve_inputs(
             alpha: [alpha.0, alpha.1, alpha.2, alpha.3],
             beta: [beta.0, beta.1, beta.2, beta.3],
         },
+        // Set by the broadcast path from the NAV header's BDSA/BDSB; the SP3 path
+        // (no broadcast ionosphere coefficients) leaves it None.
+        beidou_klobuchar: None,
         met: SurfaceMet {
             pressure_hpa,
             temperature_k,
@@ -355,7 +358,7 @@ fn spp_solve_broadcast<'a>(
     relative_humidity: f64,
     with_geodetic: bool,
 ) -> NifResult<Term<'a>> {
-    let inputs = build_solve_inputs(
+    let mut inputs = build_solve_inputs(
         observations,
         t_rx_j2000_s,
         t_rx_second_of_day_s,
@@ -369,6 +372,15 @@ fn spp_solve_broadcast<'a>(
         temperature_k,
         relative_humidity,
     )?;
+    // A BeiDou satellite uses the NAV product's own broadcast Klobuchar
+    // coefficients (BDSA/BDSB) when present, rather than the GPS set the caller
+    // supplied; both feed the same model, frequency-scaled to B1I.
+    if let Some(bds) = handle.store.iono_corrections().beidou {
+        inputs.beidou_klobuchar = Some(KlobucharCoeffs {
+            alpha: bds.alpha,
+            beta: bds.beta,
+        });
+    }
     Ok(solve_to_term(env, &handle.store, &inputs, with_geodetic))
 }
 

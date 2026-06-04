@@ -2,14 +2,17 @@ defmodule Orbis.PointPositioning do
   @moduledoc """
   GNSS single-point positioning (SPP): recover a receiver position, clock bias,
   and geometry diagnostics from one epoch of pseudorange observations against a
-  precise SP3 ephemeris.
+  precise SP3 ephemeris or a broadcast navigation product.
 
   This is the Elixir surface over the `astrodynamics-gnss` SPP solver. Given an
-  `Orbis.SP3` product handle, a set of GPS L1 pseudoranges, the receive epoch,
-  and the broadcast/atmosphere parameters, it runs the transmit-time iteration
-  and trust-region least-squares solve in the crate and returns an
-  `Orbis.PointPositioning.Solution`. No positioning math lives on the Elixir
-  side; this module marshals units and epoch arguments and decodes the result.
+  ephemeris source — an `Orbis.SP3` product or an `Orbis.BroadcastEphemeris`
+  handle (GPS / Galileo / BeiDou / GLONASS) — a set of single-frequency
+  pseudoranges, the receive epoch, and the broadcast/atmosphere parameters, it
+  runs the transmit-time iteration and trust-region least-squares solve in the
+  crate and returns an `Orbis.PointPositioning.Solution`. A mixed-constellation
+  set is solved together with one receiver clock per system. No positioning math
+  lives on the Elixir side; this module marshals units and epoch arguments and
+  decodes the result.
 
   ## Units at the boundary
 
