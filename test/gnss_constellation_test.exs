@@ -1,5 +1,7 @@
 defmodule Orbis.GnssConstellationTest do
-  use ExUnit.Case, async: true
+  # Not async: the live-fetch error test toggles app env to simulate the optional
+  # CelesTrak Req dependency being absent.
+  use ExUnit.Case, async: false
 
   alias Orbis.GnssConstellation
   alias Orbis.GnssConstellation.Record
@@ -42,6 +44,15 @@ defmodule Orbis.GnssConstellationTest do
     {:ok, records} = GnssConstellation.from_celestrak_omm(celestrak_omms())
     {:ok, statuses} = GnssConstellation.parse_navcen_html(navcen_html())
     GnssConstellation.merge_navcen(records, statuses)
+  end
+
+  describe "fetch_gps/1" do
+    test "surfaces the typed CelesTrak dependency error" do
+      Application.put_env(:orbis, :celestrak_req_available, false)
+      on_exit(fn -> Application.delete_env(:orbis, :celestrak_req_available) end)
+
+      assert {:error, :req_not_available} = GnssConstellation.fetch_gps()
+    end
   end
 
   describe "from_celestrak_omm/1" do

@@ -67,6 +67,24 @@ defmodule Orbis.CelesTrakTest do
     end
   end
 
+  describe "optional Req dependency" do
+    setup do
+      Application.put_env(:orbis, :celestrak_req_available, false)
+      on_exit(fn -> Application.delete_env(:orbis, :celestrak_req_available) end)
+      :ok
+    end
+
+    test "TLE live fetches return a typed error when Req is unavailable" do
+      assert {:error, :req_not_available} = Orbis.CelesTrak.fetch_tle(25544)
+      assert {:error, :req_not_available} = Orbis.CelesTrak.fetch_group("stations")
+      assert {:error, :req_not_available} = Orbis.CelesTrak.search("ISS")
+    end
+
+    test "OMM live fetch returns a typed error when Req is unavailable" do
+      assert {:error, :req_not_available} = Orbis.CelesTrak.fetch_omm("gps-ops")
+    end
+  end
+
   # Reuse the internal parsing logic from CelesTrak module
   defp parse_tle_body(body) do
     lines =

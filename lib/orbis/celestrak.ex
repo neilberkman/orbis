@@ -21,6 +21,9 @@ defmodule Orbis.CelesTrak do
   CelesTrak asks users to limit requests. This module does not enforce rate
   limiting — callers should cache results and avoid polling more than once
   per hour for the same data.
+
+  Live fetches require the optional `Req` dependency. If it is not available,
+  fetch functions return `{:error, :req_not_available}`.
   """
 
   @base_url "https://celestrak.org/NORAD/elements/gp.php"
@@ -89,7 +92,7 @@ defmodule Orbis.CelesTrak do
   """
   @spec fetch_omm(String.t()) :: {:ok, [map()]} | {:error, term()}
   def fetch_omm(group_name) do
-    case Req.get(@base_url, params: [GROUP: group_name, FORMAT: "json"]) do
+    case req_get(GROUP: group_name, FORMAT: "json") do
       {:ok, %{status: 200, body: body}} when is_list(body) ->
         {:ok, body}
 
@@ -121,7 +124,7 @@ defmodule Orbis.CelesTrak do
   # Private
 
   defp fetch_params(params) do
-    case Req.get(@base_url, params: params) do
+    case req_get(params) do
       {:ok, %{status: 200, body: body}} when is_binary(body) ->
         parse_tle_response(body)
 
@@ -130,6 +133,21 @@ defmodule Orbis.CelesTrak do
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  defp req_get(params) do
+    if req_available?() do
+      Req.get(@base_url, params: params)
+    else
+      {:error, :req_not_available}
+    end
+  end
+
+  defp req_available? do
+    case Application.get_env(:orbis, :celestrak_req_available) do
+      nil -> Code.ensure_loaded?(Req) and function_exported?(Req, :get, 2)
+      override -> override
     end
   end
 
