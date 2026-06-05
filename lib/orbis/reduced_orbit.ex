@@ -9,11 +9,21 @@ defmodule Orbis.ReducedOrbit do
   deliberately discards short-period structure and is honest about the error it
   leaves behind (`rms_m`/`max_m` on the fit, and a source-backed `drift/3`).
 
-  ## Model: `circular_secular`
+  ## Models
 
-  A circular orbit (eccentricity fixed at zero in this version) whose orbital
-  plane precesses at a constant nodal rate. At an offset `dt = t - t0` from the
-  reference epoch the angles advance linearly,
+  Two models are available, chosen with the `:model` option on `fit/2`:
+
+    * `:circular_secular` (the **default**) — a circular orbit; best for
+      near-circular orbits (Galileo).
+    * `:eccentric_secular` — adds eccentricity through a nonsingular `(h, k)`
+      parameterization, recovering the radial `a·e` signal (~hundreds of km for
+      GPS/BeiDou) while degrading smoothly to the circular model as `e -> 0`.
+
+  ### `circular_secular`
+
+  A circular orbit (eccentricity fixed at zero) whose orbital plane precesses at
+  a constant nodal rate. At an offset `dt = t - t0` from the reference epoch the
+  angles advance linearly,
 
       u(t)    = arg_lat0 + n * dt          # argument of latitude
       raan(t) = raan0    + raan_rate * dt
@@ -31,6 +41,17 @@ defmodule Orbis.ReducedOrbit do
   are kept; `raan_rate_mode` is `"fitted_j2_seeded"`. The model does not claim to
   be a pure J2 propagation.
 
+  ### `eccentric_secular`
+
+  Eight free elements: the four circular plane elements plus `h = e·sin ω`,
+  `k = e·cos ω`, `L0` (mean argument of latitude at epoch), and `n`. Derived
+  `e = sqrt(h² + k²)` and `ω = atan2(h, k)`. At an offset `dt` the model advances
+  `λ = L0 + n·dt`, forms the mean anomaly `M = λ − ω`, solves Kepler's equation
+  `E − e·sin E = M`, and places the satellite at radius `r = a(1 − e·cos E)` and
+  argument of latitude `u = ω + ν`. The `(h, k)` form is nonsingular: at `e = 0`
+  it reproduces `circular_secular` exactly with `arg_lat0 = L0`. The struct then
+  carries `h`, `k`, `e`, and `arg_perigee_rad` (= ω).
+
   ## Frames
 
   Fitting and evaluation run internally in **GCRS**; positions are returned in
@@ -41,14 +62,35 @@ defmodule Orbis.ReducedOrbit do
 
   ## Expected accuracy
 
-  Because eccentricity is fixed at zero, this version suits **near-circular**
-  orbits. Representative fits to a 15-minute MGEX SP3 track over a 6-hour window:
+  Representative drift (extrapolated model-vs-source position error): a fit to the
+  first ~6 hours of an MGEX SP3 track, drifted over the rest of the day. Numbers
+  are the **max** position error over the full day, measured against vendored MGEX
+  products (GRG for GPS/Galileo, a trimmed GBM product for BeiDou):
 
-    * Galileo / near-circular MEO (e ~ 2e-4, a ~ 29 600 km): in-window fit residual
-      ~2 km RMS; extrapolated drift over a full day ~5 km RMS / ~10 km max.
-    * GPS (e ~ 1e-2): the unmodelled radial eccentricity signal (~`a·e`) dominates,
-      giving ~100 km RMS — the circular model is **not** appropriate here. Eccentric
-      orbits await the optional-eccentricity slice.
+  | Orbit class                   | `circular_secular` | `eccentric_secular` |
+  |-------------------------------|--------------------|---------------------|
+  | GPS, e ~ 0.024 (G21)          | ~8 100 km          | ~8 km               |
+  | GPS, e ~ 0.020 (G02)          | ~9 400 km          | ~11 km              |
+  | BeiDou IGSO, e ~ 5e-3 (C08)   | ~2 200 km          | ~12 km              |
+  | BeiDou MEO, e ~ 9e-4 (C21)    | ~140 km            | ~5 km               |
+  | Galileo, e ~ 1e-4 (E01)       | ~8 km              | ~8 km (≈ circular)  |
+
+  Reading of the table:
+
+    * For **eccentric** orbits the circular model is unusable — the unmodelled
+      radial `a·e` signal compounds badly under extrapolation. `:eccentric_secular`
+      is the **recommended** model and brings the error down by one-to-three orders
+      of magnitude. Note this holds even for the *small* eccentricities of BeiDou
+      MEO/IGSO (e ~ 1e-3 to 5e-3): a few-hundred-metre to ~200 km radial signal
+      still wrecks the circular extrapolation, so eccentric wins there too.
+    * For **near-circular** orbits (Galileo, e ~ 1e-4) both models are comparable:
+      the eccentric model is essentially identical to the circular one (~8 km
+      either way), so it does not regress and is a safe default when the orbit
+      class is unknown.
+
+  These figures are measured through `drift/3` (the public NIF-backed pipeline,
+  GPST) against the vendored fixtures; the exact numbers shift slightly with the
+  fit window and drift cadence.
 
   These are characterisations, not guarantees: always measure a given fit with
   `drift/3` against the source. LEO accuracy is characterised once the SGP4/TLE
@@ -78,6 +120,9 @@ defmodule Orbis.ReducedOrbit do
             raan_rate_j2_rad_s: nil,
             arg_lat_rad: nil,
             mean_motion_rad_s: nil,
+            h: nil,
+            k: nil,
+            arg_perigee_rad: nil,
             fit: nil
 
   @type epoch ::
@@ -100,6 +145,9 @@ defmodule Orbis.ReducedOrbit do
           raan_rate_j2_rad_s: float(),
           arg_lat_rad: float(),
           mean_motion_rad_s: float(),
+          h: float() | nil,
+          k: float() | nil,
+          arg_perigee_rad: float() | nil,
           fit: map()
         }
 
@@ -110,7 +158,7 @@ defmodule Orbis.ReducedOrbit do
   # ------------------------------------------------------------------------
 
   @doc """
-  Fit the `circular_secular` model to a source orbit.
+  Fit a mean-element model to a source orbit.
 
   ## Sources
 
@@ -121,6 +169,10 @@ defmodule Orbis.ReducedOrbit do
 
   ## Options
 
+    * `:model` — `:circular_secular` (**default**) or `:eccentric_secular`. The
+      circular model fixes eccentricity at zero (best for near-circular orbits);
+      the eccentric model recovers the `a·e` radial signal (recommended for GPS
+      and other eccentric orbits). See the moduledoc accuracy table.
     * `:satellite_id` — e.g. `"G05"` (SP3 source)
     * `:window` — `{t0, t1}` epochs bounding the fit (SP3 source)
     * `:cadence_s` — positive sampling step in seconds (SP3 source, default `#{@default_cadence_s}`)
@@ -135,8 +187,8 @@ defmodule Orbis.ReducedOrbit do
   Returns `{:ok, %Orbis.ReducedOrbit{}}` or a tagged error:
   `{:too_few_samples, got, required}`, `:invalid_window`, `:invalid_cadence`,
   `:satellite_id_required`, `:singular_plane_fit`, `:raan_ambiguous`,
-  `{:unsupported_source_frame, frame}`, `:transform_unavailable`,
-  `:fit_did_not_converge`.
+  `{:unsupported_source_frame, frame}`, `{:unsupported_model, model}`,
+  `:transform_unavailable`, `:fit_did_not_converge`.
   """
   @spec fit(Orbis.SP3.t() | [{epoch(), {number(), number(), number()}}], keyword()) ::
           {:ok, t()} | {:error, term()}
@@ -146,6 +198,7 @@ defmodule Orbis.ReducedOrbit do
     sat_id = Keyword.get(opts, :satellite_id)
 
     with :ok <- require_satellite_id(sat_id),
+         {:ok, model} <- valid_model(Keyword.get(opts, :model, :circular_secular)),
          {:ok, cadence} <- valid_cadence(Keyword.get(opts, :cadence_s, @default_cadence_s)),
          {:ok, {t0, t1}} <- fetch_window(opts),
          {:ok, samples, requested} <- sample_sp3(sp3, sat_id, t0, t1, cadence) do
@@ -156,6 +209,7 @@ defmodule Orbis.ReducedOrbit do
         window: {to_naive(t0), to_naive(t1)},
         cadence_s: cadence,
         scale: sp3.time_scale,
+        model: model,
         requested: requested
       }
 
@@ -164,20 +218,21 @@ defmodule Orbis.ReducedOrbit do
   end
 
   def fit(samples, opts) when is_list(samples) do
-    case Keyword.get(opts, :frame, :ecef) do
-      :ecef ->
-        meta = %{
-          source: "samples",
-          window: window_of(samples),
-          cadence_s: nil,
-          scale: Keyword.get(opts, :time_scale, "UTC"),
-          requested: length(samples)
-        }
+    with {:ok, model} <- valid_model(Keyword.get(opts, :model, :circular_secular)),
+         :ecef <- Keyword.get(opts, :frame, :ecef) do
+      meta = %{
+        source: "samples",
+        window: window_of(samples),
+        cadence_s: nil,
+        scale: Keyword.get(opts, :time_scale, "UTC"),
+        model: model,
+        requested: length(samples)
+      }
 
-        run_fit(samples, meta)
-
-      other ->
-        {:error, {:unsupported_source_frame, other}}
+      run_fit(samples, meta)
+    else
+      {:error, _} = err -> err
+      other -> {:error, {:unsupported_source_frame, other}}
     end
   end
 
@@ -187,33 +242,23 @@ defmodule Orbis.ReducedOrbit do
     tuples =
       Enum.map(samples, fn {ep, {x, y, z}} -> {datetime_tuple(ep), x / 1.0, y / 1.0, z / 1.0} end)
 
-    case safe_nif(fn -> NIF.reduced_orbit_fit(tuples, meta.scale) end) do
-      {:ok, epoch_tuple, [a_m, e, i_rad, raan, raan_rate, raan_rate_j2, arg_lat, n],
-       {rms, max, n_samples}} ->
-        {:ok,
-         %__MODULE__{
-           # The reference epoch is the fitter's t0 (earliest sample), returned
-           # from Rust, so it is correct regardless of the caller's sample order.
-           epoch: to_naive(epoch_tuple),
-           time_scale: meta.scale,
-           a_m: a_m,
-           e: e,
-           i_rad: i_rad,
-           raan_rad: raan,
-           raan_rate_rad_s: raan_rate,
-           raan_rate_j2_rad_s: raan_rate_j2,
-           arg_lat_rad: arg_lat,
-           mean_motion_rad_s: n,
-           fit: %{
-             rms_m: rms,
-             max_m: max,
-             n_samples: n_samples,
-             requested: meta.requested,
-             window: meta.window,
-             cadence_s: meta.cadence_s,
-             source: meta.source
-           }
-         }}
+    model_str = Atom.to_string(meta.model)
+
+    case safe_nif(fn -> NIF.reduced_orbit_fit(tuples, meta.scale, model_str) end) do
+      {:ok, model_atom, epoch_tuple, elements, {rms, max, n_samples}} ->
+        fit_stats = %{
+          rms_m: rms,
+          max_m: max,
+          n_samples: n_samples,
+          requested: meta.requested,
+          window: meta.window,
+          cadence_s: meta.cadence_s,
+          source: meta.source
+        }
+
+        # The reference epoch is the fitter's t0 (earliest sample), returned from
+        # Rust, so it is correct regardless of the caller's sample order.
+        build_model(model_atom, to_naive(epoch_tuple), meta.scale, elements, fit_stats)
 
       {:error, reason} ->
         {:error, reason}
@@ -222,6 +267,64 @@ defmodule Orbis.ReducedOrbit do
         {:error, :transform_unavailable}
     end
   end
+
+  # Circular elements: eight floats, no eccentricity vector.
+  defp build_model(
+         :circular_secular,
+         epoch,
+         scale,
+         [a_m, e, i_rad, raan, raan_rate, raan_rate_j2, arg_lat, n],
+         fit_stats
+       ) do
+    {:ok,
+     %__MODULE__{
+       model: "circular_secular",
+       epoch: epoch,
+       time_scale: scale,
+       a_m: a_m,
+       e: e,
+       i_rad: i_rad,
+       raan_rad: raan,
+       raan_rate_rad_s: raan_rate,
+       raan_rate_j2_rad_s: raan_rate_j2,
+       arg_lat_rad: arg_lat,
+       mean_motion_rad_s: n,
+       fit: fit_stats
+     }}
+  end
+
+  # Eccentric elements: ten floats with h, k appended. `e` and arg_perigee are
+  # derived for display; the load-bearing values are h and k.
+  defp build_model(
+         :eccentric_secular,
+         epoch,
+         scale,
+         [a_m, e, i_rad, raan, raan_rate, raan_rate_j2, arg_lat, n, h, k],
+         fit_stats
+       ) do
+    {:ok,
+     %__MODULE__{
+       model: "eccentric_secular",
+       epoch: epoch,
+       time_scale: scale,
+       a_m: a_m,
+       e: e,
+       i_rad: i_rad,
+       raan_rad: raan,
+       raan_rate_rad_s: raan_rate,
+       raan_rate_j2_rad_s: raan_rate_j2,
+       arg_lat_rad: arg_lat,
+       mean_motion_rad_s: n,
+       h: h,
+       k: k,
+       arg_perigee_rad: arg_perigee(h, k),
+       fit: fit_stats
+     }}
+  end
+
+  # omega = atan2(h, k); undefined (pinned to 0) at e -> 0.
+  defp arg_perigee(h, k) when h * h + k * k < 1.0e-24, do: 0.0
+  defp arg_perigee(h, k), do: :math.atan2(h, k)
 
   # ------------------------------------------------------------------------
   # Evaluation
@@ -372,17 +475,19 @@ defmodule Orbis.ReducedOrbit do
       "frame" => m.frame,
       "time_scale" => m.time_scale,
       "epoch" => NaiveDateTime.to_iso8601(m.epoch),
-      "elements" => %{
-        "a_m" => m.a_m,
-        "e" => m.e,
-        "i_rad" => m.i_rad,
-        "raan_rad" => m.raan_rad,
-        "raan_rate_rad_s" => m.raan_rate_rad_s,
-        "raan_rate_j2_rad_s" => m.raan_rate_j2_rad_s,
-        "raan_rate_mode" => m.raan_rate_mode,
-        "arg_lat_rad" => m.arg_lat_rad,
-        "mean_motion_rad_s" => m.mean_motion_rad_s
-      },
+      "elements" =>
+        %{
+          "a_m" => m.a_m,
+          "e" => m.e,
+          "i_rad" => m.i_rad,
+          "raan_rad" => m.raan_rad,
+          "raan_rate_rad_s" => m.raan_rate_rad_s,
+          "raan_rate_j2_rad_s" => m.raan_rate_j2_rad_s,
+          "raan_rate_mode" => m.raan_rate_mode,
+          "arg_lat_rad" => m.arg_lat_rad,
+          "mean_motion_rad_s" => m.mean_motion_rad_s
+        }
+        |> maybe_put_eccentric(m),
       "fit" => %{
         "rms_m" => m.fit.rms_m,
         "max_m" => m.fit.max_m,
@@ -395,6 +500,18 @@ defmodule Orbis.ReducedOrbit do
       "units" => %{"length" => "m", "angle" => "rad", "rate" => "rad/s", "time" => "s"}
     }
   end
+
+  # The eccentric model adds the eccentricity vector and derived argument of
+  # perigee to the elements map; the circular model's map is unchanged.
+  defp maybe_put_eccentric(elements, %__MODULE__{model: "eccentric_secular"} = m) do
+    Map.merge(elements, %{
+      "h" => m.h,
+      "k" => m.k,
+      "arg_perigee_rad" => m.arg_perigee_rad
+    })
+  end
+
+  defp maybe_put_eccentric(elements, _m), do: elements
 
   @doc """
   Reconstruct a model from a `to_map/1` map. Validates the version and model id.
@@ -437,7 +554,49 @@ defmodule Orbis.ReducedOrbit do
     end
   end
 
+  def from_map(%{"version" => 1, "model" => "eccentric_secular"} = map) do
+    with %{"elements" => el, "fit" => fit, "epoch" => epoch_iso} <- map,
+         h when is_number(h) <- el["h"],
+         k when is_number(k) <- el["k"],
+         {:ok, epoch} <- NaiveDateTime.from_iso8601(epoch_iso) do
+      {:ok,
+       %__MODULE__{
+         version: 1,
+         model: "eccentric_secular",
+         frame: Map.get(map, "frame", "GCRS"),
+         time_scale: Map.get(map, "time_scale", "UTC"),
+         raan_rate_mode: Map.get(el, "raan_rate_mode", "fitted_j2_seeded"),
+         epoch: epoch,
+         a_m: el["a_m"],
+         e: el["e"],
+         i_rad: el["i_rad"],
+         raan_rad: el["raan_rad"],
+         raan_rate_rad_s: el["raan_rate_rad_s"],
+         raan_rate_j2_rad_s: el["raan_rate_j2_rad_s"],
+         arg_lat_rad: el["arg_lat_rad"],
+         mean_motion_rad_s: el["mean_motion_rad_s"],
+         h: h,
+         k: k,
+         arg_perigee_rad: Map.get(el, "arg_perigee_rad") || arg_perigee(h, k),
+         fit: %{
+           rms_m: fit["rms_m"],
+           max_m: fit["max_m"],
+           n_samples: fit["n_samples"],
+           requested: fit["requested"],
+           cadence_s: fit["cadence_s"],
+           source: fit["source"],
+           window: window_from_map(fit["window"])
+         }
+       }}
+    else
+      _ -> {:error, :malformed_map}
+    end
+  end
+
   def from_map(%{"version" => v, "model" => "circular_secular"}),
+    do: {:error, {:unsupported_version, v}}
+
+  def from_map(%{"version" => v, "model" => "eccentric_secular"}),
     do: {:error, {:unsupported_version, v}}
 
   def from_map(%{"model" => model}), do: {:error, {:unsupported_model, model}}
@@ -449,6 +608,10 @@ defmodule Orbis.ReducedOrbit do
 
   defp require_satellite_id(nil), do: {:error, :satellite_id_required}
   defp require_satellite_id(_), do: :ok
+
+  defp valid_model(:circular_secular), do: {:ok, :circular_secular}
+  defp valid_model(:eccentric_secular), do: {:ok, :eccentric_secular}
+  defp valid_model(other), do: {:error, {:unsupported_model, other}}
 
   # No threshold means no crossing is ever reported (an unreachable bound). A
   # finite threshold must be a non-negative number; NaN/negative are rejected.
@@ -515,6 +678,23 @@ defmodule Orbis.ReducedOrbit do
   defp window_of(samples) do
     epochs = Enum.map(samples, fn {ep, _} -> to_naive(ep) end)
     {Enum.min_by(epochs, &NaiveDateTime.to_erl/1), Enum.max_by(epochs, &NaiveDateTime.to_erl/1)}
+  end
+
+  # The flat element list the NIF consumes. Circular is eight floats (unchanged);
+  # eccentric appends h, k (ten floats), which the NIF reads back by length.
+  defp elements_tuple(%__MODULE__{model: "eccentric_secular"} = m) do
+    [
+      m.a_m,
+      m.e,
+      m.i_rad,
+      m.raan_rad,
+      m.raan_rate_rad_s,
+      m.raan_rate_j2_rad_s,
+      m.arg_lat_rad,
+      m.mean_motion_rad_s,
+      m.h,
+      m.k
+    ]
   end
 
   defp elements_tuple(%__MODULE__{} = m) do

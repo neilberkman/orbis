@@ -9,6 +9,9 @@ defmodule Orbis.ReducedOrbitTest do
   # approximation here (GPS, with e ~ 1e-2, is deliberately a poor fit — see the
   # module docs).
   @sat "E01"
+  # GPS G21 has the fixture's largest eccentricity (e ~ 0.024, a*e ~ 634 km),
+  # where the circular model fails hardest and the eccentric model wins most.
+  @gps "G21"
   @t0 ~N[2020-06-24 00:00:00]
   @t1 ~N[2020-06-24 06:00:00]
   @day_end ~N[2020-06-25 00:00:00]
@@ -228,6 +231,235 @@ defmodule Orbis.ReducedOrbitTest do
       assert NaiveDateTime.compare(reversed.epoch, @t0) == :eq
       assert_in_delta ordered.a_m, reversed.a_m, 1.0e-6
       assert_in_delta ordered.raan_rate_rad_s, reversed.raan_rate_rad_s, 1.0e-18
+    end
+  end
+
+  describe "fit/2 :model selection" do
+    test "defaults to circular_secular with no eccentricity fields", %{model: m} do
+      assert m.model == "circular_secular"
+      assert m.h == nil
+      assert m.k == nil
+      assert m.arg_perigee_rad == nil
+    end
+
+    test "model: :eccentric_secular returns an eccentric model", %{sp3: sp3} do
+      {:ok, ecc} =
+        ReducedOrbit.fit(sp3,
+          satellite_id: @sat,
+          window: {@t0, @t1},
+          cadence_s: 900,
+          model: :eccentric_secular
+        )
+
+      assert ecc.model == "eccentric_secular"
+      assert is_float(ecc.h)
+      assert is_float(ecc.k)
+      assert is_float(ecc.arg_perigee_rad)
+      assert is_float(ecc.e)
+      # Galileo is near-circular: a tiny but real eccentricity.
+      assert ecc.e < 1.0e-3
+      # Still a Galileo MEO: ~29 600 km axis, ~56 deg inclination.
+      assert_in_delta ecc.a_m / 1000.0, 29_600.0, 100.0
+      assert_in_delta ecc.i_rad * 180.0 / :math.pi(), 56.0, 1.0
+    end
+
+    test "an unknown model is a tagged error", %{sp3: sp3} do
+      assert {:error, {:unsupported_model, :wat}} =
+               ReducedOrbit.fit(sp3, satellite_id: @sat, window: {@t0, @t1}, model: :wat)
+    end
+  end
+
+  describe "eccentric_secular round-trips" do
+    setup %{sp3: sp3} do
+      {:ok, ecc} =
+        ReducedOrbit.fit(sp3,
+          satellite_id: @gps,
+          window: {@t0, @t1},
+          cadence_s: 900,
+          model: :eccentric_secular
+        )
+
+      {:ok, ecc: ecc}
+    end
+
+    test "to_map carries h, k, e and arg_perigee_rad", %{ecc: ecc} do
+      map = ReducedOrbit.to_map(ecc)
+      assert map["model"] == "eccentric_secular"
+      assert is_float(map["elements"]["h"])
+      assert is_float(map["elements"]["k"])
+      assert is_float(map["elements"]["e"])
+      assert is_float(map["elements"]["arg_perigee_rad"])
+      # Real GPS eccentricity recovered.
+      assert map["elements"]["e"] > 0.015
+    end
+
+    test "from_map reads the eccentric model back", %{ecc: ecc} do
+      assert {:ok, back} = ecc |> ReducedOrbit.to_map() |> ReducedOrbit.from_map()
+      assert back.model == "eccentric_secular"
+      assert back.h == ecc.h
+      assert back.k == ecc.k
+      assert_in_delta back.e, ecc.e, 1.0e-12
+      assert_in_delta back.arg_perigee_rad, ecc.arg_perigee_rad, 1.0e-12
+    end
+
+    test "survives a JSON round-trip", %{ecc: ecc} do
+      decoded = ecc |> ReducedOrbit.to_map() |> Jason.encode!() |> Jason.decode!()
+      assert {:ok, back} = ReducedOrbit.from_map(decoded)
+      assert_in_delta back.h, ecc.h, 1.0e-12
+      assert_in_delta back.k, ecc.k, 1.0e-12
+      assert_in_delta back.e, ecc.e, 1.0e-12
+    end
+
+    test "an eccentric map missing elements is malformed" do
+      assert {:error, :malformed_map} =
+               ReducedOrbit.from_map(%{"version" => 1, "model" => "eccentric_secular"})
+    end
+
+    test "an eccentric map with elements but missing h/k is malformed, not a raise" do
+      # The elements/fit/epoch keys are present, but h and k are absent: this must
+      # fail into the typed :malformed_map error, not raise from arg_perigee/2.
+      map = %{
+        "version" => 1,
+        "model" => "eccentric_secular",
+        "elements" => %{"a_m" => 2.6e7},
+        "fit" => %{},
+        "epoch" => "2020-06-24T00:00:00"
+      }
+
+      assert {:error, :malformed_map} = ReducedOrbit.from_map(map)
+    end
+  end
+
+  describe "drift table: eccentric vs circular by orbit class" do
+    test "GPS (e ~ 0.024): eccentric is dramatically better than circular", %{sp3: sp3} do
+      {:ok, circ} =
+        ReducedOrbit.fit(sp3, satellite_id: @gps, window: {@t0, @t1}, cadence_s: 900)
+
+      {:ok, ecc} =
+        ReducedOrbit.fit(sp3,
+          satellite_id: @gps,
+          window: {@t0, @t1},
+          cadence_s: 900,
+          model: :eccentric_secular
+        )
+
+      drift = fn model ->
+        {:ok, d} =
+          ReducedOrbit.drift(model, sp3,
+            satellite_id: @gps,
+            window: {@t0, @day_end},
+            cadence_s: 1800,
+            threshold_m: 1.0e9
+          )
+
+        d
+      end
+
+      dc = drift.(circ)
+      de = drift.(ecc)
+
+      # The circular model leaves the unmodelled a*e radial signal, which compounds
+      # badly under a day of extrapolation (tens to thousands of km).
+      assert dc.max_m > 50_000.0, "circular max #{Float.round(dc.max_m / 1000, 1)} km"
+      # The eccentric model recovers it to a few km.
+      assert de.max_m < 10_000.0, "eccentric max #{Float.round(de.max_m / 1000, 1)} km"
+      # The load-bearing claim: dramatically better (>5x), not a tautology.
+      assert de.max_m < dc.max_m / 5.0
+      assert de.rms_m < dc.rms_m / 5.0
+    end
+
+    test "Galileo (near-circular): eccentric is comparable, not a regression", %{sp3: sp3} do
+      {:ok, circ} =
+        ReducedOrbit.fit(sp3, satellite_id: @sat, window: {@t0, @t1}, cadence_s: 900)
+
+      {:ok, ecc} =
+        ReducedOrbit.fit(sp3,
+          satellite_id: @sat,
+          window: {@t0, @t1},
+          cadence_s: 900,
+          model: :eccentric_secular
+        )
+
+      drift = fn model ->
+        {:ok, d} =
+          ReducedOrbit.drift(model, sp3,
+            satellite_id: @sat,
+            window: {@t0, @day_end},
+            cadence_s: 1800,
+            threshold_m: 1.0e9
+          )
+
+        d
+      end
+
+      dc = drift.(circ)
+      de = drift.(ecc)
+
+      assert de.max_m < 20_000.0, "eccentric max #{Float.round(de.max_m / 1000, 1)} km"
+      # Comparable: the nonsingular model does not hurt the near-circular case.
+      # A tight relative bound (not a multi-km slack) so a real regression on this
+      # small-error orbit would be caught.
+      assert de.max_m < dc.max_m * 1.5
+    end
+
+    test "BeiDou MEO (C21) and IGSO (C08): eccentric beats circular (real GBM SP3)" do
+      bds = Orbis.SP3.load!(Path.join(__DIR__, "fixtures/sp3/GBM_BDS_C21_C08_trim.sp3"))
+      t0 = ~N[2020-06-25 00:00:00]
+      t1 = ~N[2020-06-25 06:00:00]
+      day_end = ~N[2020-06-26 00:00:00]
+
+      for sat <- ["C21", "C08"] do
+        {:ok, circ} = ReducedOrbit.fit(bds, satellite_id: sat, window: {t0, t1}, cadence_s: 300)
+
+        {:ok, ecc} =
+          ReducedOrbit.fit(bds,
+            satellite_id: sat,
+            window: {t0, t1},
+            cadence_s: 300,
+            model: :eccentric_secular
+          )
+
+        drift = fn model ->
+          {:ok, d} =
+            ReducedOrbit.drift(model, bds,
+              satellite_id: sat,
+              window: {t0, day_end},
+              cadence_s: 1200,
+              threshold_m: 1.0e9
+            )
+
+          d
+        end
+
+        dc = drift.(circ)
+        de = drift.(ecc)
+
+        assert dc.max_m > 50_000.0, "#{sat} circular #{Float.round(dc.max_m / 1000, 1)} km"
+        assert de.max_m < 20_000.0, "#{sat} eccentric #{Float.round(de.max_m / 1000, 1)} km"
+        assert de.max_m < dc.max_m / 5.0
+      end
+    end
+
+    test "GPS eccentric model evaluates within the apogee/perigee band", %{sp3: sp3} do
+      {:ok, ecc} =
+        ReducedOrbit.fit(sp3,
+          satellite_id: @gps,
+          window: {@t0, @t1},
+          cadence_s: 900,
+          model: :eccentric_secular
+        )
+
+      epoch = NaiveDateTime.add(@t0, 5400, :second)
+
+      {:ok, %{position: p, velocity: v}} =
+        ReducedOrbit.position_velocity(ecc, epoch, frame: :gcrs)
+
+      radius = :math.sqrt(p.x_m ** 2 + p.y_m ** 2 + p.z_m ** 2)
+      # Eccentric radius varies between a(1-e) and a(1+e), not a constant.
+      assert radius > ecc.a_m * (1.0 - ecc.e) - 1.0
+      assert radius < ecc.a_m * (1.0 + ecc.e) + 1.0
+      speed = :math.sqrt(v.vx_m_s ** 2 + v.vy_m_s ** 2 + v.vz_m_s ** 2)
+      assert speed > 0.0
     end
   end
 

@@ -8,7 +8,7 @@
 
 use astrodynamics::time::model::TimeScale;
 use astrodynamics_gnss::reduced_orbit::{
-    self as ro, CalendarEpoch, EcefSample, Elements, Frame, ReducedOrbitError,
+    self as ro, CalendarEpoch, EcefSample, Elements, Frame, Model, ReducedOrbitError,
 };
 use rustler::{Encoder, Env, Error, NifResult, Term};
 
@@ -36,6 +36,18 @@ mod atoms {
         singular_plane_fit,
         raan_ambiguous,
         fit_did_not_converge,
+        circular_secular,
+        eccentric_secular,
+        unsupported_model,
+    }
+}
+
+/// Map a model atom string onto the core [`Model`].
+fn model_from_str(s: &str) -> Result<Model, &str> {
+    match s {
+        "circular_secular" => Ok(Model::CircularSecular),
+        "eccentric_secular" => Ok(Model::EccentricSecular),
+        _ => Err(s),
     }
 }
 
@@ -50,13 +62,29 @@ fn cal_from_term(term: Term) -> NifResult<CalendarEpoch> {
     Ok(CalendarEpoch::new(d.0, d.1, d.2, t.0, t.1, second))
 }
 
-/// Decode the eight stored element floats plus the epoch tuple into [`Elements`].
-/// The elements travel as a list (rustler tuples cap out below this arity).
+/// Decode the stored element floats plus the epoch tuple into [`Elements`].
+///
+/// The list length selects the model: eight floats is the circular model
+/// (`[a_m, e, i, raan, raan_rate, raan_rate_j2, arg_lat, n]`); ten floats is the
+/// eccentric model with `h` and `k` appended. The circular layout is unchanged,
+/// so circular elements round-trip byte-for-byte.
 fn elements_from_parts(epoch: Term, e: &[f64]) -> NifResult<Elements> {
-    if e.len() != 8 {
-        return Err(Error::Term(Box::new("expected 8 element values")));
-    }
+    let (model, h, k, arg_perigee_rad) = match e.len() {
+        8 => (Model::CircularSecular, 0.0, 0.0, 0.0),
+        10 => {
+            let h = e[8];
+            let k = e[9];
+            let omega = if (h * h + k * k) < 1.0e-24 {
+                0.0
+            } else {
+                h.atan2(k)
+            };
+            (Model::EccentricSecular, h, k, omega)
+        }
+        _ => return Err(Error::Term(Box::new("expected 8 or 10 element values"))),
+    };
     Ok(Elements {
+        model,
         epoch: cal_from_term(epoch)?,
         a_m: e[0],
         e: e[1],
@@ -66,6 +94,9 @@ fn elements_from_parts(epoch: Term, e: &[f64]) -> NifResult<Elements> {
         raan_rate_j2_rad_s: e[5],
         arg_lat_rad: e[6],
         mean_motion_rad_s: e[7],
+        h,
+        k,
+        arg_perigee_rad,
     })
 }
 
@@ -93,41 +124,78 @@ fn encode_error<'a>(env: Env<'a>, e: &ReducedOrbitError) -> Term<'a> {
     (atoms::error(), reason).encode(env)
 }
 
-/// Fit the `circular_secular` model to ECEF samples.
+/// Fit the chosen model (`"circular_secular"` or `"eccentric_secular"`) to ECEF
+/// samples.
 ///
 /// `samples` is a list of `{ {{y,m,d},{h,min,s,us}}, x_m, y_m, z_m }`. On
-/// success returns `{:ok, epoch_tuple, [a_m, e, i, raan, raan_rate, raan_rate_j2,
-/// arg_lat, n], {rms_m, max_m, n_samples}}` where `epoch_tuple` is the fitted
-/// reference epoch `t0` (the earliest sample, chosen after ordering) so the
-/// caller never has to recover it from its own input order; on a degenerate
-/// input `{:error, reason}`.
+/// success returns `{:ok, model_atom, epoch_tuple, elements, {rms_m, max_m,
+/// n_samples}}` where `epoch_tuple` is the fitted reference epoch `t0` (the
+/// earliest sample, chosen after ordering) and `elements` is
+/// `[a_m, e, i, raan, raan_rate, raan_rate_j2, arg_lat, n]` for the circular
+/// model, with `h, k` appended for the eccentric model. On a degenerate input or
+/// an unknown model, `{:error, reason}`.
 #[rustler::nif(schedule = "DirtyCpu")]
 fn reduced_orbit_fit<'a>(
     env: Env<'a>,
     samples: Vec<(Term<'a>, f64, f64, f64)>,
     scale: String,
+    model: String,
 ) -> NifResult<Term<'a>> {
     let scale = scale_from_str(&scale)?;
+    let model = match model_from_str(&model) {
+        Ok(m) => m,
+        Err(bad) => {
+            let reason = (atoms::unsupported_model(), bad.to_string()).encode(env);
+            return Ok((atoms::error(), reason).encode(env));
+        }
+    };
     let mut ecef = Vec::with_capacity(samples.len());
     for (epoch, x_m, y_m, z_m) in samples {
         ecef.push(EcefSample::new(cal_from_term(epoch)?, x_m, y_m, z_m));
     }
 
-    match ro::fit(&ecef, scale) {
+    match ro::fit_with_model(&ecef, scale, model) {
         Ok(orbit) => {
             let e = orbit.elements;
-            let elements = vec![
-                e.a_m,
-                e.e,
-                e.i_rad,
-                e.raan_rad,
-                e.raan_rate_rad_s,
-                e.raan_rate_j2_rad_s,
-                e.arg_lat_rad,
-                e.mean_motion_rad_s,
-            ];
+            let (model_atom, elements) = match e.model {
+                Model::CircularSecular => (
+                    atoms::circular_secular(),
+                    vec![
+                        e.a_m,
+                        e.e,
+                        e.i_rad,
+                        e.raan_rad,
+                        e.raan_rate_rad_s,
+                        e.raan_rate_j2_rad_s,
+                        e.arg_lat_rad,
+                        e.mean_motion_rad_s,
+                    ],
+                ),
+                Model::EccentricSecular => (
+                    atoms::eccentric_secular(),
+                    vec![
+                        e.a_m,
+                        e.e,
+                        e.i_rad,
+                        e.raan_rad,
+                        e.raan_rate_rad_s,
+                        e.raan_rate_j2_rad_s,
+                        e.arg_lat_rad,
+                        e.mean_motion_rad_s,
+                        e.h,
+                        e.k,
+                    ],
+                ),
+            };
             let stats = (orbit.stats.rms_m, orbit.stats.max_m, orbit.stats.n_samples as i64);
-            Ok((atoms::ok(), epoch_to_tuple(&e.epoch), elements, stats).encode(env))
+            Ok((
+                atoms::ok(),
+                model_atom,
+                epoch_to_tuple(&e.epoch),
+                elements,
+                stats,
+            )
+                .encode(env))
         }
         Err(e) => Ok(encode_error(env, &e)),
     }
