@@ -549,13 +549,14 @@ defmodule Orbis.ReducedOrbit do
   def from_map(%{"version" => 1, "model" => "circular_secular"} = map) do
     with %{"elements" => el, "fit" => fit, "epoch" => epoch_iso} <- map,
          :ok <- require_numeric(el, @required_elements),
+         {:ok, scale} <- valid_scale(Map.get(map, "time_scale", "UTC")),
          {:ok, epoch} <- NaiveDateTime.from_iso8601(epoch_iso) do
       {:ok,
        %__MODULE__{
          version: 1,
          model: "circular_secular",
          frame: Map.get(map, "frame", "GCRS"),
-         time_scale: Map.get(map, "time_scale", "UTC"),
+         time_scale: scale,
          raan_rate_mode: Map.get(el, "raan_rate_mode", "fitted_j2_seeded"),
          epoch: epoch,
          a_m: el["a_m"],
@@ -586,13 +587,14 @@ defmodule Orbis.ReducedOrbit do
          :ok <- require_numeric(el, @required_elements),
          h when is_number(h) <- el["h"],
          k when is_number(k) <- el["k"],
+         {:ok, scale} <- valid_scale(Map.get(map, "time_scale", "UTC")),
          {:ok, epoch} <- NaiveDateTime.from_iso8601(epoch_iso) do
       {:ok,
        %__MODULE__{
          version: 1,
          model: "eccentric_secular",
          frame: Map.get(map, "frame", "GCRS"),
-         time_scale: Map.get(map, "time_scale", "UTC"),
+         time_scale: scale,
          raan_rate_mode: Map.get(el, "raan_rate_mode", "fitted_j2_seeded"),
          epoch: epoch,
          a_m: el["a_m"],

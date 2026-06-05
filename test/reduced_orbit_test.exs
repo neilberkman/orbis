@@ -368,6 +368,11 @@ defmodule Orbis.ReducedOrbitTest do
 
       assert {:error, :malformed_map} = ReducedOrbit.from_map(map)
     end
+
+    test "a persisted map with an invalid time scale is malformed", %{model: m} do
+      bad = Map.put(ReducedOrbit.to_map(m), "time_scale", "NOPE")
+      assert {:error, :malformed_map} = ReducedOrbit.from_map(bad)
+    end
   end
 
   describe "drift table: eccentric vs circular by orbit class" do
