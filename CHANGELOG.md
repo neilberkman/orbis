@@ -8,6 +8,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Rustler precompiled-NIF packaging support. Release tags now build GitHub
+  Release archives for common Linux/macOS/Windows targets, and the Hex package
+  will include `checksum-*.exs` so supported users do not need a local Rust
+  toolchain. If no checksum file is present, Orbis source-builds instead of
+  trying to download missing assets; `ORBIS_BUILD=1` remains the explicit
+  source-build escape hatch.
 - **`Orbis.GNSS.CarrierPhase`** — dual-frequency carrier-phase combinations and
   the quality tooling on them: geometry-free (`L1 - L2`), wide-lane wavelength,
   narrow-lane code, Melbourne-Wübbena, arc-wise cycle-slip detection (LLI bit,

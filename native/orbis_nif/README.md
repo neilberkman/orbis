@@ -1,20 +1,25 @@
-# NIF for Orbis.NIF
+# Orbis native NIF
 
-## To build the NIF module:
+`Orbis.NIF` loads this crate through `RustlerPrecompiled`. Packages that include
+`checksum-Elixir.Orbis.NIF.exs` use precompiled archives from GitHub Releases for
+the supported targets, and those archives are verified against the checksum file.
+If the checksum file is absent, Orbis builds from source instead of attempting a
+download. That keeps development and half-prepared releases source-buildable.
 
-- Your NIF will now build along with your project.
+Set `ORBIS_BUILD=1` to force a local source build with Rustler instead:
 
-## To load the NIF:
-
-```elixir
-defmodule Orbis.NIF do
-  use Rustler, otp_app: :orbis, crate: "orbis_nif"
-
-  # When your NIF is loaded, it will override this function.
-  def add(_a, _b), do: :erlang.nif_error(:nif_not_loaded)
-end
+```bash
+ORBIS_BUILD=1 mix compile
 ```
 
-## Examples
+The precompiled archive workflow is `.github/workflows/precompiled-nifs.yml`.
+After tagging a release and waiting for the archives to attach to the GitHub
+Release, generate the checksum file before publishing Hex:
 
-[This](https://github.com/rusterlium/NifIo) is a complete example of a NIF written in Rust.
+```bash
+mix rustler_precompiled.download Orbis.NIF --all --print
+mix hex.build --unpack
+```
+
+The unpack check should include `checksum-Elixir.Orbis.NIF.exs` and should not
+include `native/orbis_nif/target`.

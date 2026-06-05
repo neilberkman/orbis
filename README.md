@@ -26,9 +26,9 @@ SGP4/SDP4, coordinate transforms, GNSS positioning, orbit determination, and the
 | **JPL ephemeris**          | SPK/BSP reader for Sun, Moon, planets (Rust NIF)                                                                                                                                                                                                 |
 | **GNSS positioning**       | Single-point positioning from SP3 or broadcast ephemeris — GPS, Galileo, BeiDou, GLONASS — with Klobuchar/Saastamoinen–Niell corrections and DOP (Rust NIF)                                                                                      |
 | **GNSS ephemeris & data**  | SP3 precise products, RINEX 3.x/4.xx broadcast navigation, GNSS constellation catalogs, and optional SP3/CLK/NAV/IONEX fetch/cache from public archives                                                                                          |
-| **GNSS observations**      | RINEX 3 observation parsing with Hatanaka (CRINEX) decoding — turn a station's `.crx`/`.rnx` into pseudoranges and solve for its position (Rust NIF)                                                                                             |
+| **GNSS observations**      | RINEX 3 observation parsing with Hatanaka (CRINEX) decoding — raw observation values, carrier phases, pseudoranges, and station positioning from `.crx`/`.rnx` files (Rust NIF)                                                                    |
 | **Reduced orbit**          | Compact fitted mean-element model (circular or eccentric) for fast approximate position, caching, and transport — with source-backed drift reporting (Rust NIF)                                                                                  |
-| **GNSS measurements & QC** | Predicted observables (range, range-rate, Doppler, az/el), receiver velocity from Doppler, RAIM fault detection + FDE, dilution of precision & visibility, dual-frequency ionosphere-free combination, and code-differential (DGNSS) positioning |
+| **GNSS measurements & QC** | Predicted observables (range, range-rate, Doppler, az/el), receiver velocity from Doppler, RAIM fault detection + FDE, dilution of precision & visibility, carrier-phase combinations / slip detection / Hatch smoothing, dual-frequency ionosphere-free combination, and code-differential (DGNSS) positioning |
 | **GNSS signals**           | GPS L1 C/A Gold-code generation, correlation, and acquisition; coherent-integration loss; LNAV navigation-message subframe synthesis and decoding                                                                                                |
 | **Live data**              | CelesTrak TLE/OMM fetching, constellation loading, name search                                                                                                                                                                                   |
 | **Real-time tracking**     | GenServer with PubSub-compatible broadcasts                                                                                                                                                                                                      |
@@ -44,7 +44,10 @@ def deps do
 end
 ```
 
-Requires Rust for compiling the NIF. GNSS product fetching
+Release packages that include matching GitHub precompiled-NIF assets and
+`checksum-Elixir.Orbis.NIF.exs` download the Rust NIF for common Linux, macOS,
+and Windows targets. Development builds, source releases without a checksum, and
+`ORBIS_BUILD=1` builds compile the NIF locally from Rust. GNSS product fetching
 (`Orbis.GNSS.Data`) additionally needs the optional `:req` dependency:
 
 ```elixir
@@ -232,6 +235,29 @@ extract pseudoranges, and recover its position:
 [%{index: i, epoch: epoch} | _] = Orbis.GNSS.RINEX.Observations.epochs(obs)
 {:ok, prs} = Orbis.GNSS.RINEX.Observations.pseudoranges(obs, i, codes: %{"G" => ["C1C"]})
 {:ok, sol} = Orbis.GNSS.Positioning.solve(eph, prs, epoch)
+```
+
+Inspect carrier-phase observables and build the standard precise-positioning
+combinations:
+
+```elixir
+{:ok, phases} =
+  Orbis.GNSS.RINEX.Observations.phases(obs, i, codes: %{"G" => ["L1C", "L2W"]})
+
+g03 = phases["G03"]
+l1 = Enum.find(g03, &(&1.code == "L1C"))
+l2 = Enum.find(g03, &(&1.code == "L2W"))
+
+geometry_free_m = Orbis.GNSS.CarrierPhase.geometry_free(l1.value_m, l2.value_m)
+{:ok, mw_m} =
+  Orbis.GNSS.CarrierPhase.melbourne_wubbena(
+    l1.value,
+    l2.value,
+    24_000_000.0,
+    24_000_005.0,
+    l1.frequency_hz,
+    l2.frequency_hz
+  )
 ```
 
 Fit a compact reduced-orbit model and check its drift against the source:

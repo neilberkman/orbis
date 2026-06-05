@@ -10,6 +10,8 @@ jobs:
   test:
     name: Elixir ${{ matrix.elixir }} / OTP ${{ matrix.otp }} / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    env:
+      ORBIS_BUILD: "1"
     strategy:
       fail-fast: false
       matrix:

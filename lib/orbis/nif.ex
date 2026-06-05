@@ -1,9 +1,24 @@
+checksum_file = Path.expand("../../checksum-Elixir.Orbis.NIF.exs", __DIR__)
+force_build = System.get_env("ORBIS_BUILD") in ["1", "true"] or not File.exists?(checksum_file)
+
 defmodule Orbis.NIF do
   @moduledoc false
 
-  use Rustler,
+  use RustlerPrecompiled,
     otp_app: :orbis,
-    crate: "orbis_nif"
+    crate: "orbis_nif",
+    base_url:
+      "https://github.com/neilberkman/orbis/releases/download/v#{Mix.Project.config()[:version]}",
+    force_build: force_build,
+    nif_versions: ["2.15"],
+    targets: [
+      "aarch64-apple-darwin",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-apple-darwin",
+      "x86_64-pc-windows-msvc",
+      "x86_64-unknown-linux-gnu"
+    ],
+    version: Mix.Project.config()[:version]
 
   def propagate_with_elements(_tle_map, _datetime_tuple), do: :erlang.nif_error(:nif_not_loaded)
 

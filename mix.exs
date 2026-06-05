@@ -29,7 +29,8 @@ defmodule Orbis.MixProject do
   defp deps do
     [
       {:nx, "~> 0.7"},
-      {:rustler, "~> 0.36"},
+      {:rustler, "~> 0.37", optional: true},
+      {:rustler_precompiled, "~> 0.9"},
       {:astrodynamics, "~> 0.6.0"},
       {:req, "~> 0.5", optional: true},
       {:jason, "~> 1.4"},
@@ -49,18 +50,22 @@ defmodule Orbis.MixProject do
 
   defp package do
     [
-      files: [
-        "lib",
-        "native/orbis_nif/src",
-        "native/orbis_nif/Cargo*",
-        "mix.exs",
-        "README.md",
-        "CHANGELOG.md",
-        "LICENSE"
-      ],
+      files: package_files(),
       licenses: ["MIT"],
       links: %{"GitHub" => @source_url}
     ]
+  end
+
+  defp package_files do
+    [
+      "lib",
+      "native/orbis_nif/src",
+      "native/orbis_nif/Cargo*",
+      "mix.exs",
+      "README.md",
+      "CHANGELOG.md",
+      "LICENSE"
+    ] ++ Path.wildcard("checksum-*.exs")
   end
 
   defp docs do
