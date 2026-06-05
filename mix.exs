@@ -1,7 +1,7 @@
 defmodule Orbis.MixProject do
   use Mix.Project
 
-  @version "0.8.0"
+  @version "0.9.0"
   @source_url "https://github.com/neilberkman/orbis"
 
   def project do
@@ -41,8 +41,9 @@ defmodule Orbis.MixProject do
   defp description do
     """
     Satellite toolkit for Elixir — SGP4 propagation, coordinate transforms
-    (0 ULP Skyfield parity), orbit determination, conjunction assessment,
-    pass prediction, live TLE/OMM data, and real-time tracking. Rust NIF backend.
+    (0 ULP Skyfield parity), GNSS positioning, orbit determination, conjunction
+    assessment, pass prediction, live TLE/OMM data, and real-time tracking.
+    Rust NIF backend.
     """
   end
 

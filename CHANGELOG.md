@@ -4,7 +4,46 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.9.0] - 2026-06-05
+
+A large GNSS expansion — signal generation, measurement modelling, velocity,
+quality control, and differential positioning — alongside a consolidation of
+the whole GNSS surface under the `Orbis.GNSS.*` namespace.
+
+### Added
+
+- **`Orbis.GNSS.Signal.CA`** — GPS L1 C/A Gold-code generation, chip indexing,
+  and auto/cross-correlation (IS-GPS-200 G1/G2 generators and per-PRN taps).
+- **`Orbis.GNSS.Signal.Correlator`** — C/A code+carrier replica, coherent
+  correlation, a 2-D code-phase/Doppler acquisition search, and the
+  coherent-integration (sinc²) loss model.
+- **`Orbis.GNSS.Navigation.LNAV`** — GPS LNAV subframe synthesis and decoding:
+  TLM/HOW, time-of-week, subframe parity (IS-GPS-200 Table 20-XIV), and
+  ephemeris bit-packing.
+- **`Orbis.GNSS.Observables`** — predicted geometric range, range-rate, Doppler,
+  satellite clock, elevation, and azimuth from a receiver position and an SP3
+  ephemeris, with light-time (transmit-time) and Sagnac corrections.
+- **`Orbis.GNSS.Geometry`** — satellite visibility above an elevation mask,
+  dilution of precision (GDOP/PDOP/HDOP/VDOP/TDOP), DOP/visibility time series,
+  and rise/set passes.
+- **`Orbis.GNSS.Velocity`** — receiver velocity and clock drift from Doppler or
+  pseudorange-rate measurements by least squares over the line-of-sight geometry.
+- **`Orbis.GNSS.QC`** — measurement quality control: residual-based RAIM fault
+  detection, leave-one-out fault detection and exclusion (FDE), and
+  elevation/C-N₀ measurement weighting.
+- **`Orbis.GNSS.IonosphereFree`** — the dual-frequency ionosphere-free
+  pseudorange combination, with standard per-system frequency pairs
+  (GPS L1/L2, Galileo E1/E5a, BeiDou B1I/B3I).
+- **`Orbis.GNSS.DGNSS`** — code-differential positioning: base-station
+  pseudorange corrections and corrected rover solves that cancel the errors
+  common to both receivers (satellite clock, ephemeris, short-baseline
+  atmosphere).
+- **`Orbis.GNSS.SolutionReport`** — a per-satellite and summary diagnostic over
+  a position solution: elevation/azimuth, post-fit and RAIM-normalized
+  residuals, DOP, residual RMS, and the integrity verdict.
+- **`Orbis.GNSS.ReducedOrbit.Piecewise`** — a piecewise (segmented)
+  reduced-orbit model that tiles a span into contiguous fitted segments for
+  tighter caching/transport accuracy than a single mean-element fit.
 
 ### Changed
 
@@ -18,6 +57,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Internal GNSS implementation helpers were consolidated under
   `Orbis.GNSS.Core` for shared constants, ECEF input normalization,
   epoch/window handling, validation, source sampling, and versioned-map guards.
+- Hardened public-API input validation across the GNSS modules: malformed
+  receiver/base positions, out-of-range RAIM options, sub-second piecewise
+  segment lengths, out-of-range LNAV flags, and duplicate observations now
+  return tagged errors (or raise a clear `ArgumentError` for invalid options)
+  instead of crashing, looping, or silently truncating.
 
 ## [0.8.0] - 2026-06-05
 
