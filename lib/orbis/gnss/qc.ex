@@ -434,89 +434,141 @@ defmodule Orbis.GNSS.QC do
   @doc """
   Chi-square inverse CDF (quantile): the value `x` such that
   `P(X <= x) = p` for a chi-square distribution with `k` degrees of freedom.
+  `p` must be strictly between 0 and 1, and `k` must be a positive integer.
 
-  Computed via the **Wilson-Hilferty approximation**
-
-      x ~= k * (1 - 2/(9k) + z_p * sqrt(2/(9k)))^3
-
-  where `z_p` is the standard-normal quantile for cumulative probability `p`
-  (obtained from the Acklam rational inverse-normal approximation). For
-  fault-detection use, `p = 1 - p_fa`.
-
-  In the deep upper tail at small `k` (the regime the fault test uses, e.g.
-  `p = 0.999` for `p_fa = 1e-3`) the Wilson-Hilferty form is accurate to a few
-  percent and is a consistently **conservative** over-estimate of the true
-  critical value (which is the safe direction for fault detection: it errs
-  toward fewer false alarms). The published reference critical values at
-  `p = 0.999`, alongside what this function actually returns, are:
-
-      dof:        1       2       3       4       5
-      reference: 10.828  13.816  16.266  18.467  20.515   (chi-square tables)
-      chi2_inv:  11.157  14.133  16.551  18.724  20.751   (this function)
-
-  i.e. an over-estimate of ~3.0% at `dof = 1` shrinking to ~1.2% at `dof = 5`.
-
-  The result is clamped to be non-negative: a chi-square quantile is always
-  `>= 0`, but the cubed Wilson-Hilferty base can go negative for strongly
-  negative `z_p` (deep *lower* tail at small `k`), which the documented
-  fault-detection usage (`p` near `1`) never reaches.
+  The chi-square CDF is the regularized lower incomplete gamma function
+  `P(k/2, x/2)`. This function inverts that CDF by bracketing and bisection,
+  evaluating `P(a, x)` with the standard series / continued-fraction split from
+  Numerical Recipes. It is dependency-free but checked against scipy's
+  `scipy.stats.chi2.ppf` oracle in the test fixture.
   """
   @spec chi2_inv(float(), pos_integer()) :: float()
-  def chi2_inv(p, k) when k >= 1 do
-    z = inv_normal_cdf(p)
-    t = 2.0 / (9.0 * k)
-    max(0.0, k * :math.pow(1.0 - t + z * :math.sqrt(t), 3.0))
+  def chi2_inv(p, k) when is_number(p) and p > 0.0 and p < 1.0 and is_integer(k) and k >= 1 do
+    a = 0.5 * k
+    hi0 = max(k + 10.0 * :math.sqrt(2.0 * k), 1.0)
+    hi = chi2_bracket_hi(p, a, hi0)
+    chi2_bisect(p, a, 0.0, hi, 0)
   end
 
-  # Acklam's rational approximation to the inverse standard-normal CDF.
-  # Maximum relative error ~1.15e-9 over the full range.
-  @a1 -3.969683028665376e1
-  @a2 2.209460984245205e2
-  @a3 -2.759285104469687e2
-  @a4 1.383577518672690e2
-  @a5 -3.066479806614716e1
-  @a6 2.506628277459239e0
-
-  @b1 -5.447609879822406e1
-  @b2 1.615858368580409e2
-  @b3 -1.556989798598866e2
-  @b4 6.680131188771972e1
-  @b5 -1.328068155288572e1
-
-  @c1 -7.784894002430293e-3
-  @c2 -3.223964580411365e-1
-  @c3 -2.400758277161838e0
-  @c4 -2.549732539343734e0
-  @c5 4.374664141464968e0
-  @c6 2.938163982698783e0
-
-  @d1 7.784695709041462e-3
-  @d2 3.224671290700398e-1
-  @d3 2.445134137142996e0
-  @d4 3.754408661907416e0
-
-  @p_low 0.02425
-  @p_high 1.0 - 0.02425
-
-  defp inv_normal_cdf(p) when p > 0.0 and p < @p_low do
-    q = :math.sqrt(-2.0 * :math.log(p))
-
-    (((((@c1 * q + @c2) * q + @c3) * q + @c4) * q + @c5) * q + @c6) /
-      ((((@d1 * q + @d2) * q + @d3) * q + @d4) * q + 1.0)
+  def chi2_inv(p, k) do
+    raise ArgumentError,
+          "chi2_inv probability must be strictly between 0 and 1 and dof must be a positive integer, got p=#{inspect(p)}, dof=#{inspect(k)}"
   end
 
-  defp inv_normal_cdf(p) when p >= @p_low and p <= @p_high do
-    q = p - 0.5
-    r = q * q
-
-    (((((@a1 * r + @a2) * r + @a3) * r + @a4) * r + @a5) * r + @a6) * q /
-      (((((@b1 * r + @b2) * r + @b3) * r + @b4) * r + @b5) * r + 1.0)
+  defp chi2_bracket_hi(p, a, hi) do
+    if chi2_cdf(hi, a) >= p do
+      hi
+    else
+      chi2_bracket_hi(p, a, hi * 2.0)
+    end
   end
 
-  defp inv_normal_cdf(p) when p > @p_high and p < 1.0 do
-    q = :math.sqrt(-2.0 * :math.log(1.0 - p))
+  defp chi2_bisect(_p, _a, lo, hi, 120), do: 0.5 * (lo + hi)
 
-    -(((((@c1 * q + @c2) * q + @c3) * q + @c4) * q + @c5) * q + @c6) /
-      ((((@d1 * q + @d2) * q + @d3) * q + @d4) * q + 1.0)
+  defp chi2_bisect(p, a, lo, hi, iter) do
+    mid = 0.5 * (lo + hi)
+
+    if chi2_cdf(mid, a) < p do
+      chi2_bisect(p, a, mid, hi, iter + 1)
+    else
+      chi2_bisect(p, a, lo, mid, iter + 1)
+    end
+  end
+
+  defp chi2_cdf(x, a), do: regularized_gamma_p(a, 0.5 * x)
+
+  @gamma_eps 1.0e-15
+  @gamma_fpmin 1.0e-300
+  @gamma_itmax 1_000
+
+  defp regularized_gamma_p(_a, x) when x <= 0.0, do: 0.0
+
+  defp regularized_gamma_p(a, x) when x < a + 1.0 do
+    gln = log_gamma(a)
+    {sum, _del, _ap} = gamma_series(a, x, 1.0 / a, 1.0 / a, a, 1)
+    sum * :math.exp(-x + a * :math.log(x) - gln)
+  end
+
+  defp regularized_gamma_p(a, x) do
+    gln = log_gamma(a)
+    q = gamma_continued_fraction(a, x) * :math.exp(-x + a * :math.log(x) - gln)
+    1.0 - q
+  end
+
+  defp gamma_series(_a, _x, sum, del, ap, n) when n > @gamma_itmax, do: {sum, del, ap}
+
+  defp gamma_series(a, x, sum, del, ap, n) do
+    ap = ap + 1.0
+    del = del * x / ap
+    sum = sum + del
+
+    if abs(del) < abs(sum) * @gamma_eps do
+      {sum, del, ap}
+    else
+      gamma_series(a, x, sum, del, ap, n + 1)
+    end
+  end
+
+  defp gamma_continued_fraction(a, x) do
+    b = x + 1.0 - a
+    c = 1.0 / @gamma_fpmin
+    d = safe_denominator(b)
+    d = 1.0 / d
+    gamma_cf_iter(a, x, b, c, d, d, 1)
+  end
+
+  defp gamma_cf_iter(_a, _x, _b, _c, _d, h, n) when n > @gamma_itmax, do: h
+
+  defp gamma_cf_iter(a, x, b, c, d, h, n) do
+    an = -n * (n - a)
+    b = b + 2.0
+    d = safe_denominator(an * d + b)
+    c = safe_denominator(b + an / c)
+    d = 1.0 / d
+    delta = d * c
+    h = h * delta
+
+    if abs(delta - 1.0) < @gamma_eps do
+      h
+    else
+      gamma_cf_iter(a, x, b, c, d, h, n + 1)
+    end
+  end
+
+  defp safe_denominator(x) when abs(x) < @gamma_fpmin, do: @gamma_fpmin
+  defp safe_denominator(x), do: x
+
+  # Lanczos log-gamma approximation, g=7, coefficients from Numerical Recipes /
+  # common CPython-compatible implementations. The chi-square gate uses positive
+  # half-integer/integer `a = k/2`, so the reflection branch is only here for
+  # completeness.
+  @lanczos [
+    0.9999999999998099,
+    676.5203681218851,
+    -1259.1392167224028,
+    771.3234287776531,
+    -176.6150291621406,
+    12.507343278686905,
+    -0.13857109526572012,
+    9.984369578019572e-6,
+    1.5056327351493116e-7
+  ]
+  @sqrt_2pi 2.5066282746310002
+
+  defp log_gamma(z) when z < 0.5 do
+    :math.log(:math.pi()) - :math.log(:math.sin(:math.pi() * z)) - log_gamma(1.0 - z)
+  end
+
+  defp log_gamma(z) do
+    z = z - 1.0
+    [head | rest] = @lanczos
+
+    x =
+      rest
+      |> Enum.with_index(1)
+      |> Enum.reduce(head, fn {coef, i}, acc -> acc + coef / (z + i) end)
+
+    t = z + 7.5
+    :math.log(@sqrt_2pi) + (z + 0.5) * :math.log(t) - t + :math.log(x)
   end
 end

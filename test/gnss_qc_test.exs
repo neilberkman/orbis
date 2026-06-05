@@ -112,14 +112,15 @@ defmodule Orbis.GNSS.QCTest do
 
       for {dof, ref} <- published do
         got = QC.chi2_inv(0.999, dof)
-        # Wilson-Hilferty in the far upper tail (p = 0.999) at small dof is a
-        # slight, consistently conservative *over*-estimate of the true critical
-        # value (~0.24-0.33 here), shrinking as dof grows. A conservative
-        # threshold is the safe direction for fault detection (fewer false
-        # alarms). Bound the absolute error and confirm the conservative sign.
-        assert_in_delta got, ref, 0.35
-        assert got >= ref
+        assert_in_delta got, ref, 1.0e-3
       end
+    end
+
+    test "rejects invalid probabilities and degrees of freedom at the public boundary" do
+      assert_raise ArgumentError, fn -> QC.chi2_inv(0.0, 1) end
+      assert_raise ArgumentError, fn -> QC.chi2_inv(1.0, 1) end
+      assert_raise ArgumentError, fn -> QC.chi2_inv(0.95, 0) end
+      assert_raise ArgumentError, fn -> QC.chi2_inv(0.95, 1.5) end
     end
   end
 

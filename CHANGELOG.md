@@ -26,12 +26,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   returns `:ok` or raises `ArgumentError` describing the findings (e.g. a
   stale-active PRN that is active and usable in the catalog but missing from a
   current SP3 product). Intended for catalog-build automation, not the runtime.
+- Python/georinex/scipy oracle gates for the recent Orbis-only GNSS layer:
+  raw RINEX `values/3` / `phases/3`, `CarrierPhase` combinations/slip/Hatch
+  smoothing, `IonosphereFree` coefficients and combinations, `GNSS.QC`
+  weighting/chi-square thresholds, `GNSS.Observables.predict/5`, C/A
+  code/correlation/acquisition, LNAV parity/subframe synthesis,
+  visibility/DOP, velocity, DGNSS, `SolutionReport`, and `ReducedOrbit` /
+  `ReducedOrbit.Piecewise` fit/evaluation/drift against Astropy/scipy.
 
 ### Changed
 
 - `Orbis.GNSS.Constellation.to_csv/2` gains a `:booleans` option: `:lower`
   (default, conventional `true`/`false`) or `:title` (`True`/`False`, for a
   pandas-style consumer that reads the `active` column as Python booleans).
+- `Orbis.GNSS.QC.chi2_inv/2` now inverts the regularized-gamma chi-square CDF
+  and is checked against `scipy.stats.chi2.ppf`, replacing the older
+  Wilson-Hilferty approximation.
 
 ## [0.9.0] - 2026-06-05
 
