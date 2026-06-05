@@ -86,6 +86,8 @@ defmodule Orbis.NIF do
   def rinex_obs_pseudoranges(_handle, _epoch_index, _overrides),
     do: :erlang.nif_error(:nif_not_loaded)
 
+  def rinex_obs_values(_handle, _epoch_index), do: :erlang.nif_error(:nif_not_loaded)
+
   def reduced_orbit_fit(_samples, _scale, _model), do: :erlang.nif_error(:nif_not_loaded)
 
   def reduced_orbit_position(_epoch, _scale, _elements, _query, _frame),

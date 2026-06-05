@@ -83,4 +83,69 @@ defmodule Orbis.GNSS.RINEX.ObservationsSppTest do
     obs = Observations.load!(@obs_path)
     assert {:error, :epoch_out_of_range} = Observations.pseudoranges(obs, 9_999)
   end
+
+  describe "values/3 (raw multi-code observations)" do
+    test "exposes pseudorange, carrier-phase, Doppler, and signal-strength values" do
+      obs = Observations.load!(@obs_path)
+      {:ok, by_sat} = Observations.values(obs, 0)
+
+      g05 = Map.fetch!(by_sat, "G05")
+      codes = Enum.map(g05, & &1.code)
+      # The fixture carries L1/L2/L5 code + phase + Doppler + SNR for G05.
+      assert "C1C" in codes and "L1C" in codes and "L2W" in codes and "D1C" in codes
+
+      l1c = Enum.find(g05, &(&1.code == "L1C"))
+      assert l1c.kind == :carrier_phase
+      assert l1c.units == :cycles
+      assert is_float(l1c.value) and l1c.value > 0.0
+
+      c1c = Enum.find(g05, &(&1.code == "C1C"))
+      assert c1c.kind == :pseudorange and c1c.units == :meters
+
+      assert Enum.find(g05, &(&1.code == "D1C")).kind == :doppler
+      assert Enum.find(g05, &(&1.code == "S1C")).kind == :signal_strength
+    end
+
+    test "index and epoch-tuple selection agree; out-of-range is tagged" do
+      obs = Observations.load!(@obs_path)
+      [%{index: index, epoch: epoch} | _] = Observations.epochs(obs)
+
+      assert Observations.values(obs, index) == Observations.values(obs, epoch)
+      assert {:error, :epoch_out_of_range} = Observations.values(obs, 9_999)
+    end
+  end
+
+  describe "phases/3 (carrier phase with wavelength)" do
+    test "returns cycles plus metres for GPS, and the L1/L2 geometry-free offset is small" do
+      obs = Observations.load!(@obs_path)
+      {:ok, by_sat} = Observations.phases(obs, 0)
+
+      g05 = Map.fetch!(by_sat, "G05")
+      assert Enum.all?(g05, &(&1.code |> String.starts_with?("L")))
+
+      l1 = Enum.find(g05, &(&1.code == "L1C"))
+      l2 = Enum.find(g05, &(&1.code == "L2W"))
+
+      # GPS L1 wavelength is ~0.190294 m; L2 ~0.244210 m.
+      assert_in_delta l1.wavelength_m, 0.190_294, 1.0e-5
+      assert_in_delta l2.wavelength_m, 0.244_210, 1.0e-5
+
+      # value_m = cycles * wavelength; both phases track the same geometric range,
+      # so L1 - L2 in metres is the small (sub-metre) geometry-free combination,
+      # not a full pseudorange-scale difference.
+      assert abs(l1.value_m - l2.value_m) < 5.0
+    end
+
+    test "GLONASS phase has nil wavelength (FDMA channel not yet exposed)" do
+      obs = Observations.load!(@obs_path)
+      {:ok, by_sat} = Observations.phases(obs, 0)
+
+      glonass = Enum.find(by_sat, fn {sat, _} -> String.starts_with?(sat, "R") end)
+
+      if glonass do
+        {_sat, rows} = glonass
+        assert Enum.all?(rows, &(&1.wavelength_m == nil and &1.value_m == nil))
+      end
+    end
+  end
 end

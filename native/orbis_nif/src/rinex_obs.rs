@@ -27,6 +27,12 @@ pub struct RinexObsResource {
     pub obs: RinexObs,
 }
 
+/// One labelled observation crossing the boundary: code, value (`nil` if blank),
+/// loss-of-lock indicator, signal-strength indicator.
+type ObsValueRow = (String, Option<f64>, Option<u8>, Option<u8>);
+/// A satellite token paired with its labelled observation values.
+type SatObsRow = (String, Vec<ObsValueRow>);
+
 #[rustler::resource_impl]
 impl rustler::Resource for RinexObsResource {}
 
@@ -148,6 +154,61 @@ fn rinex_obs_pseudoranges(
         .collect();
 
     (rustler::types::atom::ok(), prs).encode(env)
+}
+
+/// Raw per-satellite observation values for one epoch (by index): for each
+/// satellite, every observation code its system carries (in the header's declared
+/// order) paired with its value, loss-of-lock indicator (LLI), and signal-strength
+/// indicator (SSI). Per the RINEX convention the value is metres for `C*`
+/// pseudoranges and cycles for `L*` carrier phase (Hz for `D*` Doppler, etc.);
+/// units are the caller's to interpret from the code's leading letter.
+///
+/// Returns `{:ok, [{"G01", [{"C1C", value | nil, lli | nil, ssi | nil}, ...]}, ...]}`
+/// or `{:error, :epoch_out_of_range}`. A blank observation has a `nil` value;
+/// trailing blank observations a satellite did not report are simply absent.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn rinex_obs_values(
+    env: Env<'_>,
+    handle: ResourceArc<RinexObsResource>,
+    epoch_index: usize,
+) -> Term<'_> {
+    let Some(epoch) = handle.obs.epochs.get(epoch_index) else {
+        let reason = rustler::types::atom::Atom::from_str(env, "epoch_out_of_range")
+            .map(|a| a.encode(env))
+            .unwrap_or_else(|_| "epoch_out_of_range".encode(env));
+        return (rustler::types::atom::error(), reason).encode(env);
+    };
+
+    let obs_codes = &handle.obs.header.obs_codes;
+
+    // Each satellite's value vector is index-aligned to its system's declared
+    // observation-code list; zip the two so every value is labelled by its code.
+    let rows: Vec<SatObsRow> = epoch
+        .sats
+        .iter()
+        .map(|(sat, values)| {
+            let token = sat.to_string();
+
+            let codes = token
+                .chars()
+                .next()
+                .and_then(GnssSystem::from_letter)
+                .and_then(|system| obs_codes.get(&system));
+
+            let per_code = match codes {
+                Some(code_list) => code_list
+                    .iter()
+                    .zip(values.iter())
+                    .map(|(code, v)| (code.clone(), v.value, v.lli, v.ssi))
+                    .collect(),
+                None => Vec::new(),
+            };
+
+            (token, per_code)
+        })
+        .collect();
+
+    (rustler::types::atom::ok(), rows).encode(env)
 }
 
 /// Encode one epoch as `{ {{y,mo,d},{h,mi,second_float}}, flag, sat_count }`.
