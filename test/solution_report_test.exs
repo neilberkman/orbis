@@ -1,11 +1,11 @@
-defmodule Orbis.SolutionReportTest do
+defmodule Orbis.GNSS.SolutionReportTest do
   use ExUnit.Case, async: true
 
-  alias Orbis.GnssObservables
-  alias Orbis.GnssQC
-  alias Orbis.PointPositioning
-  alias Orbis.SolutionReport
-  alias Orbis.SP3
+  alias Orbis.GNSS.Observables
+  alias Orbis.GNSS.Positioning
+  alias Orbis.GNSS.QC
+  alias Orbis.GNSS.SolutionReport
+  alias Orbis.GNSS.SP3
 
   @grg Path.join(__DIR__, "fixtures/sp3/GRG0MGXFIN_20201760000_01D_15M_ORB.SP3")
 
@@ -29,7 +29,7 @@ defmodule Orbis.SolutionReportTest do
 
     visible =
       sp3
-      |> GnssObservables.predict_all(@rx, @epoch)
+      |> Observables.predict_all(@rx, @epoch)
       |> Enum.filter(fn {id, r} -> String.starts_with?(id, "G") and match?({:ok, _}, r) end)
       |> Enum.map(fn {id, {:ok, obs}} -> {id, obs} end)
       |> Enum.filter(fn {_id, obs} -> obs.elevation_deg > 0.0 end)
@@ -41,7 +41,7 @@ defmodule Orbis.SolutionReportTest do
         {id, obs.geometric_range_m + @c * (@rx_bias_s - obs.sat_clock_s)}
       end)
 
-    {:ok, sol} = PointPositioning.solve(sp3, clean_obs, @epoch, @solve_opts)
+    {:ok, sol} = Positioning.solve(sp3, clean_obs, @epoch, @solve_opts)
     {:ok, report} = SolutionReport.build(sol, sp3, @epoch)
 
     {:ok, sp3: sp3, visible: visible, clean_obs: clean_obs, sol: sol, report: report}
@@ -56,17 +56,17 @@ defmodule Orbis.SolutionReportTest do
       end
     end
 
-    test "each used-sat normalized_residual EQUALS GnssQC.raim exactly", ctx do
-      raim = GnssQC.raim(ctx.sol)
+    test "each used-sat normalized_residual EQUALS QC.raim exactly", ctx do
+      raim = QC.raim(ctx.sol)
 
       for row <- used_rows(ctx.report) do
         assert row.normalized_residual == raim.normalized_residuals[row.satellite_id]
       end
     end
 
-    test "each row el/az EQUALS GnssObservables.predict at the solved position", ctx do
+    test "each row el/az EQUALS Observables.predict at the solved position", ctx do
       for row <- ctx.report.satellites do
-        case GnssObservables.predict(ctx.sp3, row.satellite_id, ctx.sol.position, @epoch) do
+        case Observables.predict(ctx.sp3, row.satellite_id, ctx.sol.position, @epoch) do
           {:ok, obs} ->
             assert row.elevation_deg == obs.elevation_deg
             assert row.azimuth_deg == obs.azimuth_deg
@@ -87,8 +87,8 @@ defmodule Orbis.SolutionReportTest do
       assert ctx.report.summary.residual_rms_m == expected
     end
 
-    test "integrity block EQUALS GnssQC.raim(solution)", ctx do
-      raim = GnssQC.raim(ctx.sol)
+    test "integrity block EQUALS QC.raim(solution)", ctx do
+      raim = QC.raim(ctx.sol)
 
       expected =
         Map.take(raim, [
@@ -129,7 +129,7 @@ defmodule Orbis.SolutionReportTest do
           if sat == biased_sat, do: {sat, pr + 200.0}, else: {sat, pr}
         end)
 
-      {:ok, faulted_sol} = PointPositioning.solve(ctx.sp3, faulted_obs, @epoch, @solve_opts)
+      {:ok, faulted_sol} = Positioning.solve(ctx.sp3, faulted_obs, @epoch, @solve_opts)
       {:ok, faulted_report} = SolutionReport.build(faulted_sol, ctx.sp3, @epoch)
 
       {:ok, biased_sat: biased_sat, faulted_report: faulted_report}
@@ -173,7 +173,7 @@ defmodule Orbis.SolutionReportTest do
       # negative-elevation entry by using a satellite that is below the horizon.
       below =
         ctx.sp3
-        |> GnssObservables.predict_all(@rx, @epoch)
+        |> Observables.predict_all(@rx, @epoch)
         |> Enum.filter(fn {id, r} -> String.starts_with?(id, "G") and match?({:ok, _}, r) end)
         |> Enum.map(fn {id, {:ok, obs}} -> {id, obs} end)
         |> Enum.find(fn {_id, obs} -> obs.elevation_deg < 0.0 end)
@@ -188,7 +188,7 @@ defmodule Orbis.SolutionReportTest do
             ctx.clean_obs
         end
 
-      {:ok, sol} = PointPositioning.solve(ctx.sp3, obs_with_rejected, @epoch, @solve_opts)
+      {:ok, sol} = Positioning.solve(ctx.sp3, obs_with_rejected, @epoch, @solve_opts)
       {:ok, report} = SolutionReport.build(sol, ctx.sp3, @epoch)
 
       {:ok, rej_sol: sol, rej_report: report}
@@ -267,7 +267,7 @@ defmodule Orbis.SolutionReportTest do
   describe "degenerate geometry" do
     test "dof <= 0 still reports, surfaced as testable?: false", ctx do
       four_obs = Enum.take(ctx.clean_obs, 4)
-      {:ok, sol} = PointPositioning.solve(ctx.sp3, four_obs, @epoch, @solve_opts)
+      {:ok, sol} = Positioning.solve(ctx.sp3, four_obs, @epoch, @solve_opts)
       assert length(sol.used_sats) == 4
 
       assert {:ok, report} = SolutionReport.build(sol, ctx.sp3, @epoch)

@@ -1,8 +1,8 @@
-defmodule Orbis.ReducedOrbit.PiecewiseTest do
+defmodule Orbis.GNSS.ReducedOrbit.PiecewiseTest do
   use ExUnit.Case, async: true
 
-  alias Orbis.ReducedOrbit
-  alias Orbis.ReducedOrbit.Piecewise
+  alias Orbis.GNSS.ReducedOrbit
+  alias Orbis.GNSS.ReducedOrbit.Piecewise
 
   @grg Path.join(__DIR__, "fixtures/sp3/GRG0MGXFIN_20201760000_01D_15M_ORB.SP3")
   @gbm Path.join(__DIR__, "fixtures/sp3/GBM_BDS_C21_C08_trim.sp3")
@@ -21,7 +21,7 @@ defmodule Orbis.ReducedOrbit.PiecewiseTest do
   @bspan {@bt0, @b_end}
 
   setup_all do
-    {:ok, grg: Orbis.SP3.load!(@grg), gbm: Orbis.SP3.load!(@gbm)}
+    {:ok, grg: Orbis.GNSS.SP3.load!(@grg), gbm: Orbis.GNSS.SP3.load!(@gbm)}
   end
 
   # Fit single + 2h-piecewise over the whole span and drift both over it.
@@ -481,7 +481,7 @@ defmodule Orbis.ReducedOrbit.PiecewiseTest do
       samples =
         for k <- 0..30 do
           ep = NaiveDateTime.add(@t0, k * 900, :second)
-          {:ok, st} = Orbis.SP3.position(grg, @gps, ep)
+          {:ok, st} = Orbis.GNSS.SP3.position(grg, @gps, ep)
           {ep, {st.x_m, st.y_m, st.z_m}}
         end
 
@@ -528,7 +528,7 @@ defmodule Orbis.ReducedOrbit.PiecewiseTest do
       samples =
         for k <- 0..40 do
           ep = NaiveDateTime.add(@t0, k * 900, :second)
-          {:ok, st} = Orbis.SP3.position(grg, @gps, ep)
+          {:ok, st} = Orbis.GNSS.SP3.position(grg, @gps, ep)
           {ep, {st.x_m, st.y_m, st.z_m}}
         end
 
@@ -548,7 +548,7 @@ defmodule Orbis.ReducedOrbit.PiecewiseTest do
       samples =
         for k <- 0..40 do
           ep = NaiveDateTime.add(@t0, k * 900, :second)
-          {:ok, st} = Orbis.SP3.position(grg, @gps, ep)
+          {:ok, st} = Orbis.GNSS.SP3.position(grg, @gps, ep)
           {ep, {st.x_m, st.y_m, st.z_m}}
         end
 

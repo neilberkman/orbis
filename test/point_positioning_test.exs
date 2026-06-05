@@ -1,9 +1,9 @@
-defmodule Orbis.PointPositioningTest do
+defmodule Orbis.GNSS.PositioningTest do
   use ExUnit.Case, async: true
 
-  alias Orbis.PointPositioning
-  alias Orbis.PointPositioning.Solution
-  alias Orbis.SP3
+  alias Orbis.GNSS.Positioning
+  alias Orbis.GNSS.Positioning.Solution
+  alias Orbis.GNSS.SP3
 
   # End-to-end check of the Elixir -> NIF -> astrodynamics-gnss SPP path. The
   # observations, epoch parameters, atmosphere coefficients, and synthesized
@@ -47,7 +47,7 @@ defmodule Orbis.PointPositioningTest do
   describe "solve/4 end-to-end" do
     test "recovers the synthesized receiver truth to sub-millimetre", ctx do
       assert {:ok, %Solution{} = sol} =
-               PointPositioning.solve(ctx.sp3, ctx.observations, @epoch,
+               Positioning.solve(ctx.sp3, ctx.observations, @epoch,
                  ionosphere: true,
                  troposphere: true,
                  klobuchar_alpha: ctx.alpha,
@@ -87,7 +87,7 @@ defmodule Orbis.PointPositioningTest do
       epoch = ~N[2020-06-24 12:00:00.250000]
 
       assert {:ok, %Solution{}} =
-               PointPositioning.solve(ctx.sp3, ctx.observations, epoch,
+               Positioning.solve(ctx.sp3, ctx.observations, epoch,
                  ionosphere: true,
                  troposphere: true,
                  klobuchar_alpha: ctx.alpha,
@@ -105,7 +105,7 @@ defmodule Orbis.PointPositioningTest do
       epoch = {{2020, 6, 24}, {12, 0, 0.25}}
 
       assert {:ok, %Solution{}} =
-               PointPositioning.solve(ctx.sp3, ctx.observations, epoch,
+               Positioning.solve(ctx.sp3, ctx.observations, epoch,
                  ionosphere: true,
                  troposphere: true,
                  klobuchar_alpha: ctx.alpha,
@@ -119,7 +119,7 @@ defmodule Orbis.PointPositioningTest do
 
     test "returns geodetic, DOP, residuals and used satellites", ctx do
       assert {:ok, %Solution{} = sol} =
-               PointPositioning.solve(ctx.sp3, ctx.observations, @epoch,
+               Positioning.solve(ctx.sp3, ctx.observations, @epoch,
                  ionosphere: true,
                  troposphere: true,
                  klobuchar_alpha: ctx.alpha,
@@ -164,7 +164,7 @@ defmodule Orbis.PointPositioningTest do
       epoch = ~N[2020-06-24 00:03:20]
 
       assert {:ok, %Solution{} = sol} =
-               PointPositioning.solve(sp3, observations, epoch,
+               Positioning.solve(sp3, observations, epoch,
                  initial_guess: {6_378_137.0, 0.0, 0.0, 0.0}
                )
 
@@ -199,7 +199,7 @@ defmodule Orbis.PointPositioningTest do
     test "loads a GLONASS navigation file through the broadcast path" do
       # GLONASS records (a PZ-90.11 state-vector model) parse through the NIF into
       # a usable handle; the RK4 propagation and time mapping are handled in Rust.
-      assert %Orbis.BroadcastEphemeris{} = Orbis.BroadcastEphemeris.load!(@nav_glonass_path)
+      assert %Orbis.GNSS.Broadcast{} = Orbis.GNSS.Broadcast.load!(@nav_glonass_path)
     end
 
     # GLONASS pseudoranges synthesized (same forward model the solver inverts)
@@ -218,10 +218,10 @@ defmodule Orbis.PointPositioningTest do
     ]
 
     test "recovers a known receiver from broadcast GLONASS pseudoranges" do
-      eph = Orbis.BroadcastEphemeris.load!(@nav_glonass_path)
+      eph = Orbis.GNSS.Broadcast.load!(@nav_glonass_path)
 
       assert {:ok, %Solution{} = sol} =
-               PointPositioning.solve(eph, @broadcast_obs_glonass, ~N[2020-06-25 12:00:00],
+               Positioning.solve(eph, @broadcast_obs_glonass, ~N[2020-06-25 12:00:00],
                  initial_guess: {3_513_900.0, 779_500.0, 5_249_700.0, 0.0}
                )
 
@@ -234,17 +234,17 @@ defmodule Orbis.PointPositioningTest do
     test "loads a RINEX 4.00 navigation file through the broadcast path" do
       # A real v4.00 MIXED file parses through the NIF into a usable handle; the
       # version-4 frame markers are handled in Rust transparently to Elixir.
-      assert {:ok, %Orbis.BroadcastEphemeris{}} =
-               Orbis.BroadcastEphemeris.parse(File.read!(@nav_v4_path))
+      assert {:ok, %Orbis.GNSS.Broadcast{}} =
+               Orbis.GNSS.Broadcast.parse(File.read!(@nav_v4_path))
 
-      assert %Orbis.BroadcastEphemeris{} = Orbis.BroadcastEphemeris.load!(@nav_v4_path)
+      assert %Orbis.GNSS.Broadcast{} = Orbis.GNSS.Broadcast.load!(@nav_v4_path)
     end
 
     test "recovers a known receiver from broadcast GPS pseudoranges" do
-      eph = Orbis.BroadcastEphemeris.load!(@nav_path)
+      eph = Orbis.GNSS.Broadcast.load!(@nav_path)
 
       assert {:ok, %Solution{} = sol} =
-               PointPositioning.solve(eph, @broadcast_obs, ~N[2020-06-25 12:00:00],
+               Positioning.solve(eph, @broadcast_obs, ~N[2020-06-25 12:00:00],
                  initial_guess: {3_513_900.0, 779_500.0, 5_249_700.0, 0.0}
                )
 
@@ -256,7 +256,7 @@ defmodule Orbis.PointPositioningTest do
     end
 
     test "solves a mixed GPS+Galileo set together with a per-system clock" do
-      eph = Orbis.BroadcastEphemeris.load!(@nav_path)
+      eph = Orbis.GNSS.Broadcast.load!(@nav_path)
       # The 10 GPS pseudoranges plus visible Galileo sats at the same epoch,
       # synthesized with the same forward model.
       galileo = [
@@ -268,7 +268,7 @@ defmodule Orbis.PointPositioningTest do
       mixed = @broadcast_obs ++ galileo
 
       assert {:ok, %Solution{} = sol} =
-               PointPositioning.solve(eph, mixed, ~N[2020-06-25 12:00:00],
+               Positioning.solve(eph, mixed, ~N[2020-06-25 12:00:00],
                  initial_guess: {3_513_900.0, 779_500.0, 5_249_700.0, 0.0}
                )
 
@@ -295,7 +295,7 @@ defmodule Orbis.PointPositioningTest do
     end
 
     test "solves a GPS+Galileo+BeiDou set, including a geostationary satellite" do
-      eph = Orbis.BroadcastEphemeris.load!(@nav_path)
+      eph = Orbis.GNSS.Broadcast.load!(@nav_path)
       # GPS + Galileo + BeiDou (C05 is geostationary, C13 IGSO, C19 MEO), all
       # synthesized with the same forward model at the same epoch.
       beidou = [
@@ -313,7 +313,7 @@ defmodule Orbis.PointPositioningTest do
       observations = @broadcast_obs ++ galileo ++ beidou
 
       assert {:ok, %Solution{} = sol} =
-               PointPositioning.solve(eph, observations, ~N[2020-06-25 12:00:00],
+               Positioning.solve(eph, observations, ~N[2020-06-25 12:00:00],
                  initial_guess: {3_513_900.0, 779_500.0, 5_249_700.0, 0.0}
                )
 
@@ -331,7 +331,7 @@ defmodule Orbis.PointPositioningTest do
     end
 
     test "an ionosphere-corrected solve with a BeiDou satellite is accepted" do
-      eph = Orbis.BroadcastEphemeris.load!(@nav_path)
+      eph = Orbis.GNSS.Broadcast.load!(@nav_path)
 
       observations =
         @broadcast_obs ++ [{"C05", 40_127_033.52503693}, {"C19", 23_661_671.39784395}]
@@ -342,7 +342,7 @@ defmodule Orbis.PointPositioningTest do
       # rejected. (These pseudoranges were synthesized without ionosphere, so
       # the solve converges to within a small offset rather than exactly.)
       assert {:ok, %Solution{} = sol} =
-               PointPositioning.solve(eph, observations, ~N[2020-06-25 12:00:00],
+               Positioning.solve(eph, observations, ~N[2020-06-25 12:00:00],
                  ionosphere: true,
                  klobuchar_alpha: {1.0e-8, 0.0, 0.0, 0.0},
                  klobuchar_beta: {9.0e4, 0.0, 0.0, 0.0},
@@ -365,11 +365,11 @@ defmodule Orbis.PointPositioningTest do
     end
 
     test "a too-small broadcast observation set is rejected through the broadcast path" do
-      eph = Orbis.BroadcastEphemeris.load!(@nav_path)
+      eph = Orbis.GNSS.Broadcast.load!(@nav_path)
       few = Enum.take(@broadcast_obs, 3)
 
       assert {:error, {:too_few_satellites, used, required}} =
-               PointPositioning.solve(eph, few, ~N[2020-06-25 12:00:00],
+               Positioning.solve(eph, few, ~N[2020-06-25 12:00:00],
                  initial_guess: {3_513_900.0, 779_500.0, 5_249_700.0, 0.0}
                )
 
@@ -379,7 +379,7 @@ defmodule Orbis.PointPositioningTest do
     end
 
     test "a four-satellite GPS+Galileo set is too few (needs 3 + n_systems)" do
-      eph = Orbis.BroadcastEphemeris.load!(@nav_path)
+      eph = Orbis.GNSS.Broadcast.load!(@nav_path)
       # Two GPS + two Galileo: four usable satellites, but a two-system solve
       # needs five (three position + one receiver clock per GNSS).
       mixed_few =
@@ -387,7 +387,7 @@ defmodule Orbis.PointPositioningTest do
           [{"E05", 27_038_058.346363213}, {"E09", 25_628_329.534503363}]
 
       assert {:error, {:too_few_satellites, used, required}} =
-               PointPositioning.solve(eph, mixed_few, ~N[2020-06-25 12:00:00],
+               Positioning.solve(eph, mixed_few, ~N[2020-06-25 12:00:00],
                  initial_guess: {3_513_900.0, 779_500.0, 5_249_700.0, 0.0}
                )
 
@@ -401,7 +401,7 @@ defmodule Orbis.PointPositioningTest do
       few = Enum.take(ctx.observations, 3)
 
       assert {:error, {:too_few_satellites, used, required}} =
-               PointPositioning.solve(ctx.sp3, few, @epoch,
+               Positioning.solve(ctx.sp3, few, @epoch,
                  initial_guess: {4_500_000.0, 500_000.0, 4_500_000.0, 0.0}
                )
 
@@ -414,7 +414,7 @@ defmodule Orbis.PointPositioningTest do
       dup = [first | ctx.observations]
 
       assert {:error, {:duplicate_observation, sat}} =
-               PointPositioning.solve(ctx.sp3, dup, @epoch,
+               Positioning.solve(ctx.sp3, dup, @epoch,
                  initial_guess: {4_500_000.0, 500_000.0, 4_500_000.0, 0.0}
                )
 
@@ -428,24 +428,24 @@ defmodule Orbis.PointPositioningTest do
     # defensive crate paths that real SP3 inputs do not reach, so the mapping
     # onto the public contract is exercised directly here.
     test "every advertised NIF error reason maps to its public form" do
-      assert PointPositioning.map_solve_error({:error, :too_few_satellites, 3, 5}) ==
+      assert Positioning.map_solve_error({:error, :too_few_satellites, 3, 5}) ==
                {:error, {:too_few_satellites, 3, 5}}
 
-      assert PointPositioning.map_solve_error({:error, :singular_geometry}) ==
+      assert Positioning.map_solve_error({:error, :singular_geometry}) ==
                {:error, :singular_geometry}
 
-      assert PointPositioning.map_solve_error({:error, :duplicate_observation, "G01"}) ==
+      assert Positioning.map_solve_error({:error, :duplicate_observation, "G01"}) ==
                {:error, {:duplicate_observation, "G01"}}
 
-      assert PointPositioning.map_solve_error({:error, :ephemeris_lost, "G07"}) ==
+      assert Positioning.map_solve_error({:error, :ephemeris_lost, "G07"}) ==
                {:error, {:ephemeris_lost, "G07"}}
 
-      assert PointPositioning.map_solve_error({:error, :ionosphere_unsupported, "R01"}) ==
+      assert Positioning.map_solve_error({:error, :ionosphere_unsupported, "R01"}) ==
                {:error, {:ionosphere_unsupported, "R01"}}
     end
 
     test "an unrecognized NIF result is wrapped rather than dropped" do
-      assert PointPositioning.map_solve_error(:boom) == {:error, :boom}
+      assert Positioning.map_solve_error(:boom) == {:error, :boom}
     end
   end
 

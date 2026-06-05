@@ -23,7 +23,11 @@ fn scale_from_str(s: &str) -> NifResult<TimeScale> {
         "GPST" => TimeScale::Gpst,
         "GST" => TimeScale::Gst,
         "BDT" => TimeScale::Bdt,
-        other => return Err(Error::Term(Box::new(format!("unknown time scale {other:?}")))),
+        other => {
+            return Err(Error::Term(Box::new(format!(
+                "unknown time scale {other:?}"
+            ))))
+        }
     })
 }
 
@@ -187,7 +191,11 @@ fn reduced_orbit_fit<'a>(
                     ],
                 ),
             };
-            let stats = (orbit.stats.rms_m, orbit.stats.max_m, orbit.stats.n_samples as i64);
+            let stats = (
+                orbit.stats.rms_m,
+                orbit.stats.max_m,
+                orbit.stats.n_samples as i64,
+            );
             Ok((
                 atoms::ok(),
                 model_atom,

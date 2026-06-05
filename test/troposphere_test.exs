@@ -1,7 +1,7 @@
-defmodule Orbis.TroposphereTest do
+defmodule Orbis.GNSS.TroposphereTest do
   use ExUnit.Case, async: true
 
-  alias Orbis.Troposphere
+  alias Orbis.GNSS.Troposphere
 
   # Standard sea-level surface meteorology used by the troposphere parity
   # fixtures: 1013.25 hPa, 288.15 K, 50% relative humidity.

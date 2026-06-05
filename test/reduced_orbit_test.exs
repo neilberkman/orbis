@@ -1,7 +1,7 @@
-defmodule Orbis.ReducedOrbitTest do
+defmodule Orbis.GNSS.ReducedOrbitTest do
   use ExUnit.Case, async: true
 
-  alias Orbis.ReducedOrbit
+  alias Orbis.GNSS.ReducedOrbit
 
   @sp3_path Path.join(__DIR__, "fixtures/sp3/GRG0MGXFIN_20201760000_01D_15M_ORB.SP3")
 
@@ -17,7 +17,7 @@ defmodule Orbis.ReducedOrbitTest do
   @day_end ~N[2020-06-25 00:00:00]
 
   setup do
-    sp3 = Orbis.SP3.load!(@sp3_path)
+    sp3 = Orbis.GNSS.SP3.load!(@sp3_path)
     {:ok, model} = ReducedOrbit.fit(sp3, satellite_id: @sat, window: {@t0, @t1}, cadence_s: 900)
     {:ok, sp3: sp3, model: model}
   end
@@ -50,7 +50,7 @@ defmodule Orbis.ReducedOrbitTest do
     test "recovers the SP3 position across the window to a few km", %{sp3: sp3, model: m} do
       for offset <- [0, 3600, 10_800, 21_600] do
         epoch = NaiveDateTime.add(@t0, offset, :second)
-        {:ok, truth} = Orbis.SP3.position(sp3, @sat, epoch)
+        {:ok, truth} = Orbis.GNSS.SP3.position(sp3, @sat, epoch)
         {:ok, pos} = ReducedOrbit.position(m, epoch)
 
         err =
@@ -170,7 +170,7 @@ defmodule Orbis.ReducedOrbitTest do
       samples =
         for k <- 0..2 do
           epoch = NaiveDateTime.add(base, k * 900, :second)
-          {:ok, st} = Orbis.SP3.position(sp3, @sat, epoch)
+          {:ok, st} = Orbis.GNSS.SP3.position(sp3, @sat, epoch)
           {epoch, {st.x_m, st.y_m, st.z_m}}
         end
 
@@ -448,7 +448,7 @@ defmodule Orbis.ReducedOrbitTest do
     end
 
     test "BeiDou MEO (C21) and IGSO (C08): eccentric beats circular (real GBM SP3)" do
-      bds = Orbis.SP3.load!(Path.join(__DIR__, "fixtures/sp3/GBM_BDS_C21_C08_trim.sp3"))
+      bds = Orbis.GNSS.SP3.load!(Path.join(__DIR__, "fixtures/sp3/GBM_BDS_C21_C08_trim.sp3"))
       t0 = ~N[2020-06-25 00:00:00]
       t1 = ~N[2020-06-25 06:00:00]
       day_end = ~N[2020-06-26 00:00:00]
@@ -512,7 +512,7 @@ defmodule Orbis.ReducedOrbitTest do
   defp sample_list(sp3) do
     for k <- 0..10 do
       ep = NaiveDateTime.add(@t0, k * 900, :second)
-      {:ok, st} = Orbis.SP3.position(sp3, @sat, ep)
+      {:ok, st} = Orbis.GNSS.SP3.position(sp3, @sat, ep)
       {ep, {st.x_m, st.y_m, st.z_m}}
     end
   end

@@ -1,10 +1,10 @@
-defmodule Orbis.GnssVelocityTest do
+defmodule Orbis.GNSS.VelocityTest do
   use ExUnit.Case, async: true
 
-  alias Orbis.GnssGeometry
-  alias Orbis.GnssObservables
-  alias Orbis.GnssVelocity
-  alias Orbis.SP3
+  alias Orbis.GNSS.Geometry
+  alias Orbis.GNSS.Observables
+  alias Orbis.GNSS.SP3
+  alias Orbis.GNSS.Velocity
 
   # The velocity estimate is validated by injected-velocity recovery, not by
   # self-consistency: we pick a TRUE receiver velocity and clock drift, synthesize
@@ -19,7 +19,7 @@ defmodule Orbis.GnssVelocityTest do
   # positioning test's frozen initial guess sits in this region).
   @receiver {4_500_000.0, 500_000.0, 4_500_000.0}
 
-  # Speed of light, m/s (matches Orbis.GnssObservables and the module under test).
+  # Speed of light, m/s (matches Orbis.GNSS.Observables and the module under test).
   @c 299_792_458.0
   @f_l1 1_575_420_000.0
 
@@ -28,7 +28,7 @@ defmodule Orbis.GnssVelocityTest do
 
     sats =
       sp3
-      |> GnssGeometry.visible(@receiver, @epoch, systems: ["G"], elevation_mask_deg: 5.0)
+      |> Geometry.visible(@receiver, @epoch, systems: ["G"], elevation_mask_deg: 5.0)
       |> Enum.map(& &1.satellite_id)
 
     # Sanity: the velocity solve needs at least four satellites.
@@ -39,7 +39,7 @@ defmodule Orbis.GnssVelocityTest do
 
   # The static-receiver e.v_sat term for a satellite, from the forward model.
   defp e_dot_vsat(sp3, sat) do
-    {:ok, obs} = GnssObservables.predict(sp3, sat, @receiver, @epoch)
+    {:ok, obs} = Observables.predict(sp3, sat, @receiver, @epoch)
     obs.range_rate_m_s
   end
 
@@ -49,7 +49,7 @@ defmodule Orbis.GnssVelocityTest do
   #   rho_dot = e.(v_sat - v_true) + c*drift_true
   #           = (e.v_sat) - e.v_true + c*drift_true.
   defp synth_rho_dot(sp3, sat, {tx, ty, tz}, drift_true) do
-    {:ok, obs} = GnssObservables.predict(sp3, sat, @receiver, @epoch)
+    {:ok, obs} = Observables.predict(sp3, sat, @receiver, @epoch)
     {ex, ey, ez} = obs.los_unit
     e_dot_vtrue = ex * tx + ey * ty + ez * tz
     obs.range_rate_m_s - e_dot_vtrue + @c * drift_true
@@ -66,7 +66,7 @@ defmodule Orbis.GnssVelocityTest do
 
       observations = synth_observations(ctx.sp3, ctx.sats, v_true, drift_true)
 
-      assert {:ok, result} = GnssVelocity.solve(ctx.sp3, observations, @epoch, @receiver)
+      assert {:ok, result} = Velocity.solve(ctx.sp3, observations, @epoch, @receiver)
 
       {vx, vy, vz} = result.velocity_m_s
       {tx, ty, tz} = v_true
@@ -83,7 +83,7 @@ defmodule Orbis.GnssVelocityTest do
     test "recovers a static receiver as ~zero speed", ctx do
       observations = synth_observations(ctx.sp3, ctx.sats, {0.0, 0.0, 0.0}, 0.0)
 
-      assert {:ok, result} = GnssVelocity.solve(ctx.sp3, observations, @epoch, @receiver)
+      assert {:ok, result} = Velocity.solve(ctx.sp3, observations, @epoch, @receiver)
 
       assert result.speed_m_s < 1.0e-4
       {vx, vy, vz} = result.velocity_m_s
@@ -101,13 +101,13 @@ defmodule Orbis.GnssVelocityTest do
 
       doppler_obs =
         Enum.map(rr_obs, fn {sat, rho_dot} ->
-          {sat, GnssVelocity.range_rate_to_doppler(rho_dot, @f_l1)}
+          {sat, Velocity.range_rate_to_doppler(rho_dot, @f_l1)}
         end)
 
-      assert {:ok, rr} = GnssVelocity.solve(ctx.sp3, rr_obs, @epoch, @receiver)
+      assert {:ok, rr} = Velocity.solve(ctx.sp3, rr_obs, @epoch, @receiver)
 
       assert {:ok, dop} =
-               GnssVelocity.solve(ctx.sp3, doppler_obs, @epoch, @receiver, observable: :doppler)
+               Velocity.solve(ctx.sp3, doppler_obs, @epoch, @receiver, observable: :doppler)
 
       {rx, ry, rz} = rr.velocity_m_s
       {dx, dy, dz} = dop.velocity_m_s
@@ -123,7 +123,7 @@ defmodule Orbis.GnssVelocityTest do
     test "a consistent set has ~zero residuals", ctx do
       observations = synth_observations(ctx.sp3, ctx.sats, {12.0, -7.0, 3.0}, 1.0e-9)
 
-      assert {:ok, result} = GnssVelocity.solve(ctx.sp3, observations, @epoch, @receiver)
+      assert {:ok, result} = Velocity.solve(ctx.sp3, observations, @epoch, @receiver)
 
       for {_sat, r} <- result.residuals_m_s do
         assert abs(r) < 1.0e-6
@@ -136,7 +136,7 @@ defmodule Orbis.GnssVelocityTest do
       [{bad_sat, bad_val} | rest] = observations
       perturbed = [{bad_sat, bad_val + 2.0} | rest]
 
-      assert {:ok, result} = GnssVelocity.solve(ctx.sp3, perturbed, @epoch, @receiver)
+      assert {:ok, result} = Velocity.solve(ctx.sp3, perturbed, @epoch, @receiver)
 
       perturbed_residual = abs(result.residuals_m_s[bad_sat])
 
@@ -155,31 +155,31 @@ defmodule Orbis.GnssVelocityTest do
 
   describe "solve/5 errors (no raise)" do
     test "empty observations is tagged", ctx do
-      assert {:error, :no_observations} = GnssVelocity.solve(ctx.sp3, [], @epoch, @receiver)
+      assert {:error, :no_observations} = Velocity.solve(ctx.sp3, [], @epoch, @receiver)
     end
 
     test "fewer than four satellites is tagged", ctx do
       three = ctx.sats |> Enum.take(3) |> synth_three(ctx.sp3)
 
       assert {:error, {:too_few_satellites, 3, 4}} =
-               GnssVelocity.solve(ctx.sp3, three, @epoch, @receiver)
+               Velocity.solve(ctx.sp3, three, @epoch, @receiver)
     end
 
     test "a malformed receiver is tagged", ctx do
       observations = synth_observations(ctx.sp3, ctx.sats, {1.0, 2.0, 3.0}, 0.0)
 
       assert {:error, :invalid_receiver} =
-               GnssVelocity.solve(ctx.sp3, observations, @epoch, {:bad, :receiver, nil})
+               Velocity.solve(ctx.sp3, observations, @epoch, {:bad, :receiver, nil})
     end
 
     test "a malformed observation entry is tagged", ctx do
       assert {:error, {:invalid_observation, {"G01", :nope}}} =
-               GnssVelocity.solve(ctx.sp3, [{"G01", :nope}], @epoch, @receiver)
+               Velocity.solve(ctx.sp3, [{"G01", :nope}], @epoch, @receiver)
     end
 
     test "a duplicate satellite is tagged", ctx do
       assert {:error, {:duplicate_observation, "G01"}} =
-               GnssVelocity.solve(
+               Velocity.solve(
                  ctx.sp3,
                  [{"G01", 1.0}, {"G02", 2.0}, {"G01", 3.0}, {"G05", 4.0}],
                  @epoch,
@@ -190,12 +190,12 @@ defmodule Orbis.GnssVelocityTest do
     test "a rank-deficient normal matrix is reported as singular (no raise)", _ctx do
       # A full-rank four-satellite geometry from a real precise ephemeris never
       # produces a rank-deficient normal matrix, so the solve's singular branch is
-      # exercised at the inverse it depends on: GnssGeometry.inv4/1 returns
+      # exercised at the inverse it depends on: Geometry.inv4/1 returns
       # :singular for a rank-deficient matrix, which solve/5 maps to
       # {:error, :singular_geometry}. This is the same contract the positioning
       # path documents for its own non-physical singular case.
       assert :singular =
-               GnssGeometry.inv4(
+               Geometry.inv4(
                  {{1.0, 0.0, 0.0, 0.0}, {0.0, 1.0, 0.0, 0.0}, {0.0, 0.0, 1.0, 0.0},
                   {0.0, 0.0, 0.0, 0.0}}
                )

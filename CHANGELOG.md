@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Breaking:** GNSS modules now live under the `Orbis.GNSS.*` namespace. The
+  old top-level GNSS names (`Orbis.SP3`, `Orbis.PointPositioning`,
+  `Orbis.GnssData`, etc.) were removed instead of retained as aliases, matching
+  the library's current single-client / pre-broad-adoption status. Examples:
+  `Orbis.GNSS.SP3`, `Orbis.GNSS.Positioning`, `Orbis.GNSS.Data`,
+  `Orbis.GNSS.RINEX.Observations`, `Orbis.GNSS.ReducedOrbit`,
+  `Orbis.GNSS.Signal.CA`, and `Orbis.GNSS.Navigation.LNAV`.
+- Internal GNSS implementation helpers were consolidated under
+  `Orbis.GNSS.Core` for shared constants, ECEF input normalization,
+  epoch/window handling, validation, source sampling, and versioned-map guards.
+
 ## [0.8.0] - 2026-06-05
 
 Observation parsing and a compact orbit model. Orbis can now read a station's
@@ -12,20 +27,20 @@ track into a tiny, transportable mean-element model.
 
 ### Added
 
-- **`Orbis.RinexObs`** — RINEX 3 observation parsing with Hatanaka (CRINEX 1.0
+- **`Orbis.GNSS.RINEX.Observations`** — RINEX 3 observation parsing with Hatanaka (CRINEX 1.0
   and 3.0) decoding. Decodes `.crx`/`.rnx`, exposes the header (incl. the
   surveyed `APPROX POSITION`), observation codes, and epochs, and extracts
   single-frequency pseudoranges (`pseudoranges/3`) in the
-  `[{satellite_id, range_m}]` shape `Orbis.PointPositioning.solve/4` consumes —
+  `[{satellite_id, range_m}]` shape `Orbis.GNSS.Positioning.solve/4` consumes —
   closing the loop from a station's observation file to a recovered position.
-  `Orbis.GnssData` gains a station observation product fetch and an
+  `Orbis.GNSS.Data` gains a station observation product fetch and an
   `observations/2` loader. CRINEX decoding is verified byte-for-byte against
   `crx2rnx`; an end-to-end test recovers a surveyed station position to metre
   level from real GPS observations.
 
-- **`Orbis.ReducedOrbit`** — a compact, fitted mean-element approximation of an
+- **`Orbis.GNSS.ReducedOrbit`** — a compact, fitted mean-element approximation of an
   orbit for caching, transport, and quick visibility math (not orbit
-  determination). Fits from an `Orbis.SP3` track or a list of ECEF samples;
+  determination). Fits from an `Orbis.GNSS.SP3` track or a list of ECEF samples;
   evaluates position/velocity (ECEF by default, GCRS on request); reports a
   source-backed `drift/3` against the source ephemeris; and serialises to a
   stable, versioned map (`to_map/1`/`from_map/1`). Two models: `:circular_secular`
@@ -42,36 +57,36 @@ correction, time, and data-fetch layers.
 
 ### Added
 
-- **`Orbis.PointPositioning`** — single-point positioning (SPP). Solves a
+- **`Orbis.GNSS.Positioning`** — single-point positioning (SPP). Solves a
   receiver position, clock, and geometry diagnostics from one epoch of
-  pseudoranges against either an `Orbis.SP3` precise product or an
-  `Orbis.BroadcastEphemeris` handle. Multi-constellation
+  pseudoranges against either an `Orbis.GNSS.SP3` precise product or an
+  `Orbis.GNSS.Broadcast` handle. Multi-constellation
   (GPS / Galileo / BeiDou / GLONASS) solves carry one receiver clock per system;
   the solution reports position, geodetic position, per-system clocks, DOP,
   residuals, used/rejected satellites, and solver metadata.
-- **`Orbis.SP3`** — SP3-c/SP3-d precise orbit/clock loading and arbitrary-epoch
+- **`Orbis.GNSS.SP3`** — SP3-c/SP3-d precise orbit/clock loading and arbitrary-epoch
   satellite position/clock interpolation, plus `satellite_ids/1` to read the
   product's declared satellite set.
-- **`Orbis.GnssConstellation`** — a GPS constellation catalog built from
+- **`Orbis.GNSS.Constellation`** — a GPS constellation catalog built from
   CelesTrak `gps-ops` OMM identity and an optional NAVCEN status/SVN overlay
   (PRN ↔ SVN ↔ NORAD ↔ SP3 id, active/usable flags). Merges sources only when
   the block type matches, recording PRN-transition disagreements as conflicts
   rather than corrupting identity; exports the compact mapping CSV and validates
   a catalog (duplicate PRNs/NORAD ids, inactive/unusable PRNs, and missing/extra
-  satellites against a loaded `Orbis.SP3` product).
-- **`Orbis.BroadcastEphemeris`** — RINEX 3.x and 4.xx navigation parsing and
+  satellites against a loaded `Orbis.GNSS.SP3` product).
+- **`Orbis.GNSS.Broadcast`** — RINEX 3.x and 4.xx navigation parsing and
   broadcast orbit/clock evaluation: GPS LNAV, Galileo I/NAV and F/NAV, BeiDou
   D1/D2 (including geostationary satellites), and GLONASS (PZ-90.11 state-vector
   propagation by Runge–Kutta integration).
-- **`Orbis.Ionosphere`** (broadcast Klobuchar, frequency-aware across L1/E1/B1I)
-  and **`Orbis.Troposphere`** (Saastamoinen zenith delay + Niell mapping)
+- **`Orbis.GNSS.Ionosphere`** (broadcast Klobuchar, frequency-aware across L1/E1/B1I)
+  and **`Orbis.GNSS.Troposphere`** (Saastamoinen zenith delay + Niell mapping)
   correction models.
-- **`Orbis.GnssData`** — an optional product fetch/cache layer: a catalog over
+- **`Orbis.GNSS.Data`** — an optional product fetch/cache layer: a catalog over
   public archives, HTTPS (`Req`) and FTP downloads, an atomic on-disk cache with
   SHA-256 integrity and provenance sidecars, a gzip-bomb guard, and an offline
-  mode. Includes convenience loaders that return `Orbis.SP3` /
-  `Orbis.BroadcastEphemeris` handles. `Req` is an optional dependency.
-- **`Orbis.GnssTime`** — GNSS epoch/seconds-of-week and day-of-year helpers.
+  mode. Includes convenience loaders that return `Orbis.GNSS.SP3` /
+  `Orbis.GNSS.Broadcast` handles. `Req` is an optional dependency.
+- **`Orbis.GNSS.Time`** — GNSS epoch/seconds-of-week and day-of-year helpers.
 
 ### Notes
 

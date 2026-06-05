@@ -43,7 +43,7 @@ end
 ```
 
 Requires Rust for compiling the NIF. GNSS product fetching
-(`Orbis.GnssData`) additionally needs the optional `:req` dependency:
+(`Orbis.GNSS.Data`) additionally needs the optional `:req` dependency:
 
 ```elixir
 {:req, "~> 0.5"}
@@ -188,20 +188,22 @@ mars = Orbis.Ephemeris.position(eph, :mars, :earth, datetime)
 
 ### GNSS Positioning
 
+GNSS-specific APIs are grouped under `Orbis.GNSS.*`.
+
 ```elixir
 # Precise ephemeris (SP3): interpolate a satellite's position/clock at any epoch
-sp3 = Orbis.SP3.load!("GBM0MGXRAP_20201760000_01D_05M_ORB.SP3")
-{:ok, state} = Orbis.SP3.position(sp3, "G01", ~N[2020-06-24 00:00:00])
-# %Orbis.SP3.State{x_m: ..., y_m: ..., z_m: ..., clock_s: ...}
+sp3 = Orbis.GNSS.SP3.load!("GBM0MGXRAP_20201760000_01D_05M_ORB.SP3")
+{:ok, state} = Orbis.GNSS.SP3.position(sp3, "G01", ~N[2020-06-24 00:00:00])
+# %Orbis.GNSS.SP3.State{x_m: ..., y_m: ..., z_m: ..., clock_s: ...}
 
 # Or broadcast navigation — GPS, Galileo, BeiDou, GLONASS (RINEX 3.x/4.xx)
-eph = Orbis.BroadcastEphemeris.load!("BRDC00IGS_20201770000_01D_MN.rnx")
+eph = Orbis.GNSS.Broadcast.load!("BRDC00IGS_20201770000_01D_MN.rnx")
 
 # Single-point position from one epoch of pseudoranges
 observations = [{"G07", 24_602_022.18}, {"G08", 23_676_569.52}, {"E05", 27_038_058.35}]
 
 {:ok, sol} =
-  Orbis.PointPositioning.solve(eph, observations, ~N[2020-06-25 12:00:00],
+  Orbis.GNSS.Positioning.solve(eph, observations, ~N[2020-06-25 12:00:00],
     ionosphere: true,
     troposphere: true,
     klobuchar_alpha: {1.0e-8, 0.0, 0.0, 0.0},
@@ -216,32 +218,32 @@ sol.system_clocks_s   # %{"G" => ..., "E" => ...} — one receiver clock per GNS
 Products can be fetched and cached (needs the optional `:req` dependency):
 
 ```elixir
-product = Orbis.GnssData.mgex_sp3(:gfz, ~D[2020-06-24])
-{:ok, sp3} = Orbis.GnssData.sp3(product)   # downloads, verifies, caches, loads
+product = Orbis.GNSS.Data.mgex_sp3(:gfz, ~D[2020-06-24])
+{:ok, sp3} = Orbis.GNSS.Data.sp3(product)   # downloads, verifies, caches, loads
 ```
 
 Parse a station's RINEX observation file (Hatanaka `.crx` or plain `.rnx`),
 extract pseudoranges, and recover its position:
 
 ```elixir
-{:ok, obs} = Orbis.RinexObs.load("STAT00DNK_R_..._MO.crx")
-[%{index: i, epoch: epoch} | _] = Orbis.RinexObs.epochs(obs)
-{:ok, prs} = Orbis.RinexObs.pseudoranges(obs, i, codes: %{"G" => ["C1C"]})
-{:ok, sol} = Orbis.PointPositioning.solve(eph, prs, epoch)
+{:ok, obs} = Orbis.GNSS.RINEX.Observations.load("STAT00DNK_R_..._MO.crx")
+[%{index: i, epoch: epoch} | _] = Orbis.GNSS.RINEX.Observations.epochs(obs)
+{:ok, prs} = Orbis.GNSS.RINEX.Observations.pseudoranges(obs, i, codes: %{"G" => ["C1C"]})
+{:ok, sol} = Orbis.GNSS.Positioning.solve(eph, prs, epoch)
 ```
 
 Fit a compact reduced-orbit model and check its drift against the source:
 
 ```elixir
 {:ok, model} =
-  Orbis.ReducedOrbit.fit(sp3,
+  Orbis.GNSS.ReducedOrbit.fit(sp3,
     satellite_id: "G05",
     window: {~N[2020-06-24 00:00:00], ~N[2020-06-24 06:00:00]},
     model: :eccentric_secular
   )
 
-{:ok, pos} = Orbis.ReducedOrbit.position(model, ~N[2020-06-24 12:00:00])  # ECEF m
-map = Orbis.ReducedOrbit.to_map(model)   # versioned, transportable
+{:ok, pos} = Orbis.GNSS.ReducedOrbit.position(model, ~N[2020-06-24 12:00:00])  # ECEF m
+map = Orbis.GNSS.ReducedOrbit.to_map(model)   # versioned, transportable
 ```
 
 A runnable walkthrough is in [`examples/gnss_positioning.livemd`](examples/gnss_positioning.livemd).
@@ -250,12 +252,12 @@ A GPS constellation catalog (PRN ↔ SVN ↔ NORAD ↔ SP3 id, active/usable fla
 is built from CelesTrak and an optional NAVCEN overlay:
 
 ```elixir
-{:ok, records} = Orbis.GnssConstellation.fetch_gps()
-Orbis.GnssConstellation.to_csv(records)         # prn,norad_cat_id,active,sp3_id
+{:ok, records} = Orbis.GNSS.Constellation.fetch_gps()
+Orbis.GNSS.Constellation.to_csv(records)         # prn,norad_cat_id,active,sp3_id
 
 # Cross-check a catalog against the satellites a precise product actually carries
-report = Orbis.GnssConstellation.validate_sp3(records, sp3)
-Orbis.GnssConstellation.valid?(report)
+report = Orbis.GNSS.Constellation.validate_sp3(records, sp3)
+Orbis.GNSS.Constellation.valid?(report)
 ```
 
 ## Coordinate Frames

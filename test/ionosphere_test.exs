@@ -1,7 +1,7 @@
-defmodule Orbis.IonosphereTest do
+defmodule Orbis.GNSS.IonosphereTest do
   use ExUnit.Case, async: true
 
-  alias Orbis.Ionosphere
+  alias Orbis.GNSS.Ionosphere
 
   # Synthetic 7x7 two-map IONEX grid (committed fixture): latitudes 60..-60 step
   # -20, longitudes -180..180 step 60, two epochs at 2020-06-24 00:00 and 02:00.

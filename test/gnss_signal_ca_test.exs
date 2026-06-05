@@ -1,7 +1,7 @@
-defmodule Orbis.GnssSignal.CATest do
+defmodule Orbis.GNSS.Signal.CATest do
   use ExUnit.Case
 
-  alias Orbis.GnssSignal.CA
+  alias Orbis.GNSS.Signal.CA
 
   @three_valued MapSet.new([-65, -1, 63])
 

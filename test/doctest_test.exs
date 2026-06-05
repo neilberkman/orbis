@@ -3,9 +3,9 @@ defmodule Orbis.DoctestTest do
 
   doctest Orbis
   doctest Orbis.RF
-  doctest Orbis.GnssConstellation
+  doctest Orbis.GNSS.Constellation
   doctest Orbis.Format.TLE
   doctest Orbis.Format.OMM
-  doctest Orbis.GnssSignal.CA
-  doctest Orbis.GnssNav.LNAV
+  doctest Orbis.GNSS.Signal.CA
+  doctest Orbis.GNSS.Navigation.LNAV
 end

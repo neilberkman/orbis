@@ -1,11 +1,11 @@
-defmodule Orbis.DGNSSTest do
+defmodule Orbis.GNSS.DGNSSTest do
   use ExUnit.Case, async: true
 
-  alias Orbis.DGNSS
-  alias Orbis.GnssGeometry
-  alias Orbis.GnssObservables
-  alias Orbis.PointPositioning
-  alias Orbis.SP3
+  alias Orbis.GNSS.DGNSS
+  alias Orbis.GNSS.Geometry
+  alias Orbis.GNSS.Observables
+  alias Orbis.GNSS.Positioning
+  alias Orbis.GNSS.SP3
 
   # Precise ephemeris fixture: 2020-06-24 00:00..23:45 GPST, 15-min, 96 epochs.
   @sp3_path Path.join(__DIR__, "fixtures/sp3/GRG0MGXFIN_20201760000_01D_15M_ORB.SP3")
@@ -70,7 +70,7 @@ defmodule Orbis.DGNSSTest do
 
       # (a) Absolute solve of the rover's errored pseudoranges: biased.
       {:ok, abs_sol} =
-        PointPositioning.solve(ctx.sp3, rover_obs, @epoch,
+        Positioning.solve(ctx.sp3, rover_obs, @epoch,
           ionosphere: false,
           troposphere: false,
           initial_guess: guess(ctx.rover)
@@ -149,7 +149,7 @@ defmodule Orbis.DGNSSTest do
       # Common iono/tropo-like delay: larger at low elevation, +5..+15 m.
       delays =
         Map.new(sats, fn sat ->
-          {:ok, o} = GnssObservables.predict(ctx.sp3, sat, ctx.base, @epoch)
+          {:ok, o} = Observables.predict(ctx.sp3, sat, ctx.base, @epoch)
           el = max(o.elevation_deg, 5.0)
           {sat, 5.0 + 10.0 / :math.sin(el * :math.pi() / 180.0)}
         end)
@@ -251,7 +251,7 @@ defmodule Orbis.DGNSSTest do
 
   defp visible_ids(sp3, station) do
     sp3
-    |> GnssGeometry.visible(station, @epoch, systems: ["G"], elevation_mask_deg: 10.0)
+    |> Geometry.visible(station, @epoch, systems: ["G"], elevation_mask_deg: 10.0)
     |> Enum.map(& &1.satellite_id)
   end
 
@@ -259,7 +259,7 @@ defmodule Orbis.DGNSSTest do
   defp synth(sp3, sats, station, rx_clock_s) do
     Enum.map(sats, fn sat ->
       {:ok, o} =
-        GnssObservables.predict(sp3, sat, station, @epoch, light_time: true, sagnac: true)
+        Observables.predict(sp3, sat, station, @epoch, light_time: true, sagnac: true)
 
       {sat, o.geometric_range_m + @c * (rx_clock_s - (o.sat_clock_s || 0.0))}
     end)

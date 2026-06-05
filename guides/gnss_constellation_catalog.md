@@ -1,6 +1,6 @@
 # GNSS Constellation Catalogs
 
-`Orbis.GnssConstellation` builds identity tables for GNSS satellites and checks
+`Orbis.GNSS.Constellation` builds identity tables for GNSS satellites and checks
 them against loaded GNSS products. The first supported system is GPS.
 
 The base GPS source is CelesTrak's public `gps-ops` OMM/JSON feed, which carries
@@ -10,7 +10,7 @@ usability.
 
 ```elixir
 # Live fetch: CelesTrak gps-ops plus NAVCEN status overlay.
-{:ok, records} = Orbis.GnssConstellation.fetch_gps()
+{:ok, records} = Orbis.GNSS.Constellation.fetch_gps()
 
 record = hd(records)
 {record.system, record.prn, record.svn, record.norad_id, record.sp3_id}
@@ -20,9 +20,9 @@ record = hd(records)
 For reproducible workflows, fetch bytes elsewhere and parse explicitly:
 
 ```elixir
-{:ok, records} = Orbis.GnssConstellation.from_celestrak_omm(celestrak_omms)
-{:ok, navcen} = Orbis.GnssConstellation.parse_navcen_html(navcen_html)
-records = Orbis.GnssConstellation.merge_navcen(records, navcen)
+{:ok, records} = Orbis.GNSS.Constellation.from_celestrak_omm(celestrak_omms)
+{:ok, navcen} = Orbis.GNSS.Constellation.parse_navcen_html(navcen_html)
+records = Orbis.GNSS.Constellation.merge_navcen(records, navcen)
 ```
 
 NAVCEN rows are merged by PRN only when the NAVCEN block type is compatible
@@ -33,7 +33,7 @@ carries a NANU for an older vehicle, the row is kept in
 Export the compact CSV used by many GNSS workflows:
 
 ```elixir
-csv = Orbis.GnssConstellation.to_csv(records)
+csv = Orbis.GNSS.Constellation.to_csv(records)
 
 # prn,norad_cat_id,active,sp3_id
 # 1,62339,true,G01
@@ -43,7 +43,7 @@ csv = Orbis.GnssConstellation.to_csv(records)
 Validate the catalog before using it in a downstream pipeline:
 
 ```elixir
-report = Orbis.GnssConstellation.validate(records)
+report = Orbis.GNSS.Constellation.validate(records)
 
 report.duplicate_prns
 report.duplicate_norad_ids
@@ -53,8 +53,8 @@ report.inactive_unusable_prns
 Compare active, usable catalog IDs against a loaded SP3 product:
 
 ```elixir
-{:ok, sp3} = Orbis.GnssData.sp3(Orbis.GnssData.mgex_sp3(:gfz, ~D[2026-06-04]))
-report = Orbis.GnssConstellation.validate_sp3(records, sp3)
+{:ok, sp3} = Orbis.GNSS.Data.sp3(Orbis.GNSS.Data.mgex_sp3(:gfz, ~D[2026-06-04]))
+report = Orbis.GNSS.Constellation.validate_sp3(records, sp3)
 
 report.missing_sp3_ids
 report.extra_sp3_ids

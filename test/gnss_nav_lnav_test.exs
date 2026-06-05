@@ -1,8 +1,8 @@
-defmodule Orbis.GnssNav.LNAVTest do
+defmodule Orbis.GNSS.Navigation.LNAVTest do
   use ExUnit.Case, async: true
 
-  alias Orbis.GnssNav.LNAV
-  alias Orbis.GnssNav.LNAV.Ephemeris
+  alias Orbis.GNSS.Navigation.LNAV
+  alias Orbis.GNSS.Navigation.LNAV.Ephemeris
 
   # Per-field LSB scale factors (IS-GPS-200 Tables 20-I/II/III). Quantize the
   # input by these before comparing, so the test proves the bit packing rather

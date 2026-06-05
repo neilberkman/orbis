@@ -1,8 +1,8 @@
-defmodule Orbis.GnssObservablesTest do
+defmodule Orbis.GNSS.ObservablesTest do
   use ExUnit.Case, async: true
 
-  alias Orbis.GnssObservables
-  alias Orbis.SP3
+  alias Orbis.GNSS.Observables
+  alias Orbis.GNSS.SP3
 
   @grg Path.join(__DIR__, "fixtures/sp3/GRG0MGXFIN_20201760000_01D_15M_ORB.SP3")
 
@@ -23,7 +23,7 @@ defmodule Orbis.GnssObservablesTest do
       sp3 = SP3.load!(@grg)
 
       for bad <- [{1.0, 2.0}, {:a, :b, :c}, {1.0, 2.0, :z}, nil, "nope", %{x_m: 1.0}, %{}] do
-        assert GnssObservables.predict(sp3, "G21", bad, @epoch) == {:error, :invalid_receiver}
+        assert Observables.predict(sp3, "G21", bad, @epoch) == {:error, :invalid_receiver}
       end
     end
   end
@@ -31,7 +31,7 @@ defmodule Orbis.GnssObservablesTest do
   setup do
     sp3 = SP3.load!(@grg)
 
-    results = GnssObservables.predict_all(sp3, @rx, @epoch)
+    results = Observables.predict_all(sp3, @rx, @epoch)
 
     visible =
       results
@@ -52,14 +52,14 @@ defmodule Orbis.GnssObservablesTest do
   describe "predict/5 physics" do
     test "range_rate equals the central finite difference of geometric range (mm/s)",
          %{sp3: sp3, high_id: id} do
-      {:ok, obs} = GnssObservables.predict(sp3, id, @rx, @epoch)
+      {:ok, obs} = Observables.predict(sp3, id, @rx, @epoch)
 
       dt = 0.5
       t_plus = NaiveDateTime.add(@epoch, round(dt * 1_000_000), :microsecond)
       t_minus = NaiveDateTime.add(@epoch, -round(dt * 1_000_000), :microsecond)
 
-      {:ok, op} = GnssObservables.predict(sp3, id, @rx, t_plus)
-      {:ok, om} = GnssObservables.predict(sp3, id, @rx, t_minus)
+      {:ok, op} = Observables.predict(sp3, id, @rx, t_plus)
+      {:ok, om} = Observables.predict(sp3, id, @rx, t_minus)
 
       fd = (op.geometric_range_m - om.geometric_range_m) / (2.0 * dt)
 
@@ -68,7 +68,7 @@ defmodule Orbis.GnssObservablesTest do
 
     test "light-time: transmit_time is ~67-90 ms before epoch for a GPS MEO sat",
          %{sp3: sp3, high_id: id} do
-      {:ok, obs} = GnssObservables.predict(sp3, id, @rx, @epoch)
+      {:ok, obs} = Observables.predict(sp3, id, @rx, @epoch)
 
       light_time_s =
         NaiveDateTime.diff(@epoch, obs.transmit_time, :microsecond) / 1.0e6
@@ -79,8 +79,8 @@ defmodule Orbis.GnssObservablesTest do
 
     test "light-time correction shifts the range by tens of metres of along-track geometry",
          %{sp3: sp3, high_id: id} do
-      {:ok, on} = GnssObservables.predict(sp3, id, @rx, @epoch, light_time: true)
-      {:ok, off} = GnssObservables.predict(sp3, id, @rx, @epoch, light_time: false)
+      {:ok, on} = Observables.predict(sp3, id, @rx, @epoch, light_time: true)
+      {:ok, off} = Observables.predict(sp3, id, @rx, @epoch, light_time: false)
 
       # With light_time: false the satellite is sampled at the receive epoch.
       assert off.transmit_time == @epoch
@@ -117,12 +117,12 @@ defmodule Orbis.GnssObservablesTest do
     end
 
     test "elevation/azimuth match an independent ENU recomputation", %{high_id: id, sp3: sp3} do
-      {:ok, obs} = GnssObservables.predict(sp3, id, @rx, @epoch)
+      {:ok, obs} = Observables.predict(sp3, id, @rx, @epoch)
 
       {rx, ry, rz} = @rx
 
       # Build the ECEF line-of-sight from scratch (NOT from obs.los_unit): run an
-      # independent light-time + Sagnac model directly off Orbis.SP3.position so
+      # independent light-time + Sagnac model directly off Orbis.GNSS.SP3.position so
       # the dx,dy,dz that feed the ENU rotation are derived by a separate code
       # path, not reused from the value under test.
       {dx, dy, dz, r} = independent_los(sp3, id, rx, ry, rz)
@@ -161,14 +161,14 @@ defmodule Orbis.GnssObservablesTest do
     end
 
     test "carrier_hz scales Doppler linearly", %{sp3: sp3, high_id: id} do
-      {:ok, base} = GnssObservables.predict(sp3, id, @rx, @epoch)
-      {:ok, scaled} = GnssObservables.predict(sp3, id, @rx, @epoch, carrier_hz: 2.0 * @f_l1)
+      {:ok, base} = Observables.predict(sp3, id, @rx, @epoch)
+      {:ok, scaled} = Observables.predict(sp3, id, @rx, @epoch, carrier_hz: 2.0 * @f_l1)
 
       assert_in_delta scaled.doppler_hz, 2.0 * base.doppler_hz, 1.0e-6
     end
 
     test "sat_clock_s equals the SP3 clock at the transmit time", %{sp3: sp3, high_id: id} do
-      {:ok, obs} = GnssObservables.predict(sp3, id, @rx, @epoch)
+      {:ok, obs} = Observables.predict(sp3, id, @rx, @epoch)
       {:ok, state} = SP3.position(sp3, id, obs.transmit_time)
 
       assert_in_delta obs.sat_clock_s, state.clock_s, 1.0e-15
@@ -179,27 +179,27 @@ defmodule Orbis.GnssObservablesTest do
     test "unknown satellite -> tagged error, no raise", %{sp3: sp3} do
       # G23 is not declared in the GRG product header.
       refute "G23" in SP3.satellite_ids(sp3)
-      assert {:error, _reason} = GnssObservables.predict(sp3, "G23", @rx, @epoch)
+      assert {:error, _reason} = Observables.predict(sp3, "G23", @rx, @epoch)
     end
 
     # NOTE: the SP3 spline primitive extrapolates rather than reporting a
     # coverage error, so an out-of-coverage epoch does not produce a tagged
-    # error from `Orbis.SP3.position/3`. It instead yields an obviously
+    # error from `Orbis.GNSS.SP3.position/3`. It instead yields an obviously
     # non-physical geometry (range far beyond the MEO shell). We assert that
     # property here honestly; a true coverage gate is a primitive-level
     # follow-up (would need a crate accessor).
     test "out-of-coverage epoch extrapolates to a non-physical range (no coverage gate)",
          %{sp3: sp3, high_id: id} do
-      assert {:ok, obs} = GnssObservables.predict(sp3, id, @rx, ~N[2020-06-26 12:00:00])
+      assert {:ok, obs} = Observables.predict(sp3, id, @rx, ~N[2020-06-26 12:00:00])
       assert obs.geometric_range_m > 2.7e7
     end
 
     test "malformed satellite token -> tagged error", %{sp3: sp3} do
-      assert {:error, {:bad_sat_id, _}} = GnssObservables.predict(sp3, "GXX", @rx, @epoch)
+      assert {:error, {:bad_sat_id, _}} = Observables.predict(sp3, "GXX", @rx, @epoch)
     end
   end
 
-  # Independent light-time + Sagnac line-of-sight straight from Orbis.SP3.position,
+  # Independent light-time + Sagnac line-of-sight straight from Orbis.GNSS.SP3.position,
   # so the ENU cross-check is fed dx,dy,dz from a different code path than the one
   # under test. Returns {dx, dy, dz, range} in the receive-epoch ECEF frame.
   @omega_e 7.2921151467e-5

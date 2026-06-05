@@ -1,9 +1,9 @@
-defmodule Orbis.GnssData.CatalogTest do
+defmodule Orbis.GNSS.Data.CatalogTest do
   use ExUnit.Case, async: true
 
-  alias Orbis.GnssData.Catalog
+  alias Orbis.GNSS.Data.Catalog
 
-  doctest Orbis.GnssData.Catalog
+  doctest Orbis.GNSS.Data.Catalog
 
   describe "GPS-week and day-of-year arithmetic" do
     test "worked example: 2020-06-24 is GPS week 2111, day 3, doy 176" do

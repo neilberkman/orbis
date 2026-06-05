@@ -1,10 +1,10 @@
-defmodule Orbis.GnssGeometryTest do
+defmodule Orbis.GNSS.GeometryTest do
   use ExUnit.Case, async: true
 
-  alias Orbis.GnssGeometry
-  alias Orbis.GnssObservables
-  alias Orbis.PointPositioning
-  alias Orbis.SP3
+  alias Orbis.GNSS.Geometry
+  alias Orbis.GNSS.Observables
+  alias Orbis.GNSS.Positioning
+  alias Orbis.GNSS.SP3
 
   # Precise ephemeris fixture: 2020-06-24 00:00..23:45 GPST, 15-min, 96 epochs.
   @sp3_path Path.join(__DIR__, "fixtures/sp3/GRG0MGXFIN_20201760000_01D_15M_ORB.SP3")
@@ -24,13 +24,13 @@ defmodule Orbis.GnssGeometryTest do
     {:ok, sp3: sp3, receiver: {tx, ty, tz}}
   end
 
-  describe "dop/4 cross-check against PointPositioning" do
+  describe "dop/4 cross-check against Positioning" do
     test "every DOP component matches the point-positioning reported DOP", ctx do
       rx = ctx.receiver
 
       # A GPS-only visible set at the epoch, masked at a 10 deg elevation mask.
       visible =
-        GnssGeometry.visible(ctx.sp3, rx, @epoch, systems: ["G"], elevation_mask_deg: 10.0)
+        Geometry.visible(ctx.sp3, rx, @epoch, systems: ["G"], elevation_mask_deg: 10.0)
 
       assert length(visible) >= 4
 
@@ -39,7 +39,7 @@ defmodule Orbis.GnssGeometryTest do
       # clock; here the receiver clock is zero, so pr = range - c * sat_clock.
       observations =
         Enum.flat_map(visible, fn %{satellite_id: sat} ->
-          case GnssObservables.predict(ctx.sp3, sat, rx, @epoch, light_time: true, sagnac: true) do
+          case Observables.predict(ctx.sp3, sat, rx, @epoch, light_time: true, sagnac: true) do
             {:ok, o} -> [{sat, o.geometric_range_m - @c * (o.sat_clock_s || 0.0)}]
             {:error, _} -> []
           end
@@ -48,7 +48,7 @@ defmodule Orbis.GnssGeometryTest do
       {tx, ty, tz} = rx
 
       {:ok, sol} =
-        PointPositioning.solve(ctx.sp3, observations, @epoch,
+        Positioning.solve(ctx.sp3, observations, @epoch,
           ionosphere: false,
           troposphere: false,
           initial_guess: {tx, ty, tz, 0.0}
@@ -61,7 +61,7 @@ defmodule Orbis.GnssGeometryTest do
       # the point-positioning geometry uses, so the two code paths are
       # apples-to-apples.
       geom =
-        GnssGeometry.dop(ctx.sp3, sol.position, @epoch,
+        Geometry.dop(ctx.sp3, sol.position, @epoch,
           satellites: sol.used_sats,
           weights: :elevation,
           light_time: true
@@ -84,14 +84,14 @@ defmodule Orbis.GnssGeometryTest do
   describe "visible/4" do
     test "no returned satellite is below the elevation mask", ctx do
       mask = 15.0
-      vis = GnssGeometry.visible(ctx.sp3, ctx.receiver, @epoch, elevation_mask_deg: mask)
+      vis = Geometry.visible(ctx.sp3, ctx.receiver, @epoch, elevation_mask_deg: mask)
       assert vis != []
       assert Enum.all?(vis, &(&1.elevation_deg >= mask))
     end
 
     test "raising the mask only removes satellites", ctx do
-      low = GnssGeometry.visible(ctx.sp3, ctx.receiver, @epoch, elevation_mask_deg: 5.0)
-      high = GnssGeometry.visible(ctx.sp3, ctx.receiver, @epoch, elevation_mask_deg: 30.0)
+      low = Geometry.visible(ctx.sp3, ctx.receiver, @epoch, elevation_mask_deg: 5.0)
+      high = Geometry.visible(ctx.sp3, ctx.receiver, @epoch, elevation_mask_deg: 30.0)
 
       low_ids = MapSet.new(low, & &1.satellite_id)
       high_ids = MapSet.new(high, & &1.satellite_id)
@@ -100,19 +100,19 @@ defmodule Orbis.GnssGeometryTest do
       assert length(high) <= length(low)
     end
 
-    test "counts match a manual az/el filter via GnssObservables", ctx do
+    test "counts match a manual az/el filter via Observables", ctx do
       mask = 10.0
 
       manual =
         ctx.sp3
-        |> GnssObservables.predict_all(ctx.receiver, @epoch, light_time: false)
+        |> Observables.predict_all(ctx.receiver, @epoch, light_time: false)
         |> Enum.count(fn
           {<<"G", _::binary>>, {:ok, o}} -> o.elevation_deg >= mask
           _ -> false
         end)
 
       vis =
-        GnssGeometry.visible(ctx.sp3, ctx.receiver, @epoch,
+        Geometry.visible(ctx.sp3, ctx.receiver, @epoch,
           systems: ["G"],
           elevation_mask_deg: mask
         )
@@ -121,13 +121,13 @@ defmodule Orbis.GnssGeometryTest do
     end
 
     test "results are sorted by elevation descending", ctx do
-      vis = GnssGeometry.visible(ctx.sp3, ctx.receiver, @epoch)
+      vis = Geometry.visible(ctx.sp3, ctx.receiver, @epoch)
       els = Enum.map(vis, & &1.elevation_deg)
       assert els == Enum.sort(els, :desc)
     end
 
     test "the system filter keeps only the requested constellations", ctx do
-      vis = GnssGeometry.visible(ctx.sp3, ctx.receiver, @epoch, systems: ["G"])
+      vis = Geometry.visible(ctx.sp3, ctx.receiver, @epoch, systems: ["G"])
       assert vis != []
       assert Enum.all?(vis, &String.starts_with?(&1.satellite_id, "G"))
     end
@@ -136,14 +136,14 @@ defmodule Orbis.GnssGeometryTest do
       # The full visible set under a low mask; a satellite below the horizon
       # never appears regardless of mask.
       vis =
-        GnssGeometry.visible(ctx.sp3, ctx.receiver, @epoch,
+        Geometry.visible(ctx.sp3, ctx.receiver, @epoch,
           systems: ["G"],
           elevation_mask_deg: 0.0
         )
 
       below =
         ctx.sp3
-        |> GnssObservables.predict_all(ctx.receiver, @epoch, light_time: false)
+        |> Observables.predict_all(ctx.receiver, @epoch, light_time: false)
         |> Enum.find_value(fn
           {<<"G", _::binary>> = sat, {:ok, o}} when o.elevation_deg < 0.0 -> sat
           _ -> false
@@ -160,7 +160,7 @@ defmodule Orbis.GnssGeometryTest do
 
       ids =
         ctx.sp3
-        |> GnssGeometry.visible(rx, @epoch, systems: ["G"], elevation_mask_deg: 10.0)
+        |> Geometry.visible(rx, @epoch, systems: ["G"], elevation_mask_deg: 10.0)
         |> Enum.map(& &1.satellite_id)
 
       assert length(ids) >= 5
@@ -168,8 +168,8 @@ defmodule Orbis.GnssGeometryTest do
       base = Enum.take(ids, 4)
       grown = Enum.take(ids, 5)
 
-      base_dop = GnssGeometry.dop(ctx.sp3, rx, @epoch, satellites: base)
-      grown_dop = GnssGeometry.dop(ctx.sp3, rx, @epoch, satellites: grown)
+      base_dop = Geometry.dop(ctx.sp3, rx, @epoch, satellites: base)
+      grown_dop = Geometry.dop(ctx.sp3, rx, @epoch, satellites: grown)
 
       assert grown_dop.gdop <= base_dop.gdop * (1.0 + 1.0e-9)
     end
@@ -177,7 +177,7 @@ defmodule Orbis.GnssGeometryTest do
     test "a clustered four-satellite set has much worse DOP than a spread set", ctx do
       rx = ctx.receiver
 
-      vis = GnssGeometry.visible(ctx.sp3, rx, @epoch, systems: ["G"], elevation_mask_deg: 10.0)
+      vis = Geometry.visible(ctx.sp3, rx, @epoch, systems: ["G"], elevation_mask_deg: 10.0)
 
       # Spread set: extreme azimuths give a well-conditioned geometry.
       spread =
@@ -194,15 +194,15 @@ defmodule Orbis.GnssGeometryTest do
         |> Enum.take(4)
         |> Enum.map(& &1.satellite_id)
 
-      spread_dop = GnssGeometry.dop(ctx.sp3, rx, @epoch, satellites: spread)
-      clustered_dop = GnssGeometry.dop(ctx.sp3, rx, @epoch, satellites: clustered)
+      spread_dop = Geometry.dop(ctx.sp3, rx, @epoch, satellites: spread)
+      clustered_dop = Geometry.dop(ctx.sp3, rx, @epoch, satellites: clustered)
 
       assert clustered_dop.gdop > spread_dop.gdop * 1.5
     end
 
     test "exposes all five components plus the satellite count and ids", ctx do
       d =
-        GnssGeometry.dop(ctx.sp3, ctx.receiver, @epoch, systems: ["G"], elevation_mask_deg: 10.0)
+        Geometry.dop(ctx.sp3, ctx.receiver, @epoch, systems: ["G"], elevation_mask_deg: 10.0)
 
       assert %{gdop: _, pdop: _, hdop: _, vdop: _, tdop: _, n_satellites: n, satellites: ids} = d
       assert n == length(ids)
@@ -219,7 +219,7 @@ defmodule Orbis.GnssGeometryTest do
         {1.0, 0.0, 3.0, 8.0}
       }
 
-      assert {:ok, inv} = GnssGeometry.inv4(a)
+      assert {:ok, inv} = Geometry.inv4(a)
 
       product =
         for i <- 0..3 do
@@ -246,14 +246,14 @@ defmodule Orbis.GnssGeometryTest do
         {9.0, 1.0, 2.0, 3.0}
       }
 
-      assert :singular = GnssGeometry.inv4(a)
+      assert :singular = Geometry.inv4(a)
     end
   end
 
   describe "series" do
     test "dop_series yields one finite-DOP entry per usable epoch", ctx do
       window = {~N[2020-06-24 12:00:00], ~N[2020-06-24 13:00:00]}
-      series = GnssGeometry.dop_series(ctx.sp3, ctx.receiver, window, 300, systems: ["G"])
+      series = Geometry.dop_series(ctx.sp3, ctx.receiver, window, 300, systems: ["G"])
 
       assert length(series) == 13
       assert Enum.all?(series, fn d -> match?(%NaiveDateTime{}, d.epoch) and d.gdop > 0.0 end)
@@ -261,7 +261,7 @@ defmodule Orbis.GnssGeometryTest do
 
     test "visibility_series counts visible satellites per epoch", ctx do
       window = {~N[2020-06-24 12:00:00], ~N[2020-06-24 13:00:00]}
-      series = GnssGeometry.visibility_series(ctx.sp3, ctx.receiver, window, 300, systems: ["G"])
+      series = Geometry.visibility_series(ctx.sp3, ctx.receiver, window, 300, systems: ["G"])
 
       assert length(series) == 13
       assert Enum.all?(series, &(&1.n_visible >= 4))
@@ -269,8 +269,8 @@ defmodule Orbis.GnssGeometryTest do
 
     test "an empty (inverted) window gives an empty series", ctx do
       window = {~N[2020-06-24 13:00:00], ~N[2020-06-24 12:00:00]}
-      assert GnssGeometry.dop_series(ctx.sp3, ctx.receiver, window, 300) == []
-      assert GnssGeometry.visibility_series(ctx.sp3, ctx.receiver, window, 300) == []
+      assert Geometry.dop_series(ctx.sp3, ctx.receiver, window, 300) == []
+      assert Geometry.visibility_series(ctx.sp3, ctx.receiver, window, 300) == []
     end
   end
 
@@ -281,7 +281,7 @@ defmodule Orbis.GnssGeometryTest do
       window = {~N[2020-06-24 00:00:00], ~N[2020-06-24 23:45:00]}
 
       passes =
-        GnssGeometry.passes(ctx.sp3, ctx.receiver, window, 900,
+        Geometry.passes(ctx.sp3, ctx.receiver, window, 900,
           systems: ["G"],
           elevation_mask_deg: 10.0
         )
@@ -309,12 +309,12 @@ defmodule Orbis.GnssGeometryTest do
       after_set = NaiveDateTime.add(interior.set_epoch, 900, :second)
 
       {:ok, o_before} =
-        GnssObservables.predict(ctx.sp3, interior.satellite_id, ctx.receiver, before_rise,
+        Observables.predict(ctx.sp3, interior.satellite_id, ctx.receiver, before_rise,
           light_time: false
         )
 
       {:ok, o_after} =
-        GnssObservables.predict(ctx.sp3, interior.satellite_id, ctx.receiver, after_set,
+        Observables.predict(ctx.sp3, interior.satellite_id, ctx.receiver, after_set,
           light_time: false
         )
 
@@ -327,26 +327,26 @@ defmodule Orbis.GnssGeometryTest do
     test "fewer than four visible satellites yields a tagged error", ctx do
       # An impossibly high mask leaves no usable directions.
       assert {:error, :too_few_satellites} =
-               GnssGeometry.dop(ctx.sp3, ctx.receiver, @epoch, elevation_mask_deg: 89.9)
+               Geometry.dop(ctx.sp3, ctx.receiver, @epoch, elevation_mask_deg: 89.9)
     end
 
     test "an explicit set of fewer than four satellites yields a tagged error", ctx do
       assert {:error, :too_few_satellites} =
-               GnssGeometry.dop(ctx.sp3, ctx.receiver, @epoch, satellites: ["G08", "G10", "G16"])
+               Geometry.dop(ctx.sp3, ctx.receiver, @epoch, satellites: ["G08", "G10", "G16"])
     end
 
     test "an unknown receiver shape yields :invalid_receiver from every entry point", ctx do
       bad = %{lat: 1.0, lon: 2.0}
       window = {~N[2020-06-24 12:00:00], ~N[2020-06-24 13:00:00]}
 
-      assert {:error, :invalid_receiver} = GnssGeometry.visible(ctx.sp3, bad, @epoch)
-      assert {:error, :invalid_receiver} = GnssGeometry.dop(ctx.sp3, bad, @epoch)
-      assert {:error, :invalid_receiver} = GnssGeometry.dop_series(ctx.sp3, bad, window, 300)
+      assert {:error, :invalid_receiver} = Geometry.visible(ctx.sp3, bad, @epoch)
+      assert {:error, :invalid_receiver} = Geometry.dop(ctx.sp3, bad, @epoch)
+      assert {:error, :invalid_receiver} = Geometry.dop_series(ctx.sp3, bad, window, 300)
 
       assert {:error, :invalid_receiver} =
-               GnssGeometry.visibility_series(ctx.sp3, bad, window, 300)
+               Geometry.visibility_series(ctx.sp3, bad, window, 300)
 
-      assert {:error, :invalid_receiver} = GnssGeometry.passes(ctx.sp3, bad, window, 300)
+      assert {:error, :invalid_receiver} = Geometry.passes(ctx.sp3, bad, window, 300)
     end
   end
 

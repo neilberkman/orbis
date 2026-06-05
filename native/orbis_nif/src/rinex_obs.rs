@@ -53,8 +53,8 @@ fn rinex_obs_parse(text: String) -> NifResult<ResourceArc<RinexObsResource>> {
 /// handle crosses back to the BEAM (the expansion is never marshalled).
 #[rustler::nif(schedule = "DirtyCpu")]
 fn crinex_obs_parse(text: String) -> NifResult<ResourceArc<RinexObsResource>> {
-    let decoded =
-        astrodynamics_gnss::crinex_decode(&text).map_err(|e| Error::Term(Box::new(e.to_string())))?;
+    let decoded = astrodynamics_gnss::crinex_decode(&text)
+        .map_err(|e| Error::Term(Box::new(e.to_string())))?;
     let obs = RinexObs::parse(&decoded).map_err(|e| Error::Term(Box::new(e.to_string())))?;
     Ok(ResourceArc::new(RinexObsResource { obs }))
 }

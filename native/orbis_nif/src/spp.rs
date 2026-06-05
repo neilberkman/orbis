@@ -54,7 +54,7 @@ enum SppErrorReason {
 
 impl SppErrorReason {
     /// The atom name the Elixir wrapper destructures as the error reason. These
-    /// strings are the public contract (`Orbis.PointPositioning.solve/4`), so a
+    /// strings are the public contract (`Orbis.GNSS.Positioning.solve/4`), so a
     /// rename here is a breaking change.
     fn atom_name(&self) -> &'static str {
         match self {

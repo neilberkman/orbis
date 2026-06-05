@@ -1,4 +1,4 @@
-defmodule Orbis.IonosphereFreeTest do
+defmodule Orbis.GNSS.IonosphereFreeTest do
   @moduledoc """
   The dual-frequency ionosphere-free pseudorange combination.
 
@@ -17,11 +17,11 @@ defmodule Orbis.IonosphereFreeTest do
   """
   use ExUnit.Case, async: true
 
-  alias Orbis.GnssObservables
-  alias Orbis.IonosphereFree
-  alias Orbis.PointPositioning
-  alias Orbis.RinexObs
-  alias Orbis.SP3
+  alias Orbis.GNSS.IonosphereFree
+  alias Orbis.GNSS.Observables
+  alias Orbis.GNSS.Positioning
+  alias Orbis.GNSS.RINEX.Observations
+  alias Orbis.GNSS.SP3
 
   @c 299_792_458.0
 
@@ -230,8 +230,8 @@ defmodule Orbis.IonosphereFreeTest do
 
   describe "iono_free_from_obs/3 (real dual-band smoke)" do
     test "extracts and combines GPS L1/L2 from a real station file" do
-      obs = RinexObs.load!(@obs_path)
-      [%{index: index} | _] = RinexObs.epochs(obs)
+      obs = Observations.load!(@obs_path)
+      [%{index: index} | _] = Observations.epochs(obs)
 
       assert {:ok, {combined, _dropped}} =
                IonosphereFree.iono_free_from_obs(obs, index, codes: %{"G" => {["C1C"], ["C2W"]}})
@@ -245,8 +245,8 @@ defmodule Orbis.IonosphereFreeTest do
     end
 
     test "default codes extract GPS, Galileo and BeiDou bands present in the file" do
-      obs = RinexObs.load!(@obs_path)
-      [%{index: index} | _] = RinexObs.epochs(obs)
+      obs = Observations.load!(@obs_path)
+      [%{index: index} | _] = Observations.epochs(obs)
 
       assert {:ok, {combined, _dropped}} = IonosphereFree.iono_free_from_obs(obs, index)
 
@@ -292,7 +292,7 @@ defmodule Orbis.IonosphereFreeTest do
         |> SP3.satellite_ids()
         |> Enum.filter(&String.starts_with?(&1, "G"))
         |> Enum.flat_map(fn sat ->
-          case GnssObservables.predict(sp3, sat, @truth, @epoch) do
+          case Observables.predict(sp3, sat, @truth, @epoch) do
             {:ok, %{geometric_range_m: range, sat_clock_s: clk, elevation_deg: el}}
             when is_float(clk) and el > 10.0 ->
               r = range - @c * clk
@@ -320,7 +320,7 @@ defmodule Orbis.IonosphereFreeTest do
       # Baseline: no ionosphere at all -> recovers the truth (the forward model the
       # position solve inverts, with the receiver clock estimated).
       {:ok, base_sol} =
-        PointPositioning.solve(sp3, clean_obs, @epoch,
+        Positioning.solve(sp3, clean_obs, @epoch,
           ionosphere: false,
           troposphere: false,
           initial_guess: guess
@@ -330,7 +330,7 @@ defmodule Orbis.IonosphereFreeTest do
 
       # (a) L1-only, ionosphere off: biased by the uncorrected 1/f^2 delay.
       {:ok, l1_sol} =
-        PointPositioning.solve(sp3, l1_obs, @epoch,
+        Positioning.solve(sp3, l1_obs, @epoch,
           ionosphere: false,
           troposphere: false,
           initial_guess: guess
@@ -342,7 +342,7 @@ defmodule Orbis.IonosphereFreeTest do
       {combined, []} = IonosphereFree.iono_free_pseudoranges(l1_obs, l2_obs, [])
 
       {:ok, if_sol} =
-        PointPositioning.solve(sp3, combined, @epoch,
+        Positioning.solve(sp3, combined, @epoch,
           ionosphere: false,
           troposphere: false,
           initial_guess: guess

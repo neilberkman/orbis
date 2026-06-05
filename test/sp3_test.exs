@@ -1,7 +1,7 @@
-defmodule Orbis.SP3Test do
+defmodule Orbis.GNSS.SP3Test do
   use ExUnit.Case, async: true
 
-  alias Orbis.SP3
+  alias Orbis.GNSS.SP3
 
   # Minimal but standards-shaped SP3-c position+clock file with two GPS sats and
   # two epochs (mirrors the astrodynamics-gnss parser fixture). G01 has a clock

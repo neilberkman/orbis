@@ -1,10 +1,10 @@
-defmodule Orbis.GnssQCTest do
+defmodule Orbis.GNSS.QCTest do
   use ExUnit.Case, async: true
 
-  alias Orbis.GnssObservables
-  alias Orbis.GnssQC
-  alias Orbis.PointPositioning
-  alias Orbis.SP3
+  alias Orbis.GNSS.Observables
+  alias Orbis.GNSS.Positioning
+  alias Orbis.GNSS.QC
+  alias Orbis.GNSS.SP3
 
   @grg Path.join(__DIR__, "fixtures/sp3/GRG0MGXFIN_20201760000_01D_15M_ORB.SP3")
 
@@ -30,7 +30,7 @@ defmodule Orbis.GnssQCTest do
 
     visible =
       sp3
-      |> GnssObservables.predict_all(@rx, @epoch)
+      |> Observables.predict_all(@rx, @epoch)
       |> Enum.filter(fn {id, r} -> String.starts_with?(id, "G") and match?({:ok, _}, r) end)
       |> Enum.map(fn {id, {:ok, obs}} -> {id, obs} end)
       |> Enum.filter(fn {_id, obs} -> obs.elevation_deg > 0.0 end)
@@ -54,7 +54,7 @@ defmodule Orbis.GnssQCTest do
 
   describe "pseudorange_variance/2 (elevation-dependent weighting)" do
     test "monotonically decreases as elevation rises" do
-      vars = Enum.map([5, 15, 30, 60, 90], &GnssQC.pseudorange_variance/1)
+      vars = Enum.map([5, 15, 30, 60, 90], &QC.pseudorange_variance/1)
 
       assert vars == Enum.sort(vars, :desc)
       assert Enum.uniq(vars) == vars
@@ -66,35 +66,35 @@ defmodule Orbis.GnssQCTest do
 
       for el <- [30.0, 90.0] do
         expected = a * a + b * b / :math.pow(:math.sin(el * :math.pi() / 180.0), 2)
-        assert_in_delta GnssQC.pseudorange_variance(el), expected, 1.0e-12
+        assert_in_delta QC.pseudorange_variance(el), expected, 1.0e-12
       end
 
       # At zenith sin(el) = 1, so variance = a^2 + b^2 = 0.18.
-      assert_in_delta GnssQC.pseudorange_variance(90.0), 0.18, 1.0e-9
+      assert_in_delta QC.pseudorange_variance(90.0), 0.18, 1.0e-9
     end
 
     test "C/N0 variant returns smaller variance for a higher C/N0" do
-      strong = GnssQC.pseudorange_variance(30.0, model: :elevation_cn0, cn0: 50.0)
-      weak = GnssQC.pseudorange_variance(30.0, model: :elevation_cn0, cn0: 30.0)
+      strong = QC.pseudorange_variance(30.0, model: :elevation_cn0, cn0: 50.0)
+      weak = QC.pseudorange_variance(30.0, model: :elevation_cn0, cn0: 30.0)
 
       assert is_float(strong) and is_float(weak)
       assert strong < weak
     end
 
     test "invalid (non-positive) elevation is a tagged error" do
-      assert GnssQC.pseudorange_variance(0.0) == {:error, :invalid_elevation}
-      assert GnssQC.pseudorange_variance(-5.0) == {:error, :invalid_elevation}
+      assert QC.pseudorange_variance(0.0) == {:error, :invalid_elevation}
+      assert QC.pseudorange_variance(-5.0) == {:error, :invalid_elevation}
     end
 
     test "C/N0 model without a cn0 value is a tagged error" do
-      assert GnssQC.pseudorange_variance(30.0, model: :elevation_cn0) ==
+      assert QC.pseudorange_variance(30.0, model: :elevation_cn0) ==
                {:error, :missing_cn0}
     end
 
     test "sigmas/2 and weight_vector/2 are consistent and drop invalid entries" do
       entries = [{"G01", 90.0}, {"G02", 30.0}, {"G03", -1.0}]
-      sigmas = GnssQC.sigmas(entries)
-      weights = GnssQC.weight_vector(entries)
+      sigmas = QC.sigmas(entries)
+      weights = QC.weight_vector(entries)
 
       refute Map.has_key?(sigmas, "G03")
       refute Map.has_key?(weights, "G03")
@@ -111,7 +111,7 @@ defmodule Orbis.GnssQCTest do
       published = %{1 => 10.828, 2 => 13.816, 3 => 16.266, 4 => 18.467, 5 => 20.515}
 
       for {dof, ref} <- published do
-        got = GnssQC.chi2_inv(0.999, dof)
+        got = QC.chi2_inv(0.999, dof)
         # Wilson-Hilferty in the far upper tail (p = 0.999) at small dof is a
         # slight, consistently conservative *over*-estimate of the true critical
         # value (~0.24-0.33 here), shrinking as dof grows. A conservative
@@ -125,11 +125,11 @@ defmodule Orbis.GnssQCTest do
 
   describe "raim/2 on a clean SP3-synthesized set" do
     test "clean solve recovers truth and RAIM passes", ctx do
-      assert {:ok, sol} = PointPositioning.solve(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts)
+      assert {:ok, sol} = Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts)
 
       assert position_error(sol) < 1.0e-2
 
-      result = GnssQC.raim(sol)
+      result = QC.raim(sol)
 
       assert result.fault_detected? == false
       assert result.testable? == true
@@ -162,9 +162,9 @@ defmodule Orbis.GnssQCTest do
     end
 
     test "a +200 m bias on one satellite is detected and is the worst sat", ctx do
-      assert {:ok, sol} = PointPositioning.solve(ctx.sp3, ctx.faulted_obs, @epoch, @solve_opts)
+      assert {:ok, sol} = Positioning.solve(ctx.sp3, ctx.faulted_obs, @epoch, @solve_opts)
 
-      result = GnssQC.raim(sol)
+      result = QC.raim(sol)
 
       assert result.fault_detected? == true
       assert result.test_statistic > result.threshold
@@ -173,10 +173,10 @@ defmodule Orbis.GnssQCTest do
 
     test "FDE excludes exactly the biased satellite and recovers the position", ctx do
       # The faulted solve's own error, for the recovery comparison.
-      {:ok, faulted_sol} = PointPositioning.solve(ctx.sp3, ctx.faulted_obs, @epoch, @solve_opts)
+      {:ok, faulted_sol} = Positioning.solve(ctx.sp3, ctx.faulted_obs, @epoch, @solve_opts)
       faulted_error = position_error(faulted_sol)
 
-      assert {:ok, fde} = GnssQC.fde(ctx.sp3, ctx.faulted_obs, @epoch, @solve_opts)
+      assert {:ok, fde} = QC.fde(ctx.sp3, ctx.faulted_obs, @epoch, @solve_opts)
 
       assert fde.excluded == [{ctx.biased_sat, :raim_excluded}]
       assert fde.iterations == 1
@@ -186,13 +186,13 @@ defmodule Orbis.GnssQCTest do
       assert recovered_error < faulted_error
 
       # The cleaned solution passes RAIM.
-      assert GnssQC.raim(fde.solution).fault_detected? == false
+      assert QC.raim(fde.solution).fault_detected? == false
     end
   end
 
   describe "fde/4 on a clean set" do
     test "excludes nothing and converges immediately", ctx do
-      assert {:ok, fde} = GnssQC.fde(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts)
+      assert {:ok, fde} = QC.fde(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts)
 
       assert fde.excluded == []
       assert fde.iterations == 0
@@ -204,10 +204,10 @@ defmodule Orbis.GnssQCTest do
     test "dof <= 0 -> RAIM reports a non-testable result without raising", ctx do
       # Exactly four GPS sats: n_used == n_states (4), so dof == 0.
       four_obs = Enum.take(ctx.clean_obs, 4)
-      assert {:ok, sol} = PointPositioning.solve(ctx.sp3, four_obs, @epoch, @solve_opts)
+      assert {:ok, sol} = Positioning.solve(ctx.sp3, four_obs, @epoch, @solve_opts)
       assert length(sol.used_sats) == 4
 
-      result = GnssQC.raim(sol)
+      result = QC.raim(sol)
 
       assert result.testable? == false
       assert result.fault_detected? == false
@@ -219,24 +219,24 @@ defmodule Orbis.GnssQCTest do
       three_obs = Enum.take(ctx.clean_obs, 3)
 
       assert {:error, {:too_few_satellites, _used, _required}} =
-               GnssQC.fde(ctx.sp3, three_obs, @epoch, @solve_opts)
+               QC.fde(ctx.sp3, three_obs, @epoch, @solve_opts)
     end
   end
 
   describe "raim/2 option validation" do
     test "an out-of-range p_fa raises ArgumentError, not an obscure math error", ctx do
-      assert {:ok, sol} = PointPositioning.solve(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts)
+      assert {:ok, sol} = Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts)
 
-      assert_raise ArgumentError, fn -> GnssQC.raim(sol, p_fa: 0.0) end
-      assert_raise ArgumentError, fn -> GnssQC.raim(sol, p_fa: 1.0) end
-      assert_raise ArgumentError, fn -> GnssQC.raim(sol, p_fa: -0.1) end
+      assert_raise ArgumentError, fn -> QC.raim(sol, p_fa: 0.0) end
+      assert_raise ArgumentError, fn -> QC.raim(sol, p_fa: 1.0) end
+      assert_raise ArgumentError, fn -> QC.raim(sol, p_fa: -0.1) end
     end
 
     test "a non-positive custom weight raises ArgumentError", ctx do
-      assert {:ok, sol} = PointPositioning.solve(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts)
+      assert {:ok, sol} = Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts)
       bad_weights = Map.new(sol.used_sats, fn s -> {s, -1.0} end)
 
-      assert_raise ArgumentError, fn -> GnssQC.raim(sol, weights: bad_weights) end
+      assert_raise ArgumentError, fn -> QC.raim(sol, weights: bad_weights) end
     end
   end
 end

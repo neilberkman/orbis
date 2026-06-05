@@ -28,7 +28,9 @@ defmodule Orbis.CCSDS.CDM do
   """
 
   defmodule ObjectData do
-    @moduledoc false
+    @moduledoc """
+    Object-specific data block inside a parsed CCSDS CDM.
+    """
 
     @type t :: %__MODULE__{
             object_designator: String.t() | nil,

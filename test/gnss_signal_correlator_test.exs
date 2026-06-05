@@ -1,7 +1,7 @@
-defmodule Orbis.GnssSignal.CorrelatorTest do
+defmodule Orbis.GNSS.Signal.CorrelatorTest do
   use ExUnit.Case, async: true
 
-  alias Orbis.GnssSignal.Correlator
+  alias Orbis.GNSS.Signal.Correlator
 
   @fs 2.046e6
   @t 1.0e-3

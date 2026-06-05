@@ -1,11 +1,11 @@
-defmodule Orbis.GnssConstellationTest do
+defmodule Orbis.GNSS.ConstellationTest do
   # Not async: the live-fetch error test toggles app env to simulate the optional
   # CelesTrak Req dependency being absent.
   use ExUnit.Case, async: false
 
-  alias Orbis.GnssConstellation
-  alias Orbis.GnssConstellation.Record
-  alias Orbis.SP3
+  alias Orbis.GNSS.Constellation
+  alias Orbis.GNSS.Constellation.Record
+  alias Orbis.GNSS.SP3
 
   @fixtures Path.join(__DIR__, "fixtures/gnss_constellation")
 
@@ -41,9 +41,9 @@ defmodule Orbis.GnssConstellationTest do
   end
 
   defp merged_records do
-    {:ok, records} = GnssConstellation.from_celestrak_omm(celestrak_omms())
-    {:ok, statuses} = GnssConstellation.parse_navcen_html(navcen_html())
-    GnssConstellation.merge_navcen(records, statuses)
+    {:ok, records} = Constellation.from_celestrak_omm(celestrak_omms())
+    {:ok, statuses} = Constellation.parse_navcen_html(navcen_html())
+    Constellation.merge_navcen(records, statuses)
   end
 
   describe "fetch_gps/1" do
@@ -51,13 +51,13 @@ defmodule Orbis.GnssConstellationTest do
       Application.put_env(:orbis, :celestrak_req_available, false)
       on_exit(fn -> Application.delete_env(:orbis, :celestrak_req_available) end)
 
-      assert {:error, :req_not_available} = GnssConstellation.fetch_gps()
+      assert {:error, :req_not_available} = Constellation.fetch_gps()
     end
   end
 
   describe "from_celestrak_omm/1" do
     test "normalizes GPS PRN/NORAD records from gps-ops OMM JSON" do
-      assert {:ok, records} = GnssConstellation.from_celestrak_omm(celestrak_omms())
+      assert {:ok, records} = Constellation.from_celestrak_omm(celestrak_omms())
       assert Enum.map(records, & &1.prn) == [3, 5, 13, 19]
 
       prn3 = Enum.find(records, &(&1.prn == 3))
@@ -76,13 +76,13 @@ defmodule Orbis.GnssConstellationTest do
       bad = [%{"OBJECT_NAME" => "GPS WITHOUT PRN", "NORAD_CAT_ID" => 1}]
 
       assert {:error, {:bad_celestrak_record, {:missing_prn, "GPS WITHOUT PRN"}, _}} =
-               GnssConstellation.from_celestrak_omm(bad)
+               Constellation.from_celestrak_omm(bad)
     end
   end
 
   describe "parse_navcen_html/1 and merge_navcen/2" do
     test "parses SVN and active NANU status rows" do
-      assert {:ok, statuses} = GnssConstellation.parse_navcen_html(navcen_html())
+      assert {:ok, statuses} = Constellation.parse_navcen_html(navcen_html())
       assert Enum.map(statuses, &{&1.prn, &1.svn}) == [{3, 69}, {5, 50}, {13, 43}, {19, 59}]
 
       prn19 = Enum.find(statuses, &(&1.prn == 19))
@@ -117,7 +117,7 @@ defmodule Orbis.GnssConstellationTest do
 
   describe "CSV export" do
     test "exports the compact mapping CSV with active=false for unusable rows" do
-      assert GnssConstellation.to_csv(merged_records()) ==
+      assert Constellation.to_csv(merged_records()) ==
                """
                prn,norad_cat_id,active,sp3_id
                3,40294,true,G03
@@ -153,26 +153,26 @@ defmodule Orbis.GnssConstellationTest do
         }
       ]
 
-      report = GnssConstellation.validate(records)
+      report = Constellation.validate(records)
       assert report.duplicate_prns == [3]
       assert report.duplicate_norad_ids == [40294]
       assert report.inactive_unusable_prns == [3]
-      refute GnssConstellation.valid?(report)
+      refute Constellation.valid?(report)
     end
 
     test "compares active usable catalog ids against a loaded SP3 product" do
       {:ok, sp3} = SP3.parse(@sp3)
       assert SP3.satellite_ids(sp3) == ["G03", "G32"]
 
-      report = GnssConstellation.validate_sp3(merged_records(), sp3)
+      report = Constellation.validate_sp3(merged_records(), sp3)
       assert report.missing_sp3_ids == ["G05", "G13"]
       assert report.extra_sp3_ids == ["G32"]
       assert report.inactive_unusable_prns == [19]
-      refute GnssConstellation.valid?(report)
+      refute Constellation.valid?(report)
     end
 
     test "accepts a plain SP3 id list for validation" do
-      report = GnssConstellation.validate_sp3(merged_records(), ["G03", "G05", "G13"])
+      report = Constellation.validate_sp3(merged_records(), ["G03", "G05", "G13"])
       assert report.missing_sp3_ids == []
       assert report.extra_sp3_ids == []
       assert report.inactive_unusable_prns == [19]

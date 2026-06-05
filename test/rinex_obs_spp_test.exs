@@ -1,4 +1,4 @@
-defmodule Orbis.RinexObsSppTest do
+defmodule Orbis.GNSS.RINEX.ObservationsSppTest do
   @moduledoc """
   End-to-end single-point positioning from a real station observation file: load
   the CRINEX, extract single-frequency pseudoranges, solve against the matching
@@ -10,9 +10,9 @@ defmodule Orbis.RinexObsSppTest do
   """
   use ExUnit.Case, async: true
 
-  alias Orbis.BroadcastEphemeris
-  alias Orbis.PointPositioning
-  alias Orbis.RinexObs
+  alias Orbis.GNSS.Broadcast
+  alias Orbis.GNSS.Positioning
+  alias Orbis.GNSS.RINEX.Observations
 
   @obs_path Path.join(__DIR__, "fixtures/obs/ESBC00DNK_R_20201770000_01D_30S_MO_trim.crx")
   @nav_path Path.join(__DIR__, "fixtures/nav/ESBC00DNK_R_20201770000_01D_MN.rnx")
@@ -22,15 +22,15 @@ defmodule Orbis.RinexObsSppTest do
   @gps_beta {8.1920e+04, 9.8304e+04, -6.5536e+04, -5.2429e+05}
 
   test "recovers the surveyed station position from real GPS observations" do
-    obs = RinexObs.load!(@obs_path)
-    eph = BroadcastEphemeris.load!(@nav_path)
+    obs = Observations.load!(@obs_path)
+    eph = Broadcast.load!(@nav_path)
 
-    {truth_x, truth_y, truth_z} = RinexObs.approx_position(obs)
+    {truth_x, truth_y, truth_z} = Observations.approx_position(obs)
 
-    [%{index: index, epoch: epoch} | _] = RinexObs.epochs(obs)
+    [%{index: index, epoch: epoch} | _] = Observations.epochs(obs)
 
     # Default GPS code (C1C), single frequency.
-    {:ok, prs} = RinexObs.pseudoranges(obs, index, codes: %{"G" => ["C1C"]})
+    {:ok, prs} = Observations.pseudoranges(obs, index, codes: %{"G" => ["C1C"]})
 
     # An over-determined GPS-only set at epoch 0.
     assert length(prs) >= 6
@@ -42,7 +42,7 @@ defmodule Orbis.RinexObsSppTest do
     coarse_guess = {truth_x + 30_000.0, truth_y - 20_000.0, truth_z + 25_000.0, 0.0}
 
     assert {:ok, sol} =
-             PointPositioning.solve(eph, prs, epoch,
+             Positioning.solve(eph, prs, epoch,
                ionosphere: true,
                troposphere: true,
                klobuchar_alpha: @gps_alpha,
@@ -70,17 +70,17 @@ defmodule Orbis.RinexObsSppTest do
   end
 
   test "pseudoranges/3 accepts an epoch tuple as well as an index" do
-    obs = RinexObs.load!(@obs_path)
-    [%{index: index, epoch: epoch} | _] = RinexObs.epochs(obs)
+    obs = Observations.load!(@obs_path)
+    [%{index: index, epoch: epoch} | _] = Observations.epochs(obs)
 
-    {:ok, by_index} = RinexObs.pseudoranges(obs, index, codes: %{"G" => ["C1C"]})
-    {:ok, by_tuple} = RinexObs.pseudoranges(obs, epoch, codes: %{"G" => ["C1C"]})
+    {:ok, by_index} = Observations.pseudoranges(obs, index, codes: %{"G" => ["C1C"]})
+    {:ok, by_tuple} = Observations.pseudoranges(obs, epoch, codes: %{"G" => ["C1C"]})
 
     assert by_index == by_tuple
   end
 
   test "pseudoranges/3 reports an out-of-range epoch index" do
-    obs = RinexObs.load!(@obs_path)
-    assert {:error, :epoch_out_of_range} = RinexObs.pseudoranges(obs, 9_999)
+    obs = Observations.load!(@obs_path)
+    assert {:error, :epoch_out_of_range} = Observations.pseudoranges(obs, 9_999)
   end
 end
