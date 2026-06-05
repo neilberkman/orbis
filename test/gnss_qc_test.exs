@@ -222,4 +222,21 @@ defmodule Orbis.GnssQCTest do
                GnssQC.fde(ctx.sp3, three_obs, @epoch, @solve_opts)
     end
   end
+
+  describe "raim/2 option validation" do
+    test "an out-of-range p_fa raises ArgumentError, not an obscure math error", ctx do
+      assert {:ok, sol} = PointPositioning.solve(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts)
+
+      assert_raise ArgumentError, fn -> GnssQC.raim(sol, p_fa: 0.0) end
+      assert_raise ArgumentError, fn -> GnssQC.raim(sol, p_fa: 1.0) end
+      assert_raise ArgumentError, fn -> GnssQC.raim(sol, p_fa: -0.1) end
+    end
+
+    test "a non-positive custom weight raises ArgumentError", ctx do
+      assert {:ok, sol} = PointPositioning.solve(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts)
+      bad_weights = Map.new(sol.used_sats, fn s -> {s, -1.0} end)
+
+      assert_raise ArgumentError, fn -> GnssQC.raim(sol, weights: bad_weights) end
+    end
+  end
 end

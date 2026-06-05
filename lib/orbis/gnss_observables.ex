@@ -100,8 +100,9 @@ defmodule Orbis.GnssObservables do
       `true`. When `false`, the satellite is evaluated at `epoch`.
     * `:sagnac` - apply the Sagnac / Earth-rotation correction, default `true`.
 
-  Returns `{:ok, observables}` or propagates any `Orbis.SP3.position/3` error
-  (e.g. an unknown satellite or a malformed satellite token) verbatim as
+  Returns `{:ok, observables}`, `{:error, :invalid_receiver}` for a malformed
+  receiver position, or propagates any `Orbis.SP3.position/3` error (e.g. an
+  unknown satellite or a malformed satellite token) verbatim as
   `{:error, reason}`. Never raises.
 
   Note that `Orbis.SP3.position/3` extrapolates its spline rather than reporting
@@ -116,9 +117,8 @@ defmodule Orbis.GnssObservables do
     light_time? = Keyword.get(opts, :light_time, true)
     sagnac? = Keyword.get(opts, :sagnac, true)
 
-    {rx, ry, rz} = normalize_receiver(receiver_ecef)
-
-    with {:ok, t_tx, tau, state, r_sat_rot} <-
+    with {:ok, {rx, ry, rz}} <- normalize_receiver(receiver_ecef),
+         {:ok, t_tx, tau, state, r_sat_rot} <-
            solve_transmit_time(sp3, satellite_id, {rx, ry, rz}, epoch, light_time?, sagnac?),
          {:ok, v_sat} <- sat_velocity(sp3, satellite_id, t_tx) do
       {sxr, syr, szr} = r_sat_rot
@@ -283,7 +283,11 @@ defmodule Orbis.GnssObservables do
 
   # --- receiver normalization ----------------------------------------------
 
-  defp normalize_receiver({x, y, z}), do: {x * 1.0, y * 1.0, z * 1.0}
+  defp normalize_receiver({x, y, z}) when is_number(x) and is_number(y) and is_number(z),
+    do: {:ok, {x * 1.0, y * 1.0, z * 1.0}}
 
-  defp normalize_receiver(%{x_m: x, y_m: y, z_m: z}), do: {x * 1.0, y * 1.0, z * 1.0}
+  defp normalize_receiver(%{x_m: x, y_m: y, z_m: z})
+       when is_number(x) and is_number(y) and is_number(z), do: {:ok, {x * 1.0, y * 1.0, z * 1.0}}
+
+  defp normalize_receiver(_), do: {:error, :invalid_receiver}
 end

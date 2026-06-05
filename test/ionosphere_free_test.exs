@@ -202,6 +202,19 @@ defmodule Orbis.IonosphereFreeTest do
       assert {[], []} = IonosphereFree.iono_free_pseudoranges([], [], [])
     end
 
+    test "a satellite repeated within a band is dropped, not silently collapsed" do
+      # G01 appears twice in band1 with different ranges; the result must not
+      # depend on which entry comes last. It is reported as a duplicate and a
+      # clean satellite (G02) still combines.
+      band1 = [{"G01", 2.30e7}, {"G01", 2.31e7}, {"G02", 2.20e7}]
+      band2 = [{"G01", 2.30e7}, {"G02", 2.20e7}]
+
+      {combined, dropped} = IonosphereFree.iono_free_pseudoranges(band1, band2, [])
+
+      assert Enum.map(combined, &elem(&1, 0)) == ["G02"]
+      assert {"G01", :duplicate_observation} in dropped
+    end
+
     test "the :pairs option overrides the band pair per system" do
       r = 2.30e7
       k = 1.0e19

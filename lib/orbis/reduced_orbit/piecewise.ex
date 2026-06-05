@@ -203,7 +203,14 @@ defmodule Orbis.ReducedOrbit.Piecewise do
     end
   end
 
-  defp validate_segment_s(s) when is_number(s) and s > 0, do: {:ok, s}
+  # The segment length drives a second-resolution tiling, so it must round to at
+  # least one whole second; otherwise the step is 0 and the tiling cannot
+  # advance. Return the rounded integer so the stored length is the one used.
+  defp validate_segment_s(s) when is_number(s) and s > 0 do
+    step = round(s)
+    if step >= 1, do: {:ok, step}, else: {:error, :invalid_segment}
+  end
+
   defp validate_segment_s(_), do: {:error, :invalid_segment}
 
   # Contiguous half-open intervals tiling [t0, t1]; the last may be shorter.
@@ -488,6 +495,8 @@ defmodule Orbis.ReducedOrbit.Piecewise do
   @spec from_map(map()) :: {:ok, t()} | {:error, term()}
   def from_map(%{"version" => 1, "kind" => "piecewise", "model" => model} = map)
       when model in @model_ids do
+    frame = Map.get(map, "frame", "GCRS")
+
     with %{"segments" => seg_maps, "window" => window_map, "segment_s" => segment_s} <- map,
          true <- is_list(seg_maps),
          # An empty segment list is a state fit/2 can never produce (it surfaces
@@ -496,12 +505,17 @@ defmodule Orbis.ReducedOrbit.Piecewise do
          true <- is_number(segment_s),
          {:ok, scale} <- valid_scale(Map.get(map, "time_scale", "UTC")),
          {:ok, {t0, t1}} <- window_from_map(window_map),
-         {:ok, segments} <- segments_from_maps(seg_maps, model) do
+         # Each segment's inner model must agree with the container on model id,
+         # frame, and time scale, or the persisted scale/frame contract is a lie
+         # (position/3 would evaluate mixed-scale segments under a single
+         # container scale). fit/2 only ever emits agreeing, gap-free segments.
+         {:ok, segments} <- segments_from_maps(seg_maps, model, scale, frame),
+         :ok <- validate_contiguity(segments, t0, t1) do
       {:ok,
        %__MODULE__{
          version: 1,
          model: model,
-         frame: Map.get(map, "frame", "GCRS"),
+         frame: frame,
          time_scale: scale,
          window: {t0, t1},
          segment_s: segment_s,
@@ -520,9 +534,9 @@ defmodule Orbis.ReducedOrbit.Piecewise do
 
   def from_map(_), do: {:error, :malformed_map}
 
-  defp segments_from_maps(seg_maps, model) do
+  defp segments_from_maps(seg_maps, model, scale, frame) do
     Enum.reduce_while(seg_maps, {:ok, []}, fn seg_map, {:ok, acc} ->
-      case segment_from_map(seg_map, model) do
+      case segment_from_map(seg_map, model, scale, frame) do
         {:ok, seg} -> {:cont, {:ok, [seg | acc]}}
         :error -> {:halt, :error}
       end
@@ -533,18 +547,51 @@ defmodule Orbis.ReducedOrbit.Piecewise do
     end
   end
 
-  defp segment_from_map(%{"t0" => t0_iso, "t1" => t1_iso, "model" => model_map}, container_model)
+  defp segment_from_map(
+         %{"t0" => t0_iso, "t1" => t1_iso, "model" => model_map},
+         container_model,
+         container_scale,
+         container_frame
+       )
        when is_binary(t0_iso) and is_binary(t1_iso) do
     with {:ok, t0} <- NaiveDateTime.from_iso8601(t0_iso),
          {:ok, t1} <- NaiveDateTime.from_iso8601(t1_iso),
-         {:ok, %ReducedOrbit{model: ^container_model} = model} <- ReducedOrbit.from_map(model_map) do
+         {:ok,
+          %ReducedOrbit{
+            model: ^container_model,
+            time_scale: ^container_scale,
+            frame: ^container_frame
+          } = model} <-
+           ReducedOrbit.from_map(model_map) do
       {:ok, %{t0: t0, t1: t1, model: model}}
     else
       _ -> :error
     end
   end
 
-  defp segment_from_map(_, _), do: :error
+  defp segment_from_map(_, _, _, _), do: :error
+
+  # A genuine fit/2 product tiles [t0, t1] with gap-free, abutting segments whose
+  # ends meet exactly and whose span equals the container window. Reject a
+  # persisted map that violates this (an interior gap or a window that does not
+  # match the segments).
+  defp validate_contiguity([first | _] = segments, t0, t1) do
+    last = List.last(segments)
+
+    abutting? =
+      segments
+      |> Enum.chunk_every(2, 1, :discard)
+      |> Enum.all?(fn [a, b] -> NaiveDateTime.compare(a.t1, b.t0) == :eq end)
+
+    if abutting? and NaiveDateTime.compare(first.t0, t0) == :eq and
+         NaiveDateTime.compare(last.t1, t1) == :eq do
+      :ok
+    else
+      :error
+    end
+  end
+
+  defp validate_contiguity(_, _, _), do: :error
 
   # ------------------------------------------------------------------------
   # Helpers (mirrored from the single model for parity)

@@ -18,6 +18,16 @@ defmodule Orbis.GnssObservablesTest do
   @c 299_792_458.0
   @f_l1 1_575_420_000.0
 
+  describe "predict/5 receiver validation" do
+    test "a malformed receiver yields {:error, :invalid_receiver}, never raising" do
+      sp3 = SP3.load!(@grg)
+
+      for bad <- [{1.0, 2.0}, {:a, :b, :c}, {1.0, 2.0, :z}, nil, "nope", %{x_m: 1.0}, %{}] do
+        assert GnssObservables.predict(sp3, "G21", bad, @epoch) == {:error, :invalid_receiver}
+      end
+    end
+  end
+
   setup do
     sp3 = SP3.load!(@grg)
 

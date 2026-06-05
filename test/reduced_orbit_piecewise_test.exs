@@ -325,6 +325,23 @@ defmodule Orbis.ReducedOrbit.PiecewiseTest do
     end
   end
 
+  describe "fit/2 segment validation" do
+    test "a :segment_s that rounds below one second is rejected, not hung", %{grg: grg} do
+      win = {@t0, ~N[2020-06-24 04:00:00]}
+
+      # round(0.1) == 0 would make the segment tiling step 0 and loop forever;
+      # it must be rejected up front instead.
+      assert {:error, :invalid_segment} =
+               Piecewise.fit(grg, satellite_id: @gps, window: win, segment_s: 0.1)
+
+      assert {:error, :invalid_segment} =
+               Piecewise.fit(grg, satellite_id: @gps, window: win, segment_s: 0)
+
+      assert {:error, :invalid_segment} =
+               Piecewise.fit(grg, satellite_id: @gps, window: win, segment_s: -5)
+    end
+  end
+
   describe "malformed piecewise maps" do
     setup %{grg: grg} do
       {:ok, pw} =
@@ -365,6 +382,18 @@ defmodule Orbis.ReducedOrbit.PiecewiseTest do
 
       assert {:error, :malformed_map} =
                Piecewise.from_map(Map.put(map, "segments", [grafted | rest]))
+    end
+
+    test "a segment whose time scale differs from the container is malformed", %{map: map} do
+      # GRG is GPST, so the container and every segment model serialize as GPST.
+      # Flip one segment model to UTC: that breaks the scale contract that
+      # drift/3 and position/3 rely on, so the whole map must be rejected.
+      assert map["time_scale"] == "GPST"
+      [first | rest] = map["segments"]
+      mixed = Map.put(first, "model", Map.put(first["model"], "time_scale", "UTC"))
+
+      assert {:error, :malformed_map} =
+               Piecewise.from_map(Map.put(map, "segments", [mixed | rest]))
     end
 
     test "an unsupported version is surfaced", %{map: map} do

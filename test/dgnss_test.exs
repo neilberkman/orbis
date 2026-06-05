@@ -20,6 +20,25 @@ defmodule Orbis.DGNSSTest do
   @rx_clock_base 1.0e-6
   @rx_clock_rover -2.0e-6
 
+  describe "base position validation" do
+    test "corrections/5 with a malformed base position is tagged, never raises" do
+      sp3 = SP3.load!(@sp3_path)
+      obs = [{"G21", 2.3e7}]
+
+      for bad <- [{1.0, 2.0}, {:a, :b, :c}, {1.0, 2.0, :z}, nil, "nope", %{x_m: 1.0}, %{}] do
+        assert DGNSS.corrections(sp3, bad, obs, @epoch) == {:error, :invalid_base_position}
+      end
+    end
+
+    test "position/6 with a malformed base position is tagged, never raises" do
+      sp3 = SP3.load!(@sp3_path)
+      obs = [{"G21", 2.3e7}, {"G16", 2.1e7}, {"G20", 2.2e7}, {"G10", 2.4e7}]
+
+      assert DGNSS.position(sp3, {:a, :b, :c}, obs, obs, @epoch) ==
+               {:error, :invalid_base_position}
+    end
+  end
+
   setup_all do
     sp3 = SP3.load!(@sp3_path)
 

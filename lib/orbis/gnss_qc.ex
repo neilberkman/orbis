@@ -218,11 +218,12 @@ defmodule Orbis.GnssQC do
 
   ## Options
 
-    * `:p_fa` - false-alarm probability (default `1.0e-3`)
+    * `:p_fa` - false-alarm probability, a number strictly between 0 and 1
+      (default `1.0e-3`); any other value raises `ArgumentError`
     * `:weights` - either `:unit` (default; all sigma = 1) or a
-      `%{sat => weight}` map of inverse-variance weights `1 / sigma_i^2` as
-      built by `weight_vector/2`; an unspecified satellite defaults to unit
-      weight
+      `%{sat => weight}` map of positive inverse-variance weights `1 / sigma_i^2`
+      as built by `weight_vector/2`; an unspecified satellite defaults to unit
+      weight. A non-positive or non-numeric weight raises `ArgumentError`
     * `:n_systems` - override the distinct-system count; by default it is
       derived from the leading character of each used satellite id
 
@@ -234,6 +235,9 @@ defmodule Orbis.GnssQC do
   def raim(%Solution{} = solution, opts \\ []) do
     p_fa = Keyword.get(opts, :p_fa, @default_p_fa)
     weights_opt = Keyword.get(opts, :weights, :unit)
+
+    validate_p_fa!(p_fa)
+    validate_weights!(weights_opt)
 
     used = solution.used_sats
     residuals = solution.residuals_m
@@ -293,6 +297,34 @@ defmodule Orbis.GnssQC do
 
   defp weight_for(_sat, :unit), do: 1.0
   defp weight_for(sat, weights) when is_map(weights), do: Map.get(weights, sat, 1.0)
+
+  # The chi-square threshold maps p_fa through an inverse-normal that is only
+  # defined on the open interval (0, 1); reject the endpoints (and any
+  # non-number) up front rather than crashing inside the quantile.
+  defp validate_p_fa!(p) when is_number(p) and p > 0.0 and p < 1.0, do: :ok
+
+  defp validate_p_fa!(p) do
+    raise ArgumentError,
+          "raim :p_fa must be a number strictly between 0 and 1, got: #{inspect(p)}"
+  end
+
+  # Weights are inverse variances; a normalized residual takes sqrt(weight), so a
+  # non-positive or non-numeric weight is rejected rather than producing a NaN or
+  # an arithmetic error.
+  defp validate_weights!(:unit), do: :ok
+
+  defp validate_weights!(weights) when is_map(weights) do
+    if Enum.all?(weights, fn {_sat, w} -> is_number(w) and w > 0.0 end) do
+      :ok
+    else
+      raise ArgumentError, "raim :weights must all be positive numbers, got: #{inspect(weights)}"
+    end
+  end
+
+  defp validate_weights!(other) do
+    raise ArgumentError,
+          "raim :weights must be :unit or a %{sat => weight} map, got: #{inspect(other)}"
+  end
 
   defp distinct_systems(used) do
     used

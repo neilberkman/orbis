@@ -177,6 +177,9 @@ defmodule Orbis.IonosphereFree do
 
     * `:missing_band2` — present in `band1` only;
     * `:missing_band1` — present in `band2` only;
+    * `:duplicate_observation` — the satellite appears more than once in a band,
+      so which pseudorange to use is ambiguous; it is dropped rather than
+      silently collapsed to whichever entry comes last;
     * `:unknown_system` — the system letter has no known frequency pair.
 
   Empty input yields `{[], []}`. Never raises.
@@ -191,15 +194,20 @@ defmodule Orbis.IonosphereFree do
           {[observation()], [{String.t(), drop_reason()}]}
   def iono_free_pseudoranges(band1, band2, opts \\ []) when is_list(band1) and is_list(band2) do
     overrides = Keyword.get(opts, :pairs, %{})
+
+    # A satellite repeated within a band makes its pseudorange ambiguous; drop it
+    # explicitly rather than letting Map.new silently keep whichever entry is last.
+    dups = MapSet.union(duplicate_ids(band1), duplicate_ids(band2))
+
     m1 = Map.new(band1)
     m2 = Map.new(band2)
 
     ids1 = MapSet.new(Map.keys(m1))
     ids2 = MapSet.new(Map.keys(m2))
 
-    both = MapSet.intersection(ids1, ids2)
-    only1 = MapSet.difference(ids1, ids2)
-    only2 = MapSet.difference(ids2, ids1)
+    both = ids1 |> MapSet.intersection(ids2) |> MapSet.difference(dups)
+    only1 = ids1 |> MapSet.difference(ids2) |> MapSet.difference(dups)
+    only2 = ids2 |> MapSet.difference(ids1) |> MapSet.difference(dups)
 
     {combined, dropped_unknown} =
       both
@@ -214,9 +222,17 @@ defmodule Orbis.IonosphereFree do
     dropped =
       dropped_unknown ++
         Enum.map(Enum.sort(only1), fn sat -> {sat, :missing_band2} end) ++
-        Enum.map(Enum.sort(only2), fn sat -> {sat, :missing_band1} end)
+        Enum.map(Enum.sort(only2), fn sat -> {sat, :missing_band1} end) ++
+        Enum.map(Enum.sort(MapSet.to_list(dups)), fn sat -> {sat, :duplicate_observation} end)
 
     {Enum.reverse(combined), Enum.sort(dropped)}
+  end
+
+  defp duplicate_ids(observations) do
+    observations
+    |> Enum.frequencies_by(fn {sat, _range} -> sat end)
+    |> Enum.filter(fn {_sat, count} -> count > 1 end)
+    |> MapSet.new(fn {sat, _count} -> sat end)
   end
 
   @doc """

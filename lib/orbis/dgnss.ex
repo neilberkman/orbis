@@ -115,7 +115,9 @@ defmodule Orbis.DGNSS do
   evaluated at this epoch is dropped from the result (it cannot be corrected)
   rather than failing the batch.
 
-  Returns `{:ok, %{sat => prc_m}}`, or `{:error, :empty_base_observations}` /
+  Returns `{:ok, %{sat => prc_m}}`, or a tagged error —
+  `{:error, :invalid_base_position}` for a malformed base position,
+  `{:error, :empty_base_observations}`, or
   `{:error, {:invalid_base_observations, term}}` for a bad shape. Never raises.
   """
   @spec corrections(SP3.t(), position(), [observation()], NaiveDateTime.t(), keyword()) ::
@@ -130,7 +132,8 @@ defmodule Orbis.DGNSS do
         _opts
       )
       when is_list(base_observations) do
-    with :ok <- validate_observations(base_observations, :invalid_base_observations),
+    with {:ok, _base} <- normalize_position(base_position),
+         :ok <- validate_observations(base_observations, :invalid_base_observations),
          :ok <- non_empty(base_observations, :empty_base_observations) do
       prc =
         Enum.reduce(base_observations, %{}, fn {sat, pr}, acc ->
@@ -237,7 +240,7 @@ defmodule Orbis.DGNSS do
 
       case PointPositioning.solve(source, corrected, epoch, solve_opts) do
         {:ok, solution} ->
-          {bx, by, bz} = normalize_position(base_position)
+          {:ok, {bx, by, bz}} = normalize_position(base_position)
           %{x_m: rx, y_m: ry, z_m: rz} = solution.position
           vec = %{x_m: rx - bx, y_m: ry - by, z_m: rz - bz}
           len = :math.sqrt(vec.x_m * vec.x_m + vec.y_m * vec.y_m + vec.z_m * vec.z_m)
@@ -275,6 +278,11 @@ defmodule Orbis.DGNSS do
   defp non_empty([], tag), do: {:error, tag}
   defp non_empty(_list, _tag), do: :ok
 
-  defp normalize_position({x, y, z}), do: {x * 1.0, y * 1.0, z * 1.0}
-  defp normalize_position(%{x_m: x, y_m: y, z_m: z}), do: {x * 1.0, y * 1.0, z * 1.0}
+  defp normalize_position({x, y, z}) when is_number(x) and is_number(y) and is_number(z),
+    do: {:ok, {x * 1.0, y * 1.0, z * 1.0}}
+
+  defp normalize_position(%{x_m: x, y_m: y, z_m: z})
+       when is_number(x) and is_number(y) and is_number(z), do: {:ok, {x * 1.0, y * 1.0, z * 1.0}}
+
+  defp normalize_position(_), do: {:error, :invalid_base_position}
 end

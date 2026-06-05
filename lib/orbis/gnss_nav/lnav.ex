@@ -331,6 +331,9 @@ defmodule Orbis.GnssNav.LNAV do
     tlm_message = Keyword.get(opts, :tlm_message, 0)
 
     with :ok <- validate_uint(:tow, tow, 17),
+         :ok <- validate_uint(:alert, alert, 1),
+         :ok <- validate_uint(:anti_spoof, anti_spoof, 1),
+         :ok <- validate_uint(:integrity, integrity, 1),
          :ok <- validate_uint(:tlm_message, tlm_message, 14),
          {:ok, w1} <- subframe1_words(params),
          {:ok, w2} <- subframe2_words(params),

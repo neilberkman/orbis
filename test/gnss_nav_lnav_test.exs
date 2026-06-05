@@ -235,5 +235,13 @@ defmodule Orbis.GnssNav.LNAVTest do
       p = %{params() | m0: 5.0}
       assert {:error, {:out_of_range, :m0, 5.0}} = LNAV.encode(p)
     end
+
+    test "an out-of-range 1-bit flag is rejected, not silently truncated" do
+      # alert/anti_spoof/integrity are single-bit HOW/TLM fields; a value that
+      # does not fit one bit must error rather than have its high bits dropped.
+      assert {:error, {:out_of_range, :alert, 2}} = LNAV.encode(params(), alert: 2)
+      assert {:error, {:out_of_range, :anti_spoof, 2}} = LNAV.encode(params(), anti_spoof: 2)
+      assert {:error, {:out_of_range, :integrity, 5}} = LNAV.encode(params(), integrity: 5)
+    end
   end
 end
