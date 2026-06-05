@@ -89,10 +89,10 @@ defmodule Orbis.GNSS.ApplicationOracleTest do
       assert {:ok, acq} =
                Correlator.acquire(full, a["prn"], sample_rate_hz: h(a["sample_rate_hz"]))
 
-      assert_in_delta acq.code_phase_chips, h(a["code_phase_chips"]), 1.0e-9
-      assert_in_delta acq.doppler_hz, h(a["doppler_hz"]), 1.0e-12
-      assert_in_delta acq.peak_power, h(a["peak_power"]), 1.0e-6
-      assert_in_delta acq.metric, h(a["metric"]), 1.0e-6
+      assert_ulp(acq.code_phase_chips, h(a["code_phase_chips"]), 0, "acquisition phase")
+      assert_ulp(acq.doppler_hz, h(a["doppler_hz"]), 0, "acquisition doppler")
+      assert_ulp(acq.peak_power, h(a["peak_power"]), 0, "acquisition peak")
+      assert_ulp(acq.metric, h(a["metric"]), 4, "acquisition metric")
 
       for c <- corr["coherent_loss"] do
         assert_ulp(

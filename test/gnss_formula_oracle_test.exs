@@ -72,7 +72,7 @@ defmodule Orbis.GNSS.FormulaOracleTest do
     end
   end
 
-  describe "Observables vs Python/scipy/pyproj oracle" do
+  describe "Observables vs Python/scipy oracle" do
     test "predict/5 matches the independent SP3 observable fixture", %{golden: golden} do
       sp3 = SP3.load!(@sp3_path)
 
@@ -82,18 +82,18 @@ defmodule Orbis.GNSS.FormulaOracleTest do
         assert {:ok, obs} =
                  Observables.predict(sp3, c["sat"], receiver(c), ~N[2020-06-24 12:00:00], opts)
 
-        assert_in_delta obs.geometric_range_m, h(c["geometric_range_m"]), 1.0e-4
-        assert_in_delta obs.range_rate_m_s, h(c["range_rate_m_s"]), 1.0e-7
-        assert_in_delta obs.doppler_hz, h(c["doppler_hz"]), 1.0e-7
-        assert_in_delta obs.sat_clock_s, h(c["sat_clock_s"]), 1.0e-15
-        assert_in_delta obs.elevation_deg, h(c["elevation_deg"]), 1.0e-8
-        assert_in_delta obs.azimuth_deg, h(c["azimuth_deg"]), 1.0e-8
+        assert_ulp(obs.geometric_range_m, h(c["geometric_range_m"]), 0, "range #{c["sat"]}")
+        assert_ulp(obs.range_rate_m_s, h(c["range_rate_m_s"]), 0, "range-rate #{c["sat"]}")
+        assert_ulp(obs.doppler_hz, h(c["doppler_hz"]), 0, "doppler #{c["sat"]}")
+        assert_ulp(obs.sat_clock_s, h(c["sat_clock_s"]), 0, "clock #{c["sat"]}")
+        assert_ulp(obs.elevation_deg, h(c["elevation_deg"]), 0, "elevation #{c["sat"]}")
+        assert_ulp(obs.azimuth_deg, h(c["azimuth_deg"]), 0, "azimuth #{c["sat"]}")
 
         {lx, ly, lz} = obs.los_unit
         [ex, ey, ez] = Enum.map(c["los_unit"], &h/1)
-        assert_in_delta lx, ex, 5.0e-12
-        assert_in_delta ly, ey, 5.0e-12
-        assert_in_delta lz, ez, 5.0e-12
+        assert_ulp(lx, ex, 0, "los-x #{c["sat"]}")
+        assert_ulp(ly, ey, 0, "los-y #{c["sat"]}")
+        assert_ulp(lz, ez, 0, "los-z #{c["sat"]}")
 
         assert NaiveDateTime.diff(
                  obs.transmit_time,

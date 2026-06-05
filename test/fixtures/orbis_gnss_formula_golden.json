@@ -9,8 +9,7 @@
     "python": "3.14.4",
     "executable": "/Volumes/ExternalSSD/orbis-gnss-workspace/parity/.venv/bin/python",
     "numpy": "2.4.6",
-    "scipy": "1.17.1",
-    "pyproj": "3.7.2"
+    "scipy": "1.17.1"
   },
   "ionosphere_free": {
     "cases": [
@@ -231,7 +230,7 @@
   },
   "observables": {
     "source": "test/fixtures/sp3/GRG0MGXFIN_20201760000_01D_15M_ORB.SP3",
-    "reference": "scipy.interpolate.CubicSpline + pyproj WGS84 geodetic",
+    "reference": "canonical sp3_interp CubicSpline recipe + Orbis/Skyfield WGS84 geodetic op-order",
     "cases": [
       {
         "sat": "G21",
@@ -244,17 +243,17 @@
           "0x1.405af00000000p+22"
         ],
         "transmit_time": "2020-06-24T11:59:59.930712",
-        "tau_s": "0x1.1bcd4da6238f9p-4",
-        "geometric_range_m": "0x1.3cf438ba42db2p+24",
-        "range_rate_m_s": "0x1.d801fbc3b8e40p+3",
-        "doppler_hz": "-0x1.360d5bcdbff3dp+6",
-        "sat_clock_s": "0x1.04d2d82794621p-16",
-        "elevation_deg": "0x1.4590eed862edbp+6",
-        "azimuth_deg": "0x1.45ff5a08d7882p+7",
+        "tau_s": "0x1.1bcd4da6238c3p-4",
+        "geometric_range_m": "0x1.3cf438ba42d76p+24",
+        "range_rate_m_s": "0x1.d801fbc186d80p+3",
+        "doppler_hz": "-0x1.360d5bcc4ec17p+6",
+        "sat_clock_s": "0x1.04d2d8279460cp-16",
+        "elevation_deg": "0x1.4590eed87ea38p+6",
+        "azimuth_deg": "0x1.45ff5a08c0afcp+7",
         "los_unit": [
-          "0x1.4c70da9f7b776p-1",
-          "0x1.834429ae3591dp-3",
-          "0x1.792a4f581bd0ep-1"
+          "0x1.4c70da9f7e682p-1",
+          "0x1.834429ae2ab7fp-3",
+          "0x1.792a4f5819eb9p-1"
         ]
       },
       {
@@ -270,11 +269,11 @@
         "transmit_time": "2020-06-24T12:00:00.000000",
         "tau_s": "0x0.0p+0",
         "geometric_range_m": "0x1.3cf43a8bb3445p+24",
-        "range_rate_m_s": "0x1.d840736fbd5c0p+3",
-        "doppler_hz": "-0x1.363664677448ep+6",
+        "range_rate_m_s": "0x1.d840736fa8d80p+3",
+        "doppler_hz": "-0x1.3636646766cefp+6",
         "sat_clock_s": "0x1.04d2d884f63ebp-16",
-        "elevation_deg": "0x1.45911896541e6p+6",
-        "azimuth_deg": "0x1.45fceda67495bp+7",
+        "elevation_deg": "0x1.4591189670ac1p+6",
+        "azimuth_deg": "0x1.45fceda657bdbp+7",
         "los_unit": [
           "0x1.4c6fe90c5ea24p-1",
           "0x1.83493e40de1b5p-3",
@@ -292,17 +291,17 @@
           "0x1.405af00000000p+22"
         ],
         "transmit_time": "2020-06-24T11:59:59.930712",
-        "tau_s": "0x1.1bcd4e5c8cfa7p-4",
-        "geometric_range_m": "0x1.3cf43985fb2ecp+24",
-        "range_rate_m_s": "0x1.d810777faf680p+3",
-        "doppler_hz": "-0x1.3616df568bd62p+6",
-        "sat_clock_s": "0x1.04d2d82794621p-16",
-        "elevation_deg": "0x1.4590de8dc9318p+6",
-        "azimuth_deg": "0x1.45fe89c27432ep+7",
+        "tau_s": "0x1.1bcd4e5c8cf72p-4",
+        "geometric_range_m": "0x1.3cf43985fb2b0p+24",
+        "range_rate_m_s": "0x1.d810777d7d600p+3",
+        "doppler_hz": "-0x1.3616df551aa64p+6",
+        "sat_clock_s": "0x1.04d2d8279460cp-16",
+        "elevation_deg": "0x1.4590de8de4e75p+6",
+        "azimuth_deg": "0x1.45fe89c25d59ep+7",
         "los_unit": [
-          "0x1.4c70b35c0cad6p-1",
-          "0x1.834653b542835p-3",
-          "0x1.792a4e65b030ep-1"
+          "0x1.4c70b35c0f9e2p-1",
+          "0x1.834653b537a96p-3",
+          "0x1.792a4e65ae4b9p-1"
         ]
       }
     ]
