@@ -8,6 +8,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`Orbis.GNSS.CarrierPhase`** — dual-frequency carrier-phase combinations and
+  the quality tooling on them: geometry-free (`L1 - L2`), wide-lane wavelength,
+  narrow-lane code, Melbourne-Wübbena, arc-wise cycle-slip detection (LLI bit,
+  geometry-free step, and Melbourne-Wübbena step, with documented thresholds),
+  and the single-frequency Hatch carrier-smoothed code (with slip/LLI reset).
+  GPS/Galileo/BeiDou; GLONASS satellites are skipped (FDMA wavelengths not yet
+  derived). Builds on the newly exposed phase observations; no crate change.
 - `Orbis.GNSS.RINEX.Observations.values/3` and `phases/3` — expose the raw RINEX
   observations for an epoch (pseudorange, carrier phase, Doppler, signal strength
   with their LLI/SSI), and a carrier-phase convenience that adds the wavelength
