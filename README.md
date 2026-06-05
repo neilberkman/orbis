@@ -14,29 +14,31 @@ SGP4 propagation and high-accuracy coordinate transforms are handled by a Rust N
 
 ## Features
 
-| Category                   | What it does                                                                                                                                                |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Propagation**            | SGP4/SDP4 via the [`sgp4`](https://crates.io/crates/sgp4) Rust crate (Rust NIF)                                                                             |
-| **Coordinate transforms**  | TEME, GCRS, ITRS, geodetic, topocentric — 0 ULP Skyfield parity (Rust NIF)                                                                                  |
-| **Ground station**         | Pass prediction, look angles, Doppler shift, RF link budget                                                                                                 |
-| **Orbit determination**    | Gibbs, Herrick-Gibbs, Gauss angles-only, Lambert/Battin (Rust NIF)                                                                                          |
-| **Conjunction assessment** | Closest approach finder validated against the Iridium 33 / Cosmos 2251 collision                                                                            |
-| **Eclipse prediction**     | Sunlit / penumbra / umbra with shadow fraction                                                                                                              |
-| **Atmospheric density**    | NRLMSISE-00 model, surface to ~1000 km (Rust NIF)                                                                                                           |
-| **JPL ephemeris**          | SPK/BSP reader for Sun, Moon, planets (Rust NIF)                                                                                                            |
-| **GNSS positioning**       | Single-point positioning from SP3 or broadcast ephemeris — GPS, Galileo, BeiDou, GLONASS — with Klobuchar/Saastamoinen–Niell corrections and DOP (Rust NIF) |
-| **GNSS ephemeris & data**  | SP3 precise products, RINEX 3.x/4.xx broadcast navigation, GNSS constellation catalogs, and optional SP3/CLK/NAV/IONEX fetch/cache from public archives     |
-| **Live data**              | CelesTrak TLE/OMM fetching, constellation loading, name search                                                                                              |
-| **Real-time tracking**     | GenServer with PubSub-compatible broadcasts                                                                                                                 |
-| **RF primitives**          | FSPL, EIRP, C/N₀, link margin, dish gain                                                                                                                    |
-| **Batch analysis**         | Nx-powered tensorized geometry, visibility, and RF (GPU-ready via EXLA/Torchx)                                                                              |
-| **Formats**                | `Orbis.Elements` with TLE and OMM parsers/encoders                                                                                                          |
+| Category                   | What it does                                                                                                                                                    |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Propagation**            | SGP4/SDP4 via the [`sgp4`](https://crates.io/crates/sgp4) Rust crate (Rust NIF)                                                                                 |
+| **Coordinate transforms**  | TEME, GCRS, ITRS, geodetic, topocentric — 0 ULP Skyfield parity (Rust NIF)                                                                                      |
+| **Ground station**         | Pass prediction, look angles, Doppler shift, RF link budget                                                                                                     |
+| **Orbit determination**    | Gibbs, Herrick-Gibbs, Gauss angles-only, Lambert/Battin (Rust NIF)                                                                                              |
+| **Conjunction assessment** | Closest approach finder validated against the Iridium 33 / Cosmos 2251 collision                                                                                |
+| **Eclipse prediction**     | Sunlit / penumbra / umbra with shadow fraction                                                                                                                  |
+| **Atmospheric density**    | NRLMSISE-00 model, surface to ~1000 km (Rust NIF)                                                                                                               |
+| **JPL ephemeris**          | SPK/BSP reader for Sun, Moon, planets (Rust NIF)                                                                                                                |
+| **GNSS positioning**       | Single-point positioning from SP3 or broadcast ephemeris — GPS, Galileo, BeiDou, GLONASS — with Klobuchar/Saastamoinen–Niell corrections and DOP (Rust NIF)     |
+| **GNSS ephemeris & data**  | SP3 precise products, RINEX 3.x/4.xx broadcast navigation, GNSS constellation catalogs, and optional SP3/CLK/NAV/IONEX fetch/cache from public archives         |
+| **GNSS observations**      | RINEX 3 observation parsing with Hatanaka (CRINEX) decoding — turn a station's `.crx`/`.rnx` into pseudoranges and solve for its position (Rust NIF)            |
+| **Reduced orbit**          | Compact fitted mean-element model (circular or eccentric) for fast approximate position, caching, and transport — with source-backed drift reporting (Rust NIF) |
+| **Live data**              | CelesTrak TLE/OMM fetching, constellation loading, name search                                                                                                  |
+| **Real-time tracking**     | GenServer with PubSub-compatible broadcasts                                                                                                                     |
+| **RF primitives**          | FSPL, EIRP, C/N₀, link margin, dish gain                                                                                                                        |
+| **Batch analysis**         | Nx-powered tensorized geometry, visibility, and RF (GPU-ready via EXLA/Torchx)                                                                                  |
+| **Formats**                | `Orbis.Elements` with TLE and OMM parsers/encoders                                                                                                              |
 
 ## Installation
 
 ```elixir
 def deps do
-  [{:orbis, "~> 0.7.0"}]
+  [{:orbis, "~> 0.8.0"}]
 end
 ```
 
@@ -216,6 +218,30 @@ Products can be fetched and cached (needs the optional `:req` dependency):
 ```elixir
 product = Orbis.GnssData.mgex_sp3(:gfz, ~D[2020-06-24])
 {:ok, sp3} = Orbis.GnssData.sp3(product)   # downloads, verifies, caches, loads
+```
+
+Parse a station's RINEX observation file (Hatanaka `.crx` or plain `.rnx`),
+extract pseudoranges, and recover its position:
+
+```elixir
+{:ok, obs} = Orbis.RinexObs.load("STAT00DNK_R_..._MO.crx")
+[%{index: i, epoch: epoch} | _] = Orbis.RinexObs.epochs(obs)
+{:ok, prs} = Orbis.RinexObs.pseudoranges(obs, i, codes: %{"G" => ["C1C"]})
+{:ok, sol} = Orbis.PointPositioning.solve(eph, prs, epoch)
+```
+
+Fit a compact reduced-orbit model and check its drift against the source:
+
+```elixir
+{:ok, model} =
+  Orbis.ReducedOrbit.fit(sp3,
+    satellite_id: "G05",
+    window: {~N[2020-06-24 00:00:00], ~N[2020-06-24 06:00:00]},
+    model: :eccentric_secular
+  )
+
+{:ok, pos} = Orbis.ReducedOrbit.position(model, ~N[2020-06-24 12:00:00])  # ECEF m
+map = Orbis.ReducedOrbit.to_map(model)   # versioned, transportable
 ```
 
 A runnable walkthrough is in [`examples/gnss_positioning.livemd`](examples/gnss_positioning.livemd).
