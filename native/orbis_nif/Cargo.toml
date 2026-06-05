@@ -11,9 +11,9 @@ crate-type = ["cdylib"]
 rustler = "0.37.3"
 chrono = "0.4"
 # Tracks the astrodynamics repository between crates.io releases (the published
-# 0.7.0 crates predate the RINEX observation support these NIFs call); the next
-# coordinated release pins published versions again. For local development
-# against the workspace, an uncommitted native/orbis_nif/.cargo/config.toml
-# overrides these with the local paths (see config.toml.example).
-astrodynamics = { git = "https://github.com/neilberkman/astrodynamics", rev = "56aa4bbdd4f8003495847261533f83acf8c8a13e" }
-astrodynamics-gnss = { git = "https://github.com/neilberkman/astrodynamics", rev = "56aa4bbdd4f8003495847261533f83acf8c8a13e" }
+# 0.7.0 crates predate the APIs these NIFs call); the next coordinated release
+# pins published versions again. For local development against the workspace, an
+# uncommitted native/orbis_nif/.cargo/config.toml overrides these with the local
+# paths (see config.toml.example).
+astrodynamics = { git = "https://github.com/neilberkman/astrodynamics", rev = "cd6356e1720fdabe6da86db75dbfa60afc71435c" }
+astrodynamics-gnss = { git = "https://github.com/neilberkman/astrodynamics", rev = "cd6356e1720fdabe6da86db75dbfa60afc71435c" }
