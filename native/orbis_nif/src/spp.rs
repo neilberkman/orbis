@@ -2,7 +2,7 @@
 //! least-squares PVT solve.
 //!
 //! This module is **pure glue**: it decodes Erlang terms into the crate's
-//! [`SolveInputs`], calls [`solve_spp`], and encodes the [`ReceiverSolution`]
+//! [`SolveInputs`], calls [`solve`], and encodes the [`ReceiverSolution`]
 //! back. No transmit-time iteration, no least-squares numerics, no atmospheric
 //! model, and no frame conversion lives here — those are the crate's
 //! responsibility. The SP3 product is reused from the [`Sp3Resource`] handle the
@@ -15,8 +15,11 @@
 //! as the crate produces them.
 
 use astrodynamics_gnss::{
-    solve_spp, Corrections, EphemerisSource, GnssSatelliteId, GnssSystem, KlobucharCoeffs,
-    Observation, ReceiverSolution, RejectionReason, SolveInputs, SppError, SurfaceMet,
+    positioning::{
+        solve, Corrections, EphemerisSource, KlobucharCoeffs, Observation, ReceiverSolution,
+        RejectionReason, SolveInputs, SppError, SurfaceMet,
+    },
+    GnssSatelliteId, GnssSystem,
 };
 
 use crate::broadcast::BroadcastResource;
@@ -295,7 +298,7 @@ fn solve_to_term<'a>(
     inputs: &SolveInputs,
     with_geodetic: bool,
 ) -> Term<'a> {
-    match solve_spp(eph, inputs, with_geodetic) {
+    match solve(eph, inputs, with_geodetic) {
         Ok(sol) => encode_solution(env, &sol),
         Err(e) => spp_error_term(env, &e),
     }

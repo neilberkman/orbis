@@ -1,8 +1,8 @@
 //! Rustler boundary for the `astrodynamics-gnss` RINEX 3 observation product
 //! and Hatanaka (CRINEX) decoder.
 //!
-//! Pure glue: it decodes Erlang terms, calls the crate's `crinex` /
-//! `rinex_obs` public APIs, holds the parsed product as a resource handle, and
+//! Pure glue: it decodes Erlang terms, calls the crate's `rinex` public APIs,
+//! holds the parsed product as a resource handle, and
 //! encodes results back. No CRINEX grammar, RINEX parsing, or pseudorange
 //! selection numerics live here — those are the crate's responsibility.
 //!
@@ -15,8 +15,11 @@
 //!   single-frequency pseudoranges as the `[{sat_token, range_m}]` shape the
 //!   point-positioning solver consumes.
 
-use astrodynamics_gnss::rinex_obs::{ObsEpoch, RinexObs, SignalPolicy};
-use astrodynamics_gnss::{obs_pseudoranges, GnssSystem};
+use astrodynamics_gnss::rinex::{
+    decode_crinex,
+    observations::{pseudoranges, ObsEpoch, RinexObs, SignalPolicy},
+};
+use astrodynamics_gnss::GnssSystem;
 use rustler::{Encoder, Env, Error, NifResult, ResourceArc, Term};
 
 /// Resource handle holding a parsed RINEX observation product across NIF calls.
@@ -34,7 +37,7 @@ impl rustler::Resource for RinexObsResource {}
 /// budget. Returns the decoded String, or the crate's parse-error reason.
 #[rustler::nif(schedule = "DirtyCpu")]
 fn crinex_decode(text: String) -> NifResult<String> {
-    astrodynamics_gnss::crinex_decode(&text).map_err(|e| Error::Term(Box::new(e.to_string())))
+    decode_crinex(&text).map_err(|e| Error::Term(Box::new(e.to_string())))
 }
 
 /// Parse plain RINEX 3 observation text into a resource handle.
@@ -53,8 +56,7 @@ fn rinex_obs_parse(text: String) -> NifResult<ResourceArc<RinexObsResource>> {
 /// handle crosses back to the BEAM (the expansion is never marshalled).
 #[rustler::nif(schedule = "DirtyCpu")]
 fn crinex_obs_parse(text: String) -> NifResult<ResourceArc<RinexObsResource>> {
-    let decoded = astrodynamics_gnss::crinex_decode(&text)
-        .map_err(|e| Error::Term(Box::new(e.to_string())))?;
+    let decoded = decode_crinex(&text).map_err(|e| Error::Term(Box::new(e.to_string())))?;
     let obs = RinexObs::parse(&decoded).map_err(|e| Error::Term(Box::new(e.to_string())))?;
     Ok(ResourceArc::new(RinexObsResource { obs }))
 }
@@ -140,7 +142,7 @@ fn rinex_obs_pseudoranges(
         SignalPolicy { codes }
     };
 
-    let prs: Vec<(String, f64)> = obs_pseudoranges(&handle.obs, epoch, &policy)
+    let prs: Vec<(String, f64)> = pseudoranges(&handle.obs, epoch, &policy)
         .into_iter()
         .map(|(sat, range_m)| (sat.to_string(), range_m))
         .collect();

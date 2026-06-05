@@ -1,7 +1,7 @@
 //! Rustler boundary for the `astrodynamics-gnss` SP3 precise-ephemeris product.
 //!
 //! This module is **pure glue**: it decodes Erlang terms, calls
-//! the `astrodynamics_gnss::sp3` public APIs, manages the parsed product as a
+//! the `astrodynamics_gnss::ephemeris` public APIs, manages the parsed product as a
 //! Rustler resource handle, and encodes results back. No SP3 grammar, no unit
 //! conversion, and no interpolation numerics live here — those are the crate's
 //! responsibility. In particular:
@@ -16,7 +16,7 @@
 //!   file or probing interpolation.
 
 use astrodynamics::time::model::{Instant, JulianDateSplit, TimeScale};
-use astrodynamics_gnss::sp3::Sp3;
+use astrodynamics_gnss::ephemeris::Sp3;
 use astrodynamics_gnss::{GnssSatelliteId, GnssSystem};
 use rustler::{Encoder, Env, Error, NifResult, ResourceArc, Term};
 

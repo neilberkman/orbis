@@ -1,13 +1,13 @@
 //! Rustler boundary for the `astrodynamics-gnss` compact mean-element model.
 //!
-//! Pure glue: it decodes Erlang terms, calls the `astrodynamics_gnss::reduced_orbit`
+//! Pure glue: it decodes Erlang terms, calls the `astrodynamics_gnss::orbit`
 //! public APIs, and encodes the results back. No fitting, element, or frame math
 //! lives here — those belong to the crate. The fitted elements are a small flat
 //! value (not a resource handle), so they travel back and forth as plain tuples;
 //! the Elixir layer owns persistence (`to_map`/`from_map`).
 
 use astrodynamics::time::model::TimeScale;
-use astrodynamics_gnss::reduced_orbit::{
+use astrodynamics_gnss::orbit::{
     self as ro, CalendarEpoch, EcefSample, Elements, Frame, Model, ReducedOrbitError,
 };
 use rustler::{Encoder, Env, Error, NifResult, Term};
@@ -57,6 +57,9 @@ fn model_from_str(s: &str) -> Result<Model, &str> {
 
 type DateTuple = (i32, i32, i32);
 type TimeTuple = (i32, i32, i32, i32);
+type EpochTuple = (DateTuple, TimeTuple);
+type Vec3 = (f64, f64, f64);
+type StateTuple = (Vec3, Vec3);
 
 /// Decode an Elixir `{{y,m,d},{h,min,s,us}}` datetime tuple into a calendar
 /// epoch (microseconds folded into fractional seconds).
@@ -211,7 +214,7 @@ fn reduced_orbit_fit<'a>(
 
 /// Encode a [`CalendarEpoch`] as the `{{y,m,d},{h,min,s,us}}` tuple the Elixir
 /// layer reads, splitting the fractional second into whole seconds + microseconds.
-fn epoch_to_tuple(cal: &CalendarEpoch) -> ((i32, i32, i32), (i32, i32, i32, i32)) {
+fn epoch_to_tuple(cal: &CalendarEpoch) -> EpochTuple {
     let whole = cal.second.trunc();
     let micros = ((cal.second - whole) * 1_000_000.0).round() as i32;
     (
@@ -229,7 +232,7 @@ fn reduced_orbit_position(
     elements: Vec<f64>,
     query: Term,
     frame: String,
-) -> NifResult<(f64, f64, f64)> {
+) -> NifResult<Vec3> {
     let e = elements_from_parts(epoch, &elements)?;
     let s = scale_from_str(&scale)?;
     let f = frame_from_str(&frame)?;
@@ -246,7 +249,7 @@ fn reduced_orbit_position_velocity(
     elements: Vec<f64>,
     query: Term,
     frame: String,
-) -> NifResult<((f64, f64, f64), (f64, f64, f64))> {
+) -> NifResult<StateTuple> {
     let e = elements_from_parts(epoch, &elements)?;
     let s = scale_from_str(&scale)?;
     let f = frame_from_str(&frame)?;

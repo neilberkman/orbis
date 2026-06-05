@@ -1,7 +1,7 @@
 //! Rustler boundary for the `astrodynamics-gnss` ionospheric delay models.
 //!
 //! This module is **pure glue**: it decodes Erlang terms, calls the
-//! `astrodynamics_gnss::ionex` public APIs, manages the parsed IONEX product as
+//! `astrodynamics_gnss::atmosphere::ionosphere` public APIs, manages the parsed IONEX product as
 //! a Rustler resource handle, and encodes the results back. No Klobuchar
 //! polynomial, no single-layer-model geometry, and no grid interpolation lives
 //! here — those are the crate's responsibility.
@@ -14,9 +14,10 @@
 //! - `ionex_slant_delay/7` operates on that handle plus an integer J2000-second
 //!   epoch; it never touches the filesystem.
 
-use astrodynamics_gnss::ionex::Ionex;
+use astrodynamics_gnss::atmosphere::ionosphere::{
+    ionex_slant_delay, klobuchar_native, Ionex, KlobucharParams,
+};
 use astrodynamics_gnss::Wgs84Geodetic;
-use astrodynamics_gnss::{ionex_slant_delay, klobuchar_native, KlobucharParams};
 use rustler::{Error, NifResult, ResourceArc};
 
 /// Resource handle holding a parsed IONEX product across NIF calls.
