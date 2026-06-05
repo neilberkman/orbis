@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `Orbis.GNSS.Constellation.validate_sp3!/2` — a build-time validation gate that
+  returns `:ok` or raises `ArgumentError` describing the findings (e.g. a
+  stale-active PRN that is active and usable in the catalog but missing from a
+  current SP3 product). Intended for catalog-build automation, not the runtime.
+
+### Changed
+
+- `Orbis.GNSS.Constellation.to_csv/2` gains a `:booleans` option: `:lower`
+  (default, conventional `true`/`false`) or `:title` (`True`/`False`, for a
+  pandas-style consumer that reads the `active` column as Python booleans).
+
 ## [0.9.0] - 2026-06-05
 
 A large GNSS expansion — signal generation, measurement modelling, velocity,

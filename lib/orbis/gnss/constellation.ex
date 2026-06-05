@@ -261,19 +261,30 @@ defmodule Orbis.GNSS.Constellation do
 
   The `active` column is `true` only when `record.active?` and `record.usable?`
   are both true.
+
+  ## Options
+
+    * `:booleans` - how the `active` column is rendered: `:lower` (default —
+      `true`/`false`, the conventional CSV form) or `:title` (`True`/`False`,
+      for a consumer such as pandas that reads the column as Python booleans).
   """
-  @spec to_csv([Record.t()]) :: String.t()
-  def to_csv(records) when is_list(records) do
+  @spec to_csv([Record.t()], keyword()) :: String.t()
+  def to_csv(records, opts \\ []) when is_list(records) do
+    booleans = Keyword.get(opts, :booleans, :lower)
+
     body =
       records
       |> Enum.sort_by(& &1.prn)
       |> Enum.map(fn record ->
-        active = operational?(record)
+        active = format_bool(operational?(record), booleans)
         "#{record.prn},#{record.norad_id},#{active},#{record.sp3_id}\n"
       end)
 
     IO.iodata_to_binary(["prn,norad_cat_id,active,sp3_id\n", body])
   end
+
+  defp format_bool(value, :title), do: if(value, do: "True", else: "False")
+  defp format_bool(value, _lower), do: to_string(value)
 
   @doc """
   Validate catalog identity without an SP3 product.
@@ -307,6 +318,38 @@ defmodule Orbis.GNSS.Constellation do
     report.missing_sp3_ids == [] and report.duplicate_prns == [] and
       report.duplicate_norad_ids == [] and report.inactive_unusable_prns == [] and
       report.extra_sp3_ids == []
+  end
+
+  @doc """
+  Validate against SP3 satellite ids and raise unless the catalog is clean.
+
+  A build-time gate: returns `:ok` when `validate_sp3/2` reports no findings,
+  otherwise raises `ArgumentError` describing them — for example an
+  active-and-usable catalog PRN that is missing from a current SP3 product (a
+  stale-active satellite). Intended for catalog-build / automation steps, not the
+  positioning runtime.
+  """
+  @spec validate_sp3!([Record.t()], SP3.t() | [String.t()]) :: :ok
+  def validate_sp3!(records, sp3_or_ids) do
+    report = validate_sp3(records, sp3_or_ids)
+
+    if valid?(report) do
+      :ok
+    else
+      raise ArgumentError, "GNSS catalog failed SP3 validation — " <> describe_findings(report)
+    end
+  end
+
+  defp describe_findings(%Validation{} = report) do
+    [
+      {"missing_sp3_ids", report.missing_sp3_ids},
+      {"extra_sp3_ids", report.extra_sp3_ids},
+      {"duplicate_prns", report.duplicate_prns},
+      {"duplicate_norad_ids", report.duplicate_norad_ids},
+      {"inactive_unusable_prns", report.inactive_unusable_prns}
+    ]
+    |> Enum.reject(fn {_label, values} -> values == [] end)
+    |> Enum.map_join("; ", fn {label, values} -> "#{label}: #{inspect(values)}" end)
   end
 
   @doc """

@@ -126,6 +126,15 @@ defmodule Orbis.GNSS.ConstellationTest do
                19,28190,false,G19
                """
     end
+
+    test "the :booleans option renders Python-style True/False (default stays lowercase)" do
+      titled = Constellation.to_csv(merged_records(), booleans: :title)
+      assert titled =~ "3,40294,True,G03"
+      assert titled =~ "19,28190,False,G19"
+
+      assert Constellation.to_csv(merged_records()) =~ "3,40294,true,G03"
+      assert Constellation.to_csv(merged_records(), booleans: :lower) =~ "19,28190,false,G19"
+    end
   end
 
   describe "validation" do
@@ -176,6 +185,38 @@ defmodule Orbis.GNSS.ConstellationTest do
       assert report.missing_sp3_ids == []
       assert report.extra_sp3_ids == []
       assert report.inactive_unusable_prns == [19]
+    end
+
+    test "validate_sp3!/2 is a build-time gate: :ok when clean, raises on a stale-active PRN" do
+      clean = [
+        %Record{
+          system: :gps,
+          prn: 3,
+          svn: 69,
+          norad_id: 40_294,
+          sp3_id: "G03",
+          active?: true,
+          usable?: true,
+          source: %{}
+        },
+        %Record{
+          system: :gps,
+          prn: 5,
+          svn: 50,
+          norad_id: 35_752,
+          sp3_id: "G05",
+          active?: true,
+          usable?: true,
+          source: %{}
+        }
+      ]
+
+      assert :ok = Constellation.validate_sp3!(clean, ["G03", "G05"])
+
+      # G05 is active+usable but absent from the product — a stale-active sat.
+      assert_raise ArgumentError, ~r/missing_sp3_ids.*G05/, fn ->
+        Constellation.validate_sp3!(clean, ["G03"])
+      end
     end
   end
 end
