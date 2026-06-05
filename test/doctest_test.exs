@@ -7,4 +7,5 @@ defmodule Orbis.DoctestTest do
   doctest Orbis.Format.TLE
   doctest Orbis.Format.OMM
   doctest Orbis.GnssSignal.CA
+  doctest Orbis.GnssNav.LNAV
 end
