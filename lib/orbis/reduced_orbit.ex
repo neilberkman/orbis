@@ -142,7 +142,15 @@ defmodule Orbis.ReducedOrbit do
     with :ok <- require_satellite_id(sat_id),
          {:ok, {t0, t1}} <- fetch_window(opts),
          {:ok, samples} <- sample_sp3(sp3, sat_id, t0, t1, cadence) do
-      meta = %{source: "sp3:#{sat_id}", window: {to_naive(t0), to_naive(t1)}, cadence_s: cadence}
+      # Epochs are interpreted in the product's own scale (typically GPST),
+      # matching Orbis.SP3's contract, so the frame conversion is correct.
+      meta = %{
+        source: "sp3:#{sat_id}",
+        window: {to_naive(t0), to_naive(t1)},
+        cadence_s: cadence,
+        scale: sp3.time_scale
+      }
+
       run_fit(samples, meta)
     end
   end
@@ -150,7 +158,13 @@ defmodule Orbis.ReducedOrbit do
   def fit(samples, opts) when is_list(samples) do
     case Keyword.get(opts, :frame, :ecef) do
       :ecef ->
-        meta = %{source: "samples", window: window_of(samples), cadence_s: nil}
+        meta = %{
+          source: "samples",
+          window: window_of(samples),
+          cadence_s: nil,
+          scale: Keyword.get(opts, :time_scale, "UTC")
+        }
+
         run_fit(samples, meta)
 
       other ->
@@ -166,11 +180,12 @@ defmodule Orbis.ReducedOrbit do
     tuples =
       Enum.map(samples, fn {ep, {x, y, z}} -> {datetime_tuple(ep), x / 1.0, y / 1.0, z / 1.0} end)
 
-    case safe_nif(fn -> NIF.reduced_orbit_fit(tuples) end) do
+    case safe_nif(fn -> NIF.reduced_orbit_fit(tuples, meta.scale) end) do
       {:ok, [a_m, e, i_rad, raan, raan_rate, raan_rate_j2, arg_lat, n], {rms, max, n_samples}} ->
         {:ok,
          %__MODULE__{
            epoch: t0,
+           time_scale: meta.scale,
            a_m: a_m,
            e: e,
            i_rad: i_rad,
@@ -213,6 +228,7 @@ defmodule Orbis.ReducedOrbit do
       case safe_nif(fn ->
              NIF.reduced_orbit_position(
                datetime_tuple(model.epoch),
+               model.time_scale,
                elements_tuple(model),
                datetime_tuple(epoch),
                frame
@@ -236,6 +252,7 @@ defmodule Orbis.ReducedOrbit do
       case safe_nif(fn ->
              NIF.reduced_orbit_position_velocity(
                datetime_tuple(model.epoch),
+               model.time_scale,
                elements_tuple(model),
                datetime_tuple(epoch),
                frame
@@ -291,16 +308,23 @@ defmodule Orbis.ReducedOrbit do
   defp run_drift(_model, [], _opts), do: {:error, {:too_few_samples, 0, 1}}
 
   defp run_drift(model, samples, opts) do
-    threshold = Keyword.get(opts, :threshold_m, :infinity)
-    threshold_f = if threshold == :infinity, do: 1.0e308, else: threshold / 1.0
-    epochs = Enum.map(samples, fn {ep, _} -> to_naive(ep) end)
+    with {:ok, threshold_f} <- threshold_value(Keyword.get(opts, :threshold_m, :infinity)) do
+      epochs = Enum.map(samples, fn {ep, _} -> to_naive(ep) end)
 
-    truth =
-      Enum.map(samples, fn {ep, {x, y, z}} -> {datetime_tuple(ep), x / 1.0, y / 1.0, z / 1.0} end)
+      truth =
+        Enum.map(samples, fn {ep, {x, y, z}} ->
+          {datetime_tuple(ep), x / 1.0, y / 1.0, z / 1.0}
+        end)
 
+      run_drift_nif(model, truth, threshold_f, epochs)
+    end
+  end
+
+  defp run_drift_nif(model, truth, threshold_f, epochs) do
     case safe_nif(fn ->
            NIF.reduced_orbit_drift(
              datetime_tuple(model.epoch),
+             model.time_scale,
              elements_tuple(model),
              truth,
              threshold_f
@@ -411,6 +435,12 @@ defmodule Orbis.ReducedOrbit do
 
   defp require_satellite_id(nil), do: {:error, :satellite_id_required}
   defp require_satellite_id(_), do: :ok
+
+  # No threshold means no crossing is ever reported (an unreachable bound). A
+  # finite threshold must be a non-negative number; NaN/negative are rejected.
+  defp threshold_value(:infinity), do: {:ok, 1.0e308}
+  defp threshold_value(t) when is_number(t) and t >= 0, do: {:ok, t / 1.0}
+  defp threshold_value(_), do: {:error, :invalid_threshold}
 
   defp fetch_window(opts) do
     case Keyword.get(opts, :window) do

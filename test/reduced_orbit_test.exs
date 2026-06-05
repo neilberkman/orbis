@@ -32,6 +32,8 @@ defmodule Orbis.ReducedOrbitTest do
       assert m.fit.max_m < 10_000.0
       assert m.fit.n_samples >= 20
       assert m.fit.source == "sp3:#{@sat}"
+      # Epochs are interpreted in the product's own scale, not silently UTC.
+      assert m.time_scale == "GPST"
     end
 
     test "the nodal rate is fitted off the J2 seed, both finite", %{model: m} do
@@ -184,6 +186,11 @@ defmodule Orbis.ReducedOrbitTest do
 
       assert {:error, {:unsupported_source_frame, :gcrs}} =
                ReducedOrbit.fit(samples, frame: :gcrs)
+    end
+
+    test "drift rejects a negative threshold", %{model: m} do
+      truth = [{~N[2020-06-24 00:00:00], {1.0, 2.0, 3.0}}]
+      assert {:error, :invalid_threshold} = ReducedOrbit.drift(m, truth, threshold_m: -1.0)
     end
 
     test "a window with no time span surfaces the crate's :invalid_window" do

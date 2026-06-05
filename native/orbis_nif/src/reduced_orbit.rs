@@ -6,10 +6,26 @@
 //! value (not a resource handle), so they travel back and forth as plain tuples;
 //! the Elixir layer owns persistence (`to_map`/`from_map`).
 
+use astrodynamics::time::model::TimeScale;
 use astrodynamics_gnss::reduced_orbit::{
     self as ro, CalendarEpoch, EcefSample, Elements, Frame, ReducedOrbitError,
 };
 use rustler::{Encoder, Env, Error, NifResult, Term};
+
+/// Map a time-scale abbreviation onto the core [`TimeScale`]. The epochs the
+/// model carries (samples, t0, queries) are all interpreted in this scale.
+fn scale_from_str(s: &str) -> NifResult<TimeScale> {
+    Ok(match s {
+        "UTC" => TimeScale::Utc,
+        "TAI" => TimeScale::Tai,
+        "TT" => TimeScale::Tt,
+        "TDB" => TimeScale::Tdb,
+        "GPST" => TimeScale::Gpst,
+        "GST" => TimeScale::Gst,
+        "BDT" => TimeScale::Bdt,
+        other => return Err(Error::Term(Box::new(format!("unknown time scale {other:?}")))),
+    })
+}
 
 mod atoms {
     rustler::atoms! {
@@ -86,13 +102,15 @@ fn encode_error<'a>(env: Env<'a>, e: &ReducedOrbitError) -> Term<'a> {
 fn reduced_orbit_fit<'a>(
     env: Env<'a>,
     samples: Vec<(Term<'a>, f64, f64, f64)>,
+    scale: String,
 ) -> NifResult<Term<'a>> {
+    let scale = scale_from_str(&scale)?;
     let mut ecef = Vec::with_capacity(samples.len());
     for (epoch, x_m, y_m, z_m) in samples {
         ecef.push(EcefSample::new(cal_from_term(epoch)?, x_m, y_m, z_m));
     }
 
-    match ro::fit(&ecef) {
+    match ro::fit(&ecef, scale) {
         Ok(orbit) => {
             let e = orbit.elements;
             let elements = vec![
@@ -117,13 +135,15 @@ fn reduced_orbit_fit<'a>(
 #[rustler::nif]
 fn reduced_orbit_position(
     epoch: Term,
+    scale: String,
     elements: Vec<f64>,
     query: Term,
     frame: String,
 ) -> NifResult<(f64, f64, f64)> {
     let e = elements_from_parts(epoch, &elements)?;
+    let s = scale_from_str(&scale)?;
     let f = frame_from_str(&frame)?;
-    let r = ro::position(&e, cal_from_term(query)?, f);
+    let r = ro::position(&e, cal_from_term(query)?, s, f);
     Ok((r[0], r[1], r[2]))
 }
 
@@ -132,13 +152,15 @@ fn reduced_orbit_position(
 #[rustler::nif]
 fn reduced_orbit_position_velocity(
     epoch: Term,
+    scale: String,
     elements: Vec<f64>,
     query: Term,
     frame: String,
 ) -> NifResult<((f64, f64, f64), (f64, f64, f64))> {
     let e = elements_from_parts(epoch, &elements)?;
+    let s = scale_from_str(&scale)?;
     let f = frame_from_str(&frame)?;
-    let (r, v) = ro::position_velocity(&e, cal_from_term(query)?, f);
+    let (r, v) = ro::position_velocity(&e, cal_from_term(query)?, s, f);
     Ok(((r[0], r[1], r[2]), (v[0], v[1], v[2])))
 }
 
@@ -150,17 +172,19 @@ fn reduced_orbit_position_velocity(
 fn reduced_orbit_drift<'a>(
     env: Env<'a>,
     epoch: Term<'a>,
+    scale: String,
     elements: Vec<f64>,
     truth: Vec<(Term<'a>, f64, f64, f64)>,
     threshold_m: f64,
 ) -> NifResult<Term<'a>> {
     let e = elements_from_parts(epoch, &elements)?;
+    let s = scale_from_str(&scale)?;
     let mut samples = Vec::with_capacity(truth.len());
     for (ep, x_m, y_m, z_m) in truth {
         samples.push(EcefSample::new(cal_from_term(ep)?, x_m, y_m, z_m));
     }
 
-    let report = ro::drift(&e, &samples, threshold_m);
+    let report = ro::drift(&e, &samples, s, threshold_m);
     let errors: Vec<f64> = report.per_epoch.iter().map(|d| d.error_m).collect();
     let idx: i64 = report
         .per_epoch

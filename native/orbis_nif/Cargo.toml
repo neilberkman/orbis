@@ -15,5 +15,5 @@ chrono = "0.4"
 # pins published versions again. For local development against the workspace, an
 # uncommitted native/orbis_nif/.cargo/config.toml overrides these with the local
 # paths (see config.toml.example).
-astrodynamics = { git = "https://github.com/neilberkman/astrodynamics", rev = "cd6356e1720fdabe6da86db75dbfa60afc71435c" }
-astrodynamics-gnss = { git = "https://github.com/neilberkman/astrodynamics", rev = "cd6356e1720fdabe6da86db75dbfa60afc71435c" }
+astrodynamics = { git = "https://github.com/neilberkman/astrodynamics", rev = "059dfdf7e7f37f3284022f2ce97b3f4d52af3558" }
+astrodynamics-gnss = { git = "https://github.com/neilberkman/astrodynamics", rev = "059dfdf7e7f37f3284022f2ce97b3f4d52af3558" }
