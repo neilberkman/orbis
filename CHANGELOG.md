@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-06-05
+
 ### Added
 
 - Rustler precompiled-NIF packaging support. Release tags now build GitHub
