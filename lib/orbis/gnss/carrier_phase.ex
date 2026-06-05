@@ -225,11 +225,13 @@ defmodule Orbis.GNSS.CarrierPhase do
       `abs(MW(k) - MW(k-1)) / lambda_WL > mw_threshold_cycles`. MW noise is
       dominated by code noise (~0.3-0.5 wide-lane cycles 1-sigma on raw code), so
       4 wide-lane cycles is a robust gate.
+
+  Both thresholds must be non-negative numbers (a negative threshold would flag
+  every epoch); any other value raises `ArgumentError`.
   """
   @spec detect_cycle_slips([epoch_map()], keyword()) :: [slip_result()]
   def detect_cycle_slips(arc, opts \\ []) when is_list(arc) do
-    gf_threshold_m = Keyword.get(opts, :gf_threshold_m, @default_gf_threshold_m)
-    mw_threshold_cycles = Keyword.get(opts, :mw_threshold_cycles, @default_mw_threshold_cycles)
+    {gf_threshold_m, mw_threshold_cycles} = validate_slip_opts!(opts)
 
     {results, _prev} =
       Enum.map_reduce(arc, nil, fn ep, prev ->
@@ -255,7 +257,9 @@ defmodule Orbis.GNSS.CarrierPhase do
                     + ((N(k)-1)/N(k)) * (P_smooth(k-1) + (L1(k) - L1(k-1)))
 
   with `L1 = lambda_1 * phi1`. The window `N` grows to a cap (`:hatch_window_cap`,
-  default `#{@default_hatch_window_cap}`).
+  default `#{@default_hatch_window_cap}`), which must be a positive integer
+  (`ArgumentError` otherwise). The slip-threshold options are validated as in
+  `detect_cycle_slips/2`.
 
   **Reset rule.** On a detected cycle slip / LLI loss-of-lock at epoch `k`, or
   when the previous usable sample is missing (start of arc, a gap, or missing
@@ -282,7 +286,7 @@ defmodule Orbis.GNSS.CarrierPhase do
   """
   @spec smooth_code([epoch_map()], keyword()) :: [smooth_result()]
   def smooth_code(arc, opts \\ []) when is_list(arc) do
-    cap = Keyword.get(opts, :hatch_window_cap, @default_hatch_window_cap)
+    cap = validate_cap!(opts)
     slips = detect_cycle_slips(arc, opts)
 
     {results, _state} =
@@ -293,6 +297,34 @@ defmodule Orbis.GNSS.CarrierPhase do
       end)
 
     results
+  end
+
+  # --- option validation --------------------------------------------------
+
+  # Slip thresholds gate an absolute step, so a negative value would flag every
+  # epoch (abs(...) is always >= 0 > negative); reject non-numbers and negatives.
+  defp validate_slip_opts!(opts) do
+    gf = Keyword.get(opts, :gf_threshold_m, @default_gf_threshold_m)
+    mw = Keyword.get(opts, :mw_threshold_cycles, @default_mw_threshold_cycles)
+    {non_negative!(:gf_threshold_m, gf), non_negative!(:mw_threshold_cycles, mw)}
+  end
+
+  defp non_negative!(_name, value) when is_number(value) and value >= 0.0, do: value
+
+  defp non_negative!(name, value) do
+    raise ArgumentError, "#{inspect(name)} must be a non-negative number, got: #{inspect(value)}"
+  end
+
+  # The Hatch window divides by N, which starts at 1 and is capped at this value,
+  # so a cap below 1 would divide by zero; require a positive integer.
+  defp validate_cap!(opts) do
+    cap = Keyword.get(opts, :hatch_window_cap, @default_hatch_window_cap)
+
+    if is_integer(cap) and cap >= 1 do
+      cap
+    else
+      raise ArgumentError, ":hatch_window_cap must be a positive integer, got: #{inspect(cap)}"
+    end
   end
 
   # --- cycle-slip classification ------------------------------------------
@@ -389,7 +421,7 @@ defmodule Orbis.GNSS.CarrierPhase do
     p1 = Map.get(ep, :p1)
     phi1 = Map.get(ep, :phi1)
 
-    if slip.skipped or is_nil(f1) or not is_number(p1) or not is_number(phi1) do
+    if slip.skipped or not is_number(f1) or not is_number(p1) or not is_number(phi1) do
       # No usable band-1 sample: emit nil and drop the running state so the
       # next usable epoch restarts cleanly.
       {%{epoch: epoch, p_smooth: nil, window: 0, reset: false}, nil}

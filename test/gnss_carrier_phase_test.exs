@@ -363,6 +363,95 @@ defmodule Orbis.GNSS.CarrierPhaseTest do
     end
   end
 
+  describe "option and input validation" do
+    # A two-epoch arc with constant phase, so without a slip reset the Hatch
+    # window genuinely advances to N=2 (where a bad cap would divide by zero).
+    defp flat_arc do
+      [
+        %{
+          epoch: 0,
+          phi1: 1.0,
+          phi2: 1.0,
+          p1: 100.0,
+          p2: 100.0,
+          lli1: 0,
+          lli2: 0,
+          f1: @f_l1,
+          f2: @f_l2
+        },
+        %{
+          epoch: 1,
+          phi1: 1.0,
+          phi2: 1.0,
+          p1: 101.0,
+          p2: 101.0,
+          lli1: 0,
+          lli2: 0,
+          f1: @f_l1,
+          f2: @f_l2
+        }
+      ]
+    end
+
+    test "smooth_code rejects a non-positive or non-integer :hatch_window_cap" do
+      for bad <- [0, -5, 2.5, "x"] do
+        assert_raise ArgumentError, fn ->
+          CarrierPhase.smooth_code(flat_arc(), hatch_window_cap: bad)
+        end
+      end
+
+      assert [_, %{window: 2}] = CarrierPhase.smooth_code(flat_arc(), hatch_window_cap: 10)
+    end
+
+    test "negative slip thresholds are rejected rather than flagging every epoch" do
+      assert_raise ArgumentError, fn ->
+        CarrierPhase.detect_cycle_slips(flat_arc(), gf_threshold_m: -1.0)
+      end
+
+      assert_raise ArgumentError, fn ->
+        CarrierPhase.detect_cycle_slips(flat_arc(), mw_threshold_cycles: -1.0)
+      end
+
+      # smooth_code forwards the same thresholds, so it rejects them too.
+      assert_raise ArgumentError, fn ->
+        CarrierPhase.smooth_code(flat_arc(), gf_threshold_m: -1.0)
+      end
+    end
+
+    test "a non-numeric frequency is skipped, never raises" do
+      arc = [
+        %{
+          epoch: 0,
+          phi1: 1.0,
+          phi2: 1.0,
+          p1: 100.0,
+          p2: 100.0,
+          lli1: 0,
+          lli2: 0,
+          f1: "bad",
+          f2: @f_l2
+        },
+        %{
+          epoch: 1,
+          phi1: 2.0,
+          phi2: 2.0,
+          p1: 101.0,
+          p2: 101.0,
+          lli1: 0,
+          lli2: 0,
+          f1: "bad",
+          f2: @f_l2
+        }
+      ]
+
+      slips = CarrierPhase.detect_cycle_slips(arc)
+      assert Enum.all?(slips, &(&1.slip == false and &1.gf == nil and &1.mw == nil))
+
+      smoothed = CarrierPhase.smooth_code(arc)
+      assert Enum.all?(smoothed, &(&1.p_smooth == nil))
+    end
+  end
+
   defp std([]), do: 0.0
 
   defp std(xs) do
