@@ -96,8 +96,11 @@ fn encode_error<'a>(env: Env<'a>, e: &ReducedOrbitError) -> Term<'a> {
 /// Fit the `circular_secular` model to ECEF samples.
 ///
 /// `samples` is a list of `{ {{y,m,d},{h,min,s,us}}, x_m, y_m, z_m }`. On
-/// success returns `{:ok, {a_m, e, i, raan, raan_rate, raan_rate_j2, arg_lat, n},
-/// {rms_m, max_m, n_samples}}`; on a degenerate input `{:error, reason}`.
+/// success returns `{:ok, epoch_tuple, [a_m, e, i, raan, raan_rate, raan_rate_j2,
+/// arg_lat, n], {rms_m, max_m, n_samples}}` where `epoch_tuple` is the fitted
+/// reference epoch `t0` (the earliest sample, chosen after ordering) so the
+/// caller never has to recover it from its own input order; on a degenerate
+/// input `{:error, reason}`.
 #[rustler::nif(schedule = "DirtyCpu")]
 fn reduced_orbit_fit<'a>(
     env: Env<'a>,
@@ -124,10 +127,21 @@ fn reduced_orbit_fit<'a>(
                 e.mean_motion_rad_s,
             ];
             let stats = (orbit.stats.rms_m, orbit.stats.max_m, orbit.stats.n_samples as i64);
-            Ok((atoms::ok(), elements, stats).encode(env))
+            Ok((atoms::ok(), epoch_to_tuple(&e.epoch), elements, stats).encode(env))
         }
         Err(e) => Ok(encode_error(env, &e)),
     }
+}
+
+/// Encode a [`CalendarEpoch`] as the `{{y,m,d},{h,min,s,us}}` tuple the Elixir
+/// layer reads, splitting the fractional second into whole seconds + microseconds.
+fn epoch_to_tuple(cal: &CalendarEpoch) -> ((i32, i32, i32), (i32, i32, i32, i32)) {
+    let whole = cal.second.trunc();
+    let micros = ((cal.second - whole) * 1_000_000.0).round() as i32;
+    (
+        (cal.year, cal.month, cal.day),
+        (cal.hour, cal.minute, whole as i32, micros),
+    )
 }
 
 /// Evaluate the model position at `query` in `frame` (`"ecef"` or `"gcrs"`),

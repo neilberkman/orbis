@@ -200,5 +200,43 @@ defmodule Orbis.ReducedOrbitTest do
       samples = for _ <- 0..3, do: {ep, {26_560_000.0, 0.0, 0.0}}
       assert {:error, :invalid_window} = ReducedOrbit.fit(samples)
     end
+
+    test "fit rejects a non-positive cadence", %{sp3: sp3} do
+      assert {:error, :invalid_cadence} =
+               ReducedOrbit.fit(sp3, satellite_id: @sat, window: {@t0, @t1}, cadence_s: 0)
+    end
+
+    test "drift rejects a model whose scale differs from the SP3 product", %{sp3: sp3} do
+      # A model fit from a UTC sample list must not be drifted against a GPST SP3.
+      samples = sample_list(sp3)
+      {:ok, utc_model} = ReducedOrbit.fit(samples)
+      assert utc_model.time_scale == "UTC"
+
+      assert {:error, {:time_scale_mismatch, "UTC", "GPST"}} =
+               ReducedOrbit.drift(utc_model, sp3, satellite_id: @sat, window: {@t0, @t1})
+    end
+  end
+
+  describe "sample-list ordering" do
+    test "the fitted model is independent of sample order", %{sp3: sp3} do
+      samples = sample_list(sp3)
+      {:ok, ordered} = ReducedOrbit.fit(samples)
+      {:ok, reversed} = ReducedOrbit.fit(Enum.reverse(samples))
+
+      # t0 is the earliest sample regardless of input order, so both agree.
+      assert NaiveDateTime.compare(ordered.epoch, @t0) == :eq
+      assert NaiveDateTime.compare(reversed.epoch, @t0) == :eq
+      assert_in_delta ordered.a_m, reversed.a_m, 1.0e-6
+      assert_in_delta ordered.raan_rate_rad_s, reversed.raan_rate_rad_s, 1.0e-18
+    end
+  end
+
+  # A short list of real ECEF samples for the near-circular satellite.
+  defp sample_list(sp3) do
+    for k <- 0..10 do
+      ep = NaiveDateTime.add(@t0, k * 900, :second)
+      {:ok, st} = Orbis.SP3.position(sp3, @sat, ep)
+      {ep, {st.x_m, st.y_m, st.z_m}}
+    end
   end
 end

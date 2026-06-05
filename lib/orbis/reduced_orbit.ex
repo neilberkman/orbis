@@ -123,12 +123,19 @@ defmodule Orbis.ReducedOrbit do
 
     * `:satellite_id` — e.g. `"G05"` (SP3 source)
     * `:window` — `{t0, t1}` epochs bounding the fit (SP3 source)
-    * `:cadence_s` — sampling step in seconds (SP3 source, default `#{@default_cadence_s}`)
+    * `:cadence_s` — positive sampling step in seconds (SP3 source, default `#{@default_cadence_s}`)
     * `:frame` — for the sample-list source, `:ecef` (default)
+    * `:time_scale` — for the sample-list source, the scale its epochs are in
+      (`"UTC"` default, e.g. `"GPST"`); SP3 sources use the product's own scale
+
+  Epochs are interpreted in the model's time scale (recorded on the result). The
+  reference epoch `t0` is the earliest sample, so the result is independent of the
+  caller's sample order.
 
   Returns `{:ok, %Orbis.ReducedOrbit{}}` or a tagged error:
-  `{:too_few_samples, got, required}`, `:invalid_window`, `:singular_plane_fit`,
-  `:raan_ambiguous`, `{:unsupported_source_frame, frame}`, `:transform_unavailable`,
+  `{:too_few_samples, got, required}`, `:invalid_window`, `:invalid_cadence`,
+  `:satellite_id_required`, `:singular_plane_fit`, `:raan_ambiguous`,
+  `{:unsupported_source_frame, frame}`, `:transform_unavailable`,
   `:fit_did_not_converge`.
   """
   @spec fit(Orbis.SP3.t() | [{epoch(), {number(), number(), number()}}], keyword()) ::
@@ -137,18 +144,19 @@ defmodule Orbis.ReducedOrbit do
 
   def fit(%Orbis.SP3{} = sp3, opts) do
     sat_id = Keyword.get(opts, :satellite_id)
-    cadence = Keyword.get(opts, :cadence_s, @default_cadence_s)
 
     with :ok <- require_satellite_id(sat_id),
+         {:ok, cadence} <- valid_cadence(Keyword.get(opts, :cadence_s, @default_cadence_s)),
          {:ok, {t0, t1}} <- fetch_window(opts),
-         {:ok, samples} <- sample_sp3(sp3, sat_id, t0, t1, cadence) do
+         {:ok, samples, requested} <- sample_sp3(sp3, sat_id, t0, t1, cadence) do
       # Epochs are interpreted in the product's own scale (typically GPST),
       # matching Orbis.SP3's contract, so the frame conversion is correct.
       meta = %{
         source: "sp3:#{sat_id}",
         window: {to_naive(t0), to_naive(t1)},
         cadence_s: cadence,
-        scale: sp3.time_scale
+        scale: sp3.time_scale,
+        requested: requested
       }
 
       run_fit(samples, meta)
@@ -162,7 +170,8 @@ defmodule Orbis.ReducedOrbit do
           source: "samples",
           window: window_of(samples),
           cadence_s: nil,
-          scale: Keyword.get(opts, :time_scale, "UTC")
+          scale: Keyword.get(opts, :time_scale, "UTC"),
+          requested: length(samples)
         }
 
         run_fit(samples, meta)
@@ -175,16 +184,17 @@ defmodule Orbis.ReducedOrbit do
   defp run_fit([], _meta), do: {:error, {:too_few_samples, 0, 4}}
 
   defp run_fit(samples, meta) do
-    t0 = samples |> hd() |> elem(0) |> to_naive()
-
     tuples =
       Enum.map(samples, fn {ep, {x, y, z}} -> {datetime_tuple(ep), x / 1.0, y / 1.0, z / 1.0} end)
 
     case safe_nif(fn -> NIF.reduced_orbit_fit(tuples, meta.scale) end) do
-      {:ok, [a_m, e, i_rad, raan, raan_rate, raan_rate_j2, arg_lat, n], {rms, max, n_samples}} ->
+      {:ok, epoch_tuple, [a_m, e, i_rad, raan, raan_rate, raan_rate_j2, arg_lat, n],
+       {rms, max, n_samples}} ->
         {:ok,
          %__MODULE__{
-           epoch: t0,
+           # The reference epoch is the fitter's t0 (earliest sample), returned
+           # from Rust, so it is correct regardless of the caller's sample order.
+           epoch: to_naive(epoch_tuple),
            time_scale: meta.scale,
            a_m: a_m,
            e: e,
@@ -198,6 +208,7 @@ defmodule Orbis.ReducedOrbit do
              rms_m: rms,
              max_m: max,
              n_samples: n_samples,
+             requested: meta.requested,
              window: meta.window,
              cadence_s: meta.cadence_s,
              source: meta.source
@@ -292,11 +303,12 @@ defmodule Orbis.ReducedOrbit do
           {:ok, map()} | {:error, term()}
   def drift(%__MODULE__{} = model, %Orbis.SP3{} = sp3, opts) do
     sat_id = Keyword.get(opts, :satellite_id)
-    cadence = Keyword.get(opts, :cadence_s, @default_cadence_s)
 
     with :ok <- require_satellite_id(sat_id),
+         :ok <- same_scale(model, sp3),
+         {:ok, cadence} <- valid_cadence(Keyword.get(opts, :cadence_s, @default_cadence_s)),
          {:ok, {t0, t1}} <- fetch_window(opts),
-         {:ok, samples} <- sample_sp3(sp3, sat_id, t0, t1, cadence) do
+         {:ok, samples, _requested} <- sample_sp3(sp3, sat_id, t0, t1, cadence) do
       run_drift(model, samples, opts)
     end
   end
@@ -375,6 +387,7 @@ defmodule Orbis.ReducedOrbit do
         "rms_m" => m.fit.rms_m,
         "max_m" => m.fit.max_m,
         "n_samples" => m.fit.n_samples,
+        "requested" => Map.get(m.fit, :requested),
         "cadence_s" => m.fit.cadence_s,
         "source" => m.fit.source,
         "window" => window_to_map(m.fit.window)
@@ -413,6 +426,7 @@ defmodule Orbis.ReducedOrbit do
            rms_m: fit["rms_m"],
            max_m: fit["max_m"],
            n_samples: fit["n_samples"],
+           requested: fit["requested"],
            cadence_s: fit["cadence_s"],
            source: fit["source"],
            window: window_from_map(fit["window"])
@@ -442,6 +456,19 @@ defmodule Orbis.ReducedOrbit do
   defp threshold_value(t) when is_number(t) and t >= 0, do: {:ok, t / 1.0}
   defp threshold_value(_), do: {:error, :invalid_threshold}
 
+  # The SP3 sampling step must be a positive, finite number of seconds.
+  defp valid_cadence(c) when is_number(c) and c > 0, do: {:ok, c}
+  defp valid_cadence(_), do: {:error, :invalid_cadence}
+
+  # Drifting against an SP3 product only makes sense if the model's epochs are in
+  # the same scale as the product, otherwise equal calendar values denote
+  # different physical instants.
+  defp same_scale(%{time_scale: model_scale}, %Orbis.SP3{time_scale: sp3_scale}) do
+    if model_scale == sp3_scale,
+      do: :ok,
+      else: {:error, {:time_scale_mismatch, model_scale, sp3_scale}}
+  end
+
   defp fetch_window(opts) do
     case Keyword.get(opts, :window) do
       {t0, t1} ->
@@ -458,18 +485,21 @@ defmodule Orbis.ReducedOrbit do
   end
 
   defp sample_sp3(sp3, sat_id, t0, t1, cadence_s) do
+    steps = time_steps(t0, t1, cadence_s)
+
     samples =
-      t0
-      |> time_steps(t1, cadence_s)
+      steps
       |> Enum.reduce([], fn ep, acc ->
         case Orbis.SP3.position(sp3, sat_id, ep) do
           {:ok, %{x_m: x, y_m: y, z_m: z}} -> [{ep, {x, y, z}} | acc]
+          # An epoch outside the product's coverage is skipped; the requested
+          # count is returned so the caller can see the horizon was clipped.
           {:error, _} -> acc
         end
       end)
       |> Enum.reverse()
 
-    {:ok, samples}
+    {:ok, samples, length(steps)}
   end
 
   defp time_steps(t0, t1, cadence_s) do
@@ -505,6 +535,10 @@ defmodule Orbis.ReducedOrbit do
   defp frame_string(other), do: {:error, {:unsupported_frame, other}}
 
   defp to_naive(%NaiveDateTime{} = ndt), do: ndt
+
+  defp to_naive({{y, mo, d}, {h, mi, s, us}}) do
+    NaiveDateTime.new!(y, mo, d, h, mi, s, {us, 6})
+  end
 
   defp to_naive({{y, mo, d}, {h, mi, s}}) do
     {sec, micro} = split_seconds(s)
