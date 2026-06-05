@@ -166,11 +166,18 @@ fn rinex_obs_pseudoranges(
 /// Returns `{:ok, [{"G01", [{"C1C", value | nil, lli | nil, ssi | nil}, ...]}, ...]}`
 /// or `{:error, :epoch_out_of_range}`. A blank observation has a `nil` value;
 /// trailing blank observations a satellite did not report are simply absent.
+/// `overrides` is an optional per-system code filter `[{"G", ["L1C", "L2W"]}, ...]`:
+/// an empty list crosses every code for every satellite, while a non-empty list
+/// restricts the result to the listed systems only — and, within a listed system,
+/// to the listed codes (an empty code list keeps all of that system's codes). This
+/// keeps a daily product from marshalling every observable when the caller only
+/// wants a few.
 #[rustler::nif(schedule = "DirtyCpu")]
 fn rinex_obs_values(
     env: Env<'_>,
     handle: ResourceArc<RinexObsResource>,
     epoch_index: usize,
+    overrides: Vec<(String, Vec<String>)>,
 ) -> Term<'_> {
     let Some(epoch) = handle.obs.epochs.get(epoch_index) else {
         let reason = rustler::types::atom::Atom::from_str(env, "epoch_out_of_range")
@@ -181,17 +188,30 @@ fn rinex_obs_values(
 
     let obs_codes = &handle.obs.header.obs_codes;
 
+    // A non-empty override list defines the whole policy: only its systems pass,
+    // each filtered to its code list (an empty code list keeps all codes).
+    let filter_active = !overrides.is_empty();
+    let allow: std::collections::BTreeMap<char, Vec<String>> = overrides
+        .into_iter()
+        .filter_map(|(letter, codes)| letter.chars().next().map(|c| (c, codes)))
+        .collect();
+
     // Each satellite's value vector is index-aligned to its system's declared
     // observation-code list; zip the two so every value is labelled by its code.
     let rows: Vec<SatObsRow> = epoch
         .sats
         .iter()
-        .map(|(sat, values)| {
+        .filter_map(|(sat, values)| {
             let token = sat.to_string();
+            let letter = token.chars().next();
 
-            let codes = token
-                .chars()
-                .next()
+            // System filter: when overrides are given, only their systems pass.
+            let allowed_codes = letter.and_then(|c| allow.get(&c));
+            if filter_active && allowed_codes.is_none() {
+                return None;
+            }
+
+            let codes = letter
                 .and_then(GnssSystem::from_letter)
                 .and_then(|system| obs_codes.get(&system));
 
@@ -199,12 +219,23 @@ fn rinex_obs_values(
                 Some(code_list) => code_list
                     .iter()
                     .zip(values.iter())
-                    .map(|(code, v)| (code.clone(), v.value, v.lli, v.ssi))
+                    .filter_map(|(code, v)| {
+                        let keep = match allowed_codes {
+                            Some(list) if !list.is_empty() => list.iter().any(|c| c == code),
+                            _ => true,
+                        };
+
+                        if keep {
+                            Some((code.clone(), v.value, v.lli, v.ssi))
+                        } else {
+                            None
+                        }
+                    })
                     .collect(),
                 None => Vec::new(),
             };
 
-            (token, per_code)
+            Some((token, per_code))
         })
         .collect();
 

@@ -12,8 +12,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   observations for an epoch (pseudorange, carrier phase, Doppler, signal strength
   with their LLI/SSI), and a carrier-phase convenience that adds the wavelength
   and the phase in metres for GPS/Galileo/BeiDou bands (`band_frequency_hz/2` is
-  public; GLONASS FDMA wavelengths are not yet derived). This unlocks
-  carrier-phase combinations without a parser change.
+  public; GLONASS FDMA wavelengths are not yet derived). `values/3` takes a
+  `:codes` per-system filter so only the requested systems/codes cross the NIF
+  boundary. This unlocks carrier-phase combinations without a parser change.
 - `Orbis.GNSS.Constellation.validate_sp3!/2` — a build-time validation gate that
   returns `:ok` or raises `ArgumentError` describing the findings (e.g. a
   stale-active PRN that is active and usable in the catalog but missing from a

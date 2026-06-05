@@ -213,8 +213,8 @@ defmodule Orbis.GNSS.RINEX.Observations do
 
   `epoch` is the integer index (from `epochs/1`) or an epoch tuple
   `{{y, mo, d}, {h, mi, s}}`. Unlike `pseudoranges/3` this returns the raw RINEX
-  observations for **all** codes the file carries — pseudorange, carrier phase,
-  Doppler, and signal strength — so callers can build carrier-phase combinations.
+  observations across code types — pseudorange, carrier phase, Doppler, and
+  signal strength — so callers can build carrier-phase combinations.
 
   Returns `{:ok, %{satellite_id => [obs]}}` where each `obs` is
 
@@ -225,13 +225,23 @@ defmodule Orbis.GNSS.RINEX.Observations do
   `:meters`, `L` → `:carrier_phase`/`:cycles`, `D` → `:doppler`/`:hz`, `S` →
   `:signal_strength`/`:db_hz`). A blank observation has a `nil` value. Returns
   `{:error, :epoch_out_of_range}` / `{:error, :unknown_epoch}`.
+
+  ## Options
+
+    * `:codes` — a per-system code filter, e.g. `%{"G" => ["L1C", "L2W"]}`. By
+      default every code for every satellite is returned; a non-empty filter
+      restricts the result (and the data crossing the NIF boundary) to the listed
+      systems, and within each to the listed codes. A system mapped to `[]` keeps
+      all of that system's codes — e.g. `%{"G" => []}` is GPS-only, all codes.
   """
   @spec values(t(), non_neg_integer() | tuple(), keyword()) ::
           {:ok, %{String.t() => [map()]}} | {:error, term()}
   def values(obs, epoch, opts \\ [])
 
-  def values(%__MODULE__{handle: handle}, index, _opts) when is_integer(index) do
-    case NIF.rinex_obs_values(handle, index) do
+  def values(%__MODULE__{handle: handle}, index, opts) when is_integer(index) do
+    overrides = codes_overrides(Keyword.get(opts, :codes, %{}))
+
+    case NIF.rinex_obs_values(handle, index, overrides) do
       {:ok, rows} ->
         {:ok,
          Map.new(rows, fn {sat, code_values} ->

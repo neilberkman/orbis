@@ -106,6 +106,24 @@ defmodule Orbis.GNSS.RINEX.ObservationsSppTest do
       assert Enum.find(g05, &(&1.code == "S1C")).kind == :signal_strength
     end
 
+    test "the :codes option scopes the systems and codes that cross the boundary" do
+      obs = Observations.load!(@obs_path)
+
+      {:ok, all} = Observations.values(obs, 0)
+
+      # Restrict to GPS L1C/L2W only.
+      {:ok, gps_two} = Observations.values(obs, 0, codes: %{"G" => ["L1C", "L2W"]})
+      assert Enum.all?(Map.keys(gps_two), &String.starts_with?(&1, "G"))
+      assert Enum.sort(Enum.map(Map.fetch!(gps_two, "G05"), & &1.code)) == ["L1C", "L2W"]
+      # Non-GPS systems present in the unfiltered result are excluded.
+      assert map_size(gps_two) < map_size(all)
+
+      # A system mapped to [] keeps all of that system's codes (GPS-only).
+      {:ok, gps_all} = Observations.values(obs, 0, codes: %{"G" => []})
+      assert Enum.all?(Map.keys(gps_all), &String.starts_with?(&1, "G"))
+      assert length(Map.fetch!(gps_all, "G05")) == length(Map.fetch!(all, "G05"))
+    end
+
     test "index and epoch-tuple selection agree; out-of-range is tagged" do
       obs = Observations.load!(@obs_path)
       [%{index: index, epoch: epoch} | _] = Observations.epochs(obs)
