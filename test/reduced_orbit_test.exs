@@ -107,6 +107,9 @@ defmodule Orbis.ReducedOrbitTest do
       assert d.threshold_horizon == nil
       assert %{epoch: %NaiveDateTime{}, error_m: e} = hd(d.per_epoch)
       assert is_float(e)
+      # requested vs used exposes any horizon clipped by partial coverage.
+      assert is_integer(d.requested) and d.requested > 0
+      assert d.used == length(d.per_epoch)
     end
 
     test "reports the first epoch error crosses a tight threshold", %{sp3: sp3, model: m} do
@@ -189,6 +192,13 @@ defmodule Orbis.ReducedOrbitTest do
 
       assert {:error, {:unsupported_source_frame, :gcrs}} =
                ReducedOrbit.fit(samples, frame: :gcrs)
+    end
+
+    test "an unknown :time_scale is a tagged error, not an opaque NIF string" do
+      samples = [{~N[2020-06-24 00:00:00], {1.0, 2.0, 3.0}}]
+
+      assert {:error, {:unsupported_time_scale, "NOPE"}} =
+               ReducedOrbit.fit(samples, time_scale: "NOPE")
     end
 
     test "drift rejects a negative threshold", %{model: m} do
@@ -322,6 +332,36 @@ defmodule Orbis.ReducedOrbitTest do
         "version" => 1,
         "model" => "eccentric_secular",
         "elements" => %{"a_m" => 2.6e7},
+        "fit" => %{},
+        "epoch" => "2020-06-24T00:00:00"
+      }
+
+      assert {:error, :malformed_map} = ReducedOrbit.from_map(map)
+    end
+
+    test "a circular map with empty elements is malformed, not a nil-filled struct" do
+      map = %{
+        "version" => 1,
+        "model" => "circular_secular",
+        "elements" => %{},
+        "fit" => %{},
+        "epoch" => "2020-06-24T00:00:00"
+      }
+
+      assert {:error, :malformed_map} = ReducedOrbit.from_map(map)
+    end
+
+    test "a map missing a load-bearing numeric element field is malformed", %{model: m} do
+      map = ReducedOrbit.to_map(m)
+      bad = Map.put(map, "elements", Map.delete(map["elements"], "a_m"))
+      assert {:error, :malformed_map} = ReducedOrbit.from_map(bad)
+    end
+
+    test "an eccentric map with h/k but a missing numeric field is malformed" do
+      map = %{
+        "version" => 1,
+        "model" => "eccentric_secular",
+        "elements" => %{"h" => 0.01, "k" => 0.02},
         "fit" => %{},
         "epoch" => "2020-06-24T00:00:00"
       }

@@ -218,13 +218,16 @@ defmodule Orbis.ReducedOrbit do
   end
 
   def fit(samples, opts) when is_list(samples) do
+    scale_opt = Keyword.get(opts, :time_scale, "UTC")
+
     with {:ok, model} <- valid_model(Keyword.get(opts, :model, :circular_secular)),
+         {:ok, scale} <- valid_scale(scale_opt),
          :ecef <- Keyword.get(opts, :frame, :ecef) do
       meta = %{
         source: "samples",
         window: window_of(samples),
         cadence_s: nil,
-        scale: Keyword.get(opts, :time_scale, "UTC"),
+        scale: scale,
         model: model,
         requested: length(samples)
       }
@@ -232,6 +235,7 @@ defmodule Orbis.ReducedOrbit do
       run_fit(samples, meta)
     else
       {:error, _} = err -> err
+      :error -> {:error, {:unsupported_time_scale, scale_opt}}
       other -> {:error, {:unsupported_source_frame, other}}
     end
   end
@@ -326,6 +330,17 @@ defmodule Orbis.ReducedOrbit do
   defp arg_perigee(h, k) when h * h + k * k < 1.0e-24, do: 0.0
   defp arg_perigee(h, k), do: :math.atan2(h, k)
 
+  # The numeric element fields every model needs to evaluate. from_map/1 requires
+  # them so a malformed persisted map fails with :malformed_map at the boundary
+  # rather than producing a struct full of nil that crashes later in the NIF.
+  @required_elements ~w(a_m i_rad raan_rad raan_rate_rad_s raan_rate_j2_rad_s arg_lat_rad mean_motion_rad_s)
+
+  defp require_numeric(el, keys) when is_map(el) do
+    if Enum.all?(keys, fn key -> is_number(Map.get(el, key)) end), do: :ok, else: :error
+  end
+
+  defp require_numeric(_el, _keys), do: :error
+
   # ------------------------------------------------------------------------
   # Evaluation
   # ------------------------------------------------------------------------
@@ -397,7 +412,8 @@ defmodule Orbis.ReducedOrbit do
   `:satellite_id`; for a list of `{epoch, {x_m, y_m, z_m}}` samples it uses those
   directly. Returns
 
-      {:ok, %{per_epoch: [%{epoch:, error_m:}], max_m:, rms_m:, threshold_horizon:}}
+      {:ok, %{per_epoch: [%{epoch:, error_m:}], max_m:, rms_m:, threshold_horizon:,
+              requested:, used:}}
 
   where `threshold_horizon` is the first epoch the ECEF error exceeds
   `:threshold_m` (or `nil` if it never does / no threshold given).
@@ -411,18 +427,18 @@ defmodule Orbis.ReducedOrbit do
          :ok <- same_scale(model, sp3),
          {:ok, cadence} <- valid_cadence(Keyword.get(opts, :cadence_s, @default_cadence_s)),
          {:ok, {t0, t1}} <- fetch_window(opts),
-         {:ok, samples, _requested} <- sample_sp3(sp3, sat_id, t0, t1, cadence) do
-      run_drift(model, samples, opts)
+         {:ok, samples, requested} <- sample_sp3(sp3, sat_id, t0, t1, cadence) do
+      run_drift(model, samples, requested, opts)
     end
   end
 
   def drift(%__MODULE__{} = model, samples, opts) when is_list(samples) do
-    run_drift(model, samples, opts)
+    run_drift(model, samples, length(samples), opts)
   end
 
-  defp run_drift(_model, [], _opts), do: {:error, {:too_few_samples, 0, 1}}
+  defp run_drift(_model, [], _requested, _opts), do: {:error, {:too_few_samples, 0, 1}}
 
-  defp run_drift(model, samples, opts) do
+  defp run_drift(model, samples, requested, opts) do
     with {:ok, threshold_f} <- threshold_value(Keyword.get(opts, :threshold_m, :infinity)) do
       epochs = Enum.map(samples, fn {ep, _} -> to_naive(ep) end)
 
@@ -431,11 +447,11 @@ defmodule Orbis.ReducedOrbit do
           {datetime_tuple(ep), x / 1.0, y / 1.0, z / 1.0}
         end)
 
-      run_drift_nif(model, truth, threshold_f, epochs)
+      run_drift_nif(model, truth, threshold_f, epochs, requested)
     end
   end
 
-  defp run_drift_nif(model, truth, threshold_f, epochs) do
+  defp run_drift_nif(model, truth, threshold_f, epochs, requested) do
     case safe_nif(fn ->
            NIF.reduced_orbit_drift(
              datetime_tuple(model.epoch),
@@ -455,7 +471,17 @@ defmodule Orbis.ReducedOrbit do
           |> Enum.map(fn {ep, err} -> %{epoch: ep, error_m: err} end)
 
         horizon = if idx >= 0, do: Enum.at(epochs, idx)
-        {:ok, %{per_epoch: per_epoch, max_m: max_m, rms_m: rms_m, threshold_horizon: horizon}}
+        # `requested` vs `used` makes a horizon clipped by partial product
+        # coverage visible to the caller (used == length(per_epoch)).
+        {:ok,
+         %{
+           per_epoch: per_epoch,
+           max_m: max_m,
+           rms_m: rms_m,
+           threshold_horizon: horizon,
+           requested: requested,
+           used: length(per_epoch)
+         }}
     end
   end
 
@@ -522,6 +548,7 @@ defmodule Orbis.ReducedOrbit do
   @spec from_map(map()) :: {:ok, t()} | {:error, term()}
   def from_map(%{"version" => 1, "model" => "circular_secular"} = map) do
     with %{"elements" => el, "fit" => fit, "epoch" => epoch_iso} <- map,
+         :ok <- require_numeric(el, @required_elements),
          {:ok, epoch} <- NaiveDateTime.from_iso8601(epoch_iso) do
       {:ok,
        %__MODULE__{
@@ -556,6 +583,7 @@ defmodule Orbis.ReducedOrbit do
 
   def from_map(%{"version" => 1, "model" => "eccentric_secular"} = map) do
     with %{"elements" => el, "fit" => fit, "epoch" => epoch_iso} <- map,
+         :ok <- require_numeric(el, @required_elements),
          h when is_number(h) <- el["h"],
          k when is_number(k) <- el["k"],
          {:ok, epoch} <- NaiveDateTime.from_iso8601(epoch_iso) do
@@ -568,7 +596,8 @@ defmodule Orbis.ReducedOrbit do
          raan_rate_mode: Map.get(el, "raan_rate_mode", "fitted_j2_seeded"),
          epoch: epoch,
          a_m: el["a_m"],
-         e: el["e"],
+         # e is derived from (h, k); the stored value is display-only.
+         e: :math.sqrt(h * h + k * k),
          i_rad: el["i_rad"],
          raan_rad: el["raan_rad"],
          raan_rate_rad_s: el["raan_rate_rad_s"],
@@ -577,7 +606,8 @@ defmodule Orbis.ReducedOrbit do
          mean_motion_rad_s: el["mean_motion_rad_s"],
          h: h,
          k: k,
-         arg_perigee_rad: Map.get(el, "arg_perigee_rad") || arg_perigee(h, k),
+         # Derived from (h, k), not trusted from the map independently.
+         arg_perigee_rad: arg_perigee(h, k),
          fit: %{
            rms_m: fit["rms_m"],
            max_m: fit["max_m"],
@@ -622,6 +652,12 @@ defmodule Orbis.ReducedOrbit do
   # The SP3 sampling step must be a positive, finite number of seconds.
   defp valid_cadence(c) when is_number(c) and c > 0, do: {:ok, c}
   defp valid_cadence(_), do: {:error, :invalid_cadence}
+
+  # The time scales the native layer understands; validated here so a bad
+  # :time_scale returns a tagged error rather than an opaque NIF string.
+  @time_scales ~w(UTC TAI TT TDB GPST GST BDT)
+  defp valid_scale(s) when s in @time_scales, do: {:ok, s}
+  defp valid_scale(_), do: :error
 
   # Drifting against an SP3 product only makes sense if the model's epochs are in
   # the same scale as the product, otherwise equal calendar values denote
