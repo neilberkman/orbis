@@ -6,7 +6,7 @@
 
 Full-featured satellite toolkit for Elixir.
 
-SGP4 propagation and high-accuracy coordinate transforms are handled by a Rust NIF. Everything else — pass prediction, orbit determination, conjunction assessment, constellation management, real-time tracking, batch analysis — is pure Elixir (and Nx for GPU workloads).
+SGP4/SDP4, coordinate transforms, GNSS positioning, orbit determination, and the other precise numerics run in a Rust NIF — much of it verified to 0 ULP (bit-exact) parity against reference implementations. The orchestration layer — pass prediction, conjunction assessment, constellation management, real-time tracking, and batch analysis — is pure Elixir (and Nx for GPU workloads).
 
 ### Try it in Livebook
 
@@ -270,20 +270,22 @@ Orbis.GnssConstellation.valid?(report)
 
 ## Accuracy
 
-| Component              | Reference                       | Accuracy                    |
-| ---------------------- | ------------------------------- | --------------------------- |
-| TEME→GCRS→ITRS         | Skyfield                        | 0 ULP (bit-identical)       |
-| SGP4 propagation       | Skyfield                        | < 1 mm (via sgp4 crate)     |
-| Gibbs / Herrick-Gibbs  | Vallado Python                  | 0 ULP                       |
-| Gauss IOD              | Vallado Python                  | 1e-12 relative              |
-| Lambert (Battin)       | Vallado Python                  | 1e-12 relative              |
-| Conjunction            | Iridium/Cosmos 2251             | < 2 km miss, < 1 min timing |
-| RF (FSPL)              | Analytical (inverse square law) | Exact                       |
-| SP3 interpolation      | gnssanalysis                    | 0 ULP                       |
-| Broadcast orbit/clock  | pinned IS-GPS-200 recipe        | 0 ULP (recipe); ~m vs SP3   |
-| Ionosphere/troposphere | Klobuchar / Saastamoinen–Niell  | 0 ULP                       |
-| GNSS DOP               | cofactor inverse                | 0 ULP                       |
-| Single-point position  | scipy least squares             | sub-micron agreement        |
+| Component              | Reference                       | Accuracy                        |
+| ---------------------- | ------------------------------- | ------------------------------- |
+| TEME→GCRS→ITRS         | Skyfield                        | 0 ULP (bit-identical)           |
+| SGP4 propagation       | Skyfield                        | < 1 mm (via sgp4 crate)         |
+| Gibbs / Herrick-Gibbs  | Vallado Python                  | 0 ULP                           |
+| Gauss IOD              | Vallado Python                  | 1e-12 relative                  |
+| Lambert (Battin)       | Vallado Python                  | 1e-12 relative                  |
+| Conjunction            | Iridium/Cosmos 2251             | < 2 km miss, < 1 min timing     |
+| RF (FSPL)              | Analytical (inverse square law) | Exact                           |
+| SP3 interpolation      | gnssanalysis                    | 0 ULP                           |
+| Broadcast orbit/clock  | pinned IS-GPS-200 recipe        | 0 ULP (recipe); ~m vs SP3       |
+| Ionosphere/troposphere | Klobuchar / Saastamoinen–Niell  | 0 ULP                           |
+| GNSS DOP               | cofactor inverse                | 0 ULP                           |
+| Single-point position  | scipy least squares             | sub-micron agreement            |
+| RINEX / CRINEX decode  | RNXCMP `crx2rnx`                | byte-exact                      |
+| Reduced orbit          | SP3 (drift-checked)             | approximate, ~km/day (see docs) |
 
 ## License
 
