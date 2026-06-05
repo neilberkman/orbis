@@ -334,7 +334,11 @@ defmodule Orbis.GNSS.CarrierPhase do
     f2 = Map.get(ep, :f2)
     epoch = Map.get(ep, :epoch)
 
-    if is_nil(f1) or is_nil(f2) do
+    # An unknown OR non-numeric frequency (e.g. a GLONASS satellite whose band
+    # frequency is nil, or a malformed entry) is skipped, matching the docs and
+    # smooth_code/2 — and the good predecessor is preserved for the continuity
+    # check rather than being reset by an unusable epoch.
+    if not is_number(f1) or not is_number(f2) do
       %{epoch: epoch, slip: false, reasons: [], gf: nil, mw: nil, skipped: true}
     else
       phi1 = Map.get(ep, :phi1)

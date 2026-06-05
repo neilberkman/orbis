@@ -445,7 +445,12 @@ defmodule Orbis.GNSS.CarrierPhaseTest do
       ]
 
       slips = CarrierPhase.detect_cycle_slips(arc)
-      assert Enum.all?(slips, &(&1.slip == false and &1.gf == nil and &1.mw == nil))
+      # A non-numeric frequency is skipped (consistent with nil/GLONASS), with
+      # nil combinations and no slip — never raised.
+      assert Enum.all?(
+               slips,
+               &(&1.skipped == true and &1.slip == false and &1.gf == nil and &1.mw == nil)
+             )
 
       smoothed = CarrierPhase.smooth_code(arc)
       assert Enum.all?(smoothed, &(&1.p_smooth == nil))
