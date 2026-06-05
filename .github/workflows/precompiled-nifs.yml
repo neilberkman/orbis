@@ -30,7 +30,9 @@ jobs:
       - name: Extract project version
         shell: bash
         run: |
-          echo "PROJECT_VERSION=$(sed -n 's/^  @version \"\\(.*\\)\"/\\1/p' mix.exs | head -n1)" >> "$GITHUB_ENV"
+          version="$(awk -F '"' '/@version/ { print $2; exit }' mix.exs)"
+          test -n "$version"
+          echo "PROJECT_VERSION=$version" >> "$GITHUB_ENV"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -38,22 +40,75 @@ jobs:
           toolchain: stable
           target: ${{ matrix.job.target }}
 
-      - name: Build NIF archive
-        id: build-crate
-        uses: philss/rustler-precompiled-action@v1.1.4
-        with:
-          project-name: orbis_nif
-          project-version: ${{ env.PROJECT_VERSION }}
-          target: ${{ matrix.job.target }}
-          nif-version: ${{ matrix.nif }}
-          use-cross: ${{ matrix.job.use-cross || false }}
-          project-dir: native/orbis_nif
+      - name: Install cross
+        if: ${{ matrix.job.use-cross }}
+        shell: bash
+        run: |
+          cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build NIF
+        shell: bash
+        env:
+          RUSTLER_NIF_VERSION: ${{ matrix.nif }}
+        run: |
+          tool=cargo
+          if [[ "${{ matrix.job.use-cross || false }}" == "true" ]]; then
+            tool=cross
+          fi
+
+          "$tool" build \
+            --manifest-path native/orbis_nif/Cargo.toml \
+            --target "${{ matrix.job.target }}" \
+            --release
+
+      - name: Package NIF archive
+        id: package-nif
+        shell: bash
+        run: |
+          target="${{ matrix.job.target }}"
+          nif="${{ matrix.nif }}"
+          lib_prefix="lib"
+          source_ext="so"
+          final_ext="so"
+
+          case "$target" in
+            *-pc-windows-*)
+              lib_prefix=""
+              source_ext="dll"
+              final_ext="dll"
+              ;;
+            *-apple-darwin)
+              source_ext="dylib"
+              final_ext="so"
+              ;;
+          esac
+
+          source_lib="target/${target}/release/${lib_prefix}orbis_nif.${source_ext}"
+          final_lib="${lib_prefix}orbis_nif-v${PROJECT_VERSION}-nif-${nif}-${target}.${final_ext}"
+          archive="${final_lib}.tar.gz"
+
+          test -f "$source_lib"
+          rm -f "$final_lib" "$archive"
+          cp "$source_lib" "$final_lib"
+          tar -czf "$archive" "$final_lib"
+
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha="$(sha256sum "$archive" | cut -d ' ' -f 1)"
+          else
+            sha="$(shasum -a 256 "$archive" | cut -d ' ' -f 1)"
+          fi
+
+          echo "file-name=$archive" >> "$GITHUB_OUTPUT"
+          echo "file-path=$archive" >> "$GITHUB_OUTPUT"
+          echo "file-sha256=$sha" >> "$GITHUB_OUTPUT"
+          echo "Built $archive"
+          echo "SHA256 $sha"
 
       - name: Upload archive artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.build-crate.outputs.file-name }}
-          path: ${{ steps.build-crate.outputs.file-path }}
+          name: ${{ steps.package-nif.outputs.file-name }}
+          path: ${{ steps.package-nif.outputs.file-path }}
 
   publish-release-assets:
     name: Publish release assets
