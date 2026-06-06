@@ -25,7 +25,13 @@
         "pr2_m": "0x1.5ef3c6a2bcbb5p+24",
         "gamma": "0x1.45da686c28e3cp+1",
         "noise_amplification": "0x1.7d3777c503ebcp+1",
-        "iono_free_m": "0x1.5ef3c00000000p+24"
+        "iono_free_m": "0x1.5ef3c00000000p+24",
+        "phi1_cycles": "0x1.cd8990a6a993bp+26",
+        "phi2_cycles": "0x1.682ad3bea73b9p+26",
+        "phase1_m": "0x1.5f4f80ddd7ecdp+24",
+        "phase2_m": "0x1.5fd37d057d184p+24",
+        "iono_free_phase_m": "0x1.5e837d93b3cbap+24",
+        "iono_free_phase_from_cycles_m": "0x1.5e837d93b3cbap+24"
       },
       {
         "system": "E",
@@ -39,7 +45,13 @@
         "pr2_m": "0x1.75d72e7354588p+24",
         "gamma": "0x1.215b7b8bf1d8dp+1",
         "noise_amplification": "0x1.4b4e6a9e28198p+1",
-        "iono_free_m": "0x1.75d71ffffffffp+24"
+        "iono_free_m": "0x1.75d71ffffffffp+24",
+        "phi1_cycles": "0x1.eb9b5c28924ddp+26",
+        "phi2_cycles": "0x1.6fa6edb5f553ep+26",
+        "phase1_m": "0x1.7632debd8c260p+24",
+        "phase2_m": "0x1.76c09259441aep+24",
+        "iono_free_phase_m": "0x1.75803d8d388aep+24",
+        "iono_free_phase_from_cycles_m": "0x1.75803d8d388aep+24"
       },
       {
         "system": "C",
@@ -53,7 +65,13 @@
         "pr2_m": "0x1.538219525d0a5p+24",
         "gamma": "0x1.78ca90724ddf1p+1",
         "noise_amplification": "0x1.c384adb005afdp+1",
-        "iono_free_m": "0x1.5382100000000p+24"
+        "iono_free_m": "0x1.5382100000000p+24",
+        "phi1_cycles": "0x1.ba72a23131776p+26",
+        "phi2_cycles": "0x1.680982c673023p+26",
+        "phase1_m": "0x1.53deaa1cd1743p+24",
+        "phase2_m": "0x1.545a9733bf939p+24",
+        "iono_free_phase_m": "0x1.52edcaa262834p+24",
+        "iono_free_phase_from_cycles_m": "0x1.52edcaa262834p+24"
       }
     ]
   },

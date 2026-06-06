@@ -1,6 +1,6 @@
 {
   "schema": "orbis-gnss-parity/carrier_phase.v1",
-  "purpose": "Independent Python/georinex oracle fixture for Orbis.GNSS.RINEX.Observations values/phases and Orbis.GNSS.CarrierPhase combinations, cycle-slip detection, and Hatch smoothing.",
+  "purpose": "Independent Python/georinex oracle fixture for Orbis.GNSS.RINEX.Observations values/phases and Orbis.GNSS.CarrierPhase combinations, cycle-slip detection, Hatch smoothing, and ionosphere-free smoothing.",
   "env_ref": {
     "fixture": "fixtures/env.json",
     "note": "Generated in the pinned parity virtualenv; floats are stored as Python float.hex()."
@@ -613,6 +613,8 @@
       "f_l2_hz": "0x1.24aec20000000p+30"
     },
     "scalar_cases": {
+      "phase_meters_m": "0x1.6679b5dbb7fd0p+24",
+      "code_minus_carrier_m": "-0x1.e17ae6edff400p+18",
       "geometry_free_m": "0x1.4000000000000p+5",
       "wide_lane_wavelength_m": "0x1.b94d5e5a6844dp-1",
       "narrow_lane_code_m": "0x1.5c077975b8fe2p+3",
@@ -850,6 +852,80 @@
       {
         "epoch": 8,
         "p_smooth": null,
+        "window": 0,
+        "reset": false
+      }
+    ],
+    "smooth_iono_free_code": [
+      {
+        "epoch": 0,
+        "p_smooth": "0x1.4689c0a4cab98p+24",
+        "p_if": "0x1.4689c0a4cab98p+24",
+        "l_if": "0x1.46197d93b3cb8p+24",
+        "window": 1,
+        "reset": false
+      },
+      {
+        "epoch": 1,
+        "p_smooth": "0x1.468a1f8be0026p+24",
+        "p_if": "0x1.468a1f195bb1bp+24",
+        "l_if": "0x1.4619dced4d652p+24",
+        "window": 2,
+        "reset": false
+      },
+      {
+        "epoch": 2,
+        "p_smooth": "0x1.468a7fbcfc0ccp+24",
+        "p_if": "0x1.468a80059a882p+24",
+        "l_if": "0x1.461a3cfa1a31ep+24",
+        "window": 3,
+        "reset": false
+      },
+      {
+        "epoch": 3,
+        "p_smooth": "0x1.468ae0479118ap+24",
+        "p_if": "0x1.468adfa7503c6p+24",
+        "l_if": "0x1.461a9dba1a31ep+24",
+        "window": 4,
+        "reset": false
+      },
+      {
+        "epoch": 4,
+        "p_smooth": "0x1.468b421b7b0f7p+24",
+        "p_if": "0x1.468b421b7b0f7p+24",
+        "l_if": "0x1.461b021565566p+24",
+        "window": 1,
+        "reset": true
+      },
+      {
+        "epoch": 5,
+        "p_smooth": "0x1.468ba3c0eec2cp+24",
+        "p_if": "0x1.468ba33ffc0f9p+24",
+        "l_if": "0x1.461b643bcbbcep+24",
+        "window": 2,
+        "reset": false
+      },
+      {
+        "epoch": 6,
+        "p_smooth": "0x1.468c0711ef759p+24",
+        "p_if": "0x1.468c0711ef759p+24",
+        "l_if": "0x1.461bc71565568p+24",
+        "window": 1,
+        "reset": true
+      },
+      {
+        "epoch": 7,
+        "p_smooth": "0x1.468c6a35fe7efp+24",
+        "p_if": "0x1.468c69cd40bb8p+24",
+        "l_if": "0x1.461c2aa232235p+24",
+        "window": 2,
+        "reset": false
+      },
+      {
+        "epoch": 8,
+        "p_smooth": null,
+        "p_if": null,
+        "l_if": null,
         "window": 0,
         "reset": false
       }

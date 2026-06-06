@@ -1,6 +1,6 @@
 defmodule Orbis.GNSS.IonosphereFree do
   @moduledoc """
-  The dual-frequency ionosphere-free linear combination of pseudoranges.
+  The dual-frequency ionosphere-free linear combination for code and phase.
 
   The first-order ionospheric group delay on a GNSS pseudorange is dispersive: to
   first order it scales as `1 / f^2`, so a signal at carrier `f` is delayed by
@@ -38,6 +38,15 @@ defmodule Orbis.GNSS.IonosphereFree do
   The default combination pair per system is GPS `{:l1, :l2}`, Galileo
   `{:e1, :e5a}`, BeiDou `{:b1i, :b3i}`.
 
+  Carrier phase uses the same first-order cancellation coefficients, but the
+  carrier ionosphere term has the opposite sign and the combined ambiguity
+  remains. If `L_i = lambda_i * phi_i` is carrier phase in metres,
+
+      L_IF = gamma * L1 - (gamma - 1) * L2
+
+  cancels the first-order ionosphere while preserving a combined float
+  ambiguity. This is a PPP/RTK input primitive, not ambiguity resolution.
+
   ## Noise amplification
 
   The combination is not free: because it is a weighted difference of two noisy
@@ -47,11 +56,10 @@ defmodule Orbis.GNSS.IonosphereFree do
 
   ## Non-goals
 
-  This module builds only the first-order ionosphere-free pseudorange
-  combination. It deliberately does not implement carrier-phase combinations,
-  the Melbourne-Wubbena / wide-lane / geometry-free combinations, ambiguity
-  resolution, the second-order ionospheric term, or triple-frequency
-  combinations.
+  This module builds only the first-order ionosphere-free code and carrier-phase
+  combinations. It deliberately does not implement the Melbourne-Wubbena /
+  wide-lane / geometry-free combinations, ambiguity resolution, the second-order
+  ionospheric term, or triple-frequency combinations.
   """
 
   alias Orbis.GNSS.Core.Constants
@@ -62,6 +70,9 @@ defmodule Orbis.GNSS.IonosphereFree do
 
   @typedoc "A reason a satellite was dropped from the paired set."
   @type drop_reason :: :missing_band1 | :missing_band2 | :unknown_system
+
+  @typedoc "A reason a carrier-phase combination could not be formed."
+  @type phase_error :: :equal_frequencies | :invalid_frequency
 
   # The default band pair to combine, per system.
   @default_pairs %{
@@ -155,6 +166,55 @@ defmodule Orbis.GNSS.IonosphereFree do
       {:error, _} = err -> err
     end
   end
+
+  @doc """
+  The ionosphere-free carrier-phase combination from phase measurements in metres.
+
+      L_IF = gamma * L1 - (gamma - 1) * L2
+
+  `l1_m`/`l2_m` are carrier phase already expressed in metres (`lambda_i *
+  phi_i`). The first-order ionosphere cancels; the float ambiguity remains in
+  the combined phase. Returns `{:ok, l_if_m}` or `{:error, :equal_frequencies}`.
+  Never raises.
+  """
+  @spec iono_free_phase(number(), number(), number(), number()) ::
+          {:ok, float()} | {:error, :equal_frequencies}
+  def iono_free_phase(l1_m, l2_m, f1, f2)
+      when is_number(l1_m) and is_number(l2_m) and is_number(f1) and is_number(f2) do
+    iono_free(l1_m, l2_m, f1, f2)
+  end
+
+  @doc """
+  The ionosphere-free carrier-phase combination from phase measurements in cycles.
+
+  The two phase inputs are converted to metres with `L_i = c / f_i * phi_i`, then
+  combined with `iono_free_phase/4`. Returns:
+
+    * `{:ok, l_if_m}` for a valid frequency pair;
+    * `{:error, :equal_frequencies}` when `f1 == f2`;
+    * `{:error, :invalid_frequency}` when either frequency is not positive.
+
+  Never raises.
+  """
+  @spec iono_free_phase_cycles(number(), number(), number(), number()) ::
+          {:ok, float()} | {:error, phase_error()}
+  def iono_free_phase_cycles(phi1_cyc, phi2_cyc, f1, f2)
+      when is_number(phi1_cyc) and is_number(phi2_cyc) and is_number(f1) and is_number(f2) do
+    cond do
+      f1 == f2 ->
+        {:error, :equal_frequencies}
+
+      f1 <= 0.0 or f2 <= 0.0 ->
+        {:error, :invalid_frequency}
+
+      true ->
+        l1 = Constants.speed_of_light_m_s() / f1 * phi1_cyc
+        l2 = Constants.speed_of_light_m_s() / f2 * phi2_cyc
+        iono_free_phase(l1, l2, f1, f2)
+    end
+  end
+
+  def iono_free_phase_cycles(_phi1_cyc, _phi2_cyc, _f1, _f2), do: {:error, :invalid_frequency}
 
   @doc """
   Combine two per-satellite pseudorange bands into ionosphere-free pseudoranges.

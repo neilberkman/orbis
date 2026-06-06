@@ -85,6 +85,12 @@ defmodule Orbis.GNSS.CarrierPhaseOracleTest do
       f1 = h(golden["carrier_phase"]["constants"]["f_l1_hz"])
       f2 = h(golden["carrier_phase"]["constants"]["f_l2_hz"])
 
+      assert {:ok, l1} = CarrierPhase.phase_meters(123_456_789.25, f1)
+      assert_ulp(l1, h(scalars["phase_meters_m"]), 0, "phase metres")
+
+      assert {:ok, cmc} = CarrierPhase.code_minus_carrier(23_000_010.25, 123_456_789.25, f1)
+      assert_ulp(cmc, h(scalars["code_minus_carrier_m"]), 0, "code-minus-carrier")
+
       assert_ulp(
         CarrierPhase.geometry_free(100.0, 60.0),
         h(scalars["geometry_free_m"]),
@@ -127,6 +133,21 @@ defmodule Orbis.GNSS.CarrierPhaseOracleTest do
         assert a.window == e["window"]
         assert a.reset == e["reset"]
         assert_float_or_nil(a.p_smooth, e["p_smooth"], "Hatch epoch #{e["epoch"]}")
+      end
+    end
+
+    test "ionosphere-free Hatch-smoothed code matches the Python arc oracle", %{golden: golden} do
+      arc = decode_arc(golden["carrier_phase"]["arc"])
+      actual = CarrierPhase.smooth_iono_free_code(arc)
+      expected = golden["carrier_phase"]["smooth_iono_free_code"]
+
+      for {a, e} <- Enum.zip(actual, expected) do
+        assert a.epoch == e["epoch"]
+        assert a.window == e["window"]
+        assert a.reset == e["reset"]
+        assert_float_or_nil(a.p_if, e["p_if"], "IF code epoch #{e["epoch"]}")
+        assert_float_or_nil(a.l_if, e["l_if"], "IF phase epoch #{e["epoch"]}")
+        assert_float_or_nil(a.p_smooth, e["p_smooth"], "IF Hatch epoch #{e["epoch"]}")
       end
     end
   end

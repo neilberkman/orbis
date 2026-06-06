@@ -111,6 +111,45 @@ defmodule Orbis.GNSS.IonosphereFreeTest do
     end
   end
 
+  describe "iono_free_phase/4 carrier-phase combinations" do
+    test "phase in metres uses the same first-order cancellation coefficients" do
+      r = 2.3e7
+      k = 1.0e19
+      lambda1 = @c / @f_l1
+      lambda2 = @c / @f_l2
+      l1 = r - k / (@f_l1 * @f_l1) + 123_456 * lambda1
+      l2 = r - k / (@f_l2 * @f_l2) + 234_567 * lambda2
+
+      assert {:ok, l_if} = IonosphereFree.iono_free_phase(l1, l2, @f_l1, @f_l2)
+
+      {:ok, g} = IonosphereFree.gamma(@f_l1, @f_l2)
+      expected = g * l1 - (g - 1.0) * l2
+      assert_in_delta l_if, expected, 1.0e-9
+    end
+
+    test "phase in cycles is converted to metres before combining" do
+      phi1 = 123_456_789.25
+      phi2 = 98_765_432.5
+      l1 = @c / @f_l1 * phi1
+      l2 = @c / @f_l2 * phi2
+
+      assert {:ok, direct} = IonosphereFree.iono_free_phase(l1, l2, @f_l1, @f_l2)
+      assert {:ok, from_cycles} = IonosphereFree.iono_free_phase_cycles(phi1, phi2, @f_l1, @f_l2)
+      assert from_cycles == direct
+    end
+
+    test "bad carrier frequencies are tagged errors" do
+      assert {:error, :equal_frequencies} =
+               IonosphereFree.iono_free_phase_cycles(1.0, 2.0, @f_l1, @f_l1)
+
+      assert {:error, :invalid_frequency} =
+               IonosphereFree.iono_free_phase_cycles(1.0, 2.0, 0.0, @f_l2)
+
+      assert {:error, :invalid_frequency} =
+               IonosphereFree.iono_free_phase_cycles(1.0, 2.0, "bad", @f_l2)
+    end
+  end
+
   describe "coefficients and noise amplification" do
     test "gamma matches the closed form for GPS L1/L2" do
       expected = @f_l1 * @f_l1 / (@f_l1 * @f_l1 - @f_l2 * @f_l2)

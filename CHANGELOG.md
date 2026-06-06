@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `Orbis.GNSS.IonosphereFree.iono_free_phase/4` and
+  `iono_free_phase_cycles/4` for PPP/RTK-facing first-order ionosphere-free
+  carrier-phase combinations, plus `Orbis.GNSS.CarrierPhase.phase_meters/2`,
+  `code_minus_carrier/3`, and `smooth_iono_free_code/2` for code-carrier
+  diagnostics and dual-frequency divergence-free Hatch smoothing.
+
 ## [0.9.2] - 2026-06-06
 
 ### Added

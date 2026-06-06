@@ -99,6 +99,19 @@ defmodule Orbis.GNSS.CarrierPhaseTest do
   end
 
   describe "scalar combinations" do
+    test "phase_meters converts cycles using lambda = c/f" do
+      assert {:ok, l_m} = CarrierPhase.phase_meters(100.0, @f_l1)
+      assert l_m == @c / @f_l1 * 100.0
+      assert CarrierPhase.phase_meters(100.0, 0.0) == {:error, :invalid_frequency}
+      assert CarrierPhase.phase_meters(100.0, "bad") == {:error, :invalid_frequency}
+    end
+
+    test "code_minus_carrier subtracts carrier phase in metres from code" do
+      assert {:ok, cmc} = CarrierPhase.code_minus_carrier(100.0, 10.0, @f_l1)
+      assert cmc == 100.0 - @c / @f_l1 * 10.0
+      assert CarrierPhase.code_minus_carrier(100.0, 10.0, 0.0) == {:error, :invalid_frequency}
+    end
+
     test "geometry_free is the difference of the two phases in metres" do
       assert CarrierPhase.geometry_free(100.0, 60.0) == 40.0
     end
@@ -379,6 +392,25 @@ defmodule Orbis.GNSS.CarrierPhaseTest do
     end
   end
 
+  describe "smooth_iono_free_code/2" do
+    test "an empty arc returns empty" do
+      assert CarrierPhase.smooth_iono_free_code([]) == []
+    end
+
+    test "missing dual-frequency values yield a nil smoothed value" do
+      arc = [
+        %{epoch: 0, phi1: 1.0, p1: 100.0, lli1: 0, f1: @f_l1, f2: @f_l2, phi2: 1.0, p2: 100.0},
+        %{epoch: 1, phi1: 2.0, p1: 101.0, lli1: 0, f1: @f_l1, f2: @f_l2, phi2: nil, p2: 101.0}
+      ]
+
+      [_a, b] = CarrierPhase.smooth_iono_free_code(arc)
+      assert b.p_smooth == nil
+      assert b.p_if == nil
+      assert b.l_if == nil
+      assert b.window == 0
+    end
+  end
+
   describe "option and input validation" do
     # A two-epoch arc with constant phase, so without a slip reset the Hatch
     # window genuinely advances to N=2 (where a bad cap would divide by zero).
@@ -431,6 +463,10 @@ defmodule Orbis.GNSS.CarrierPhaseTest do
       # smooth_code forwards the same thresholds, so it rejects them too.
       assert_raise ArgumentError, fn ->
         CarrierPhase.smooth_code(flat_arc(), gf_threshold_m: -1.0)
+      end
+
+      assert_raise ArgumentError, fn ->
+        CarrierPhase.smooth_iono_free_code(flat_arc(), mw_threshold_cycles: -1.0)
       end
     end
 

@@ -46,6 +46,17 @@ defmodule Orbis.GNSS.CarrierPhase do
       `lambda_WL` plus noise (it is roughly constant); a cycle slip shifts it by
       an integer number of wide-lane cycles, i.e. by `k * lambda_WL` metres.
 
+    * **Code-minus-carrier** `CMC_i = P_i - L_i` (metres). This is the standard
+      single-band diagnostic for code multipath/noise plus roughly twice the
+      first-order ionosphere, with the carrier ambiguity left as a constant
+      offset.
+
+    * **Ionosphere-free Hatch smoothing** combines code and phase into `P_IF`
+      and `L_IF` first, then applies the carrier-smoothed-code recursion to the
+      ionosphere-free pair. It is a dual-frequency smoothing primitive: it still
+      resets on detected cycle slips, but avoids the ionospheric divergence of a
+      single-frequency Hatch filter.
+
   ## Arc shape
 
   `detect_cycle_slips/2` and `smooth_code/2` take an `arc`: a time-ordered list
@@ -73,12 +84,13 @@ defmodule Orbis.GNSS.CarrierPhase do
   ## Non-goals
 
   Out of scope here (documented so the boundary is explicit): integer ambiguity
-  resolution (LAMBDA), double differencing / RTK, the ionosphere-free phase
-  positioning combination, triple-frequency combinations, and any change to the
-  underlying native primitives.
+  resolution (LAMBDA), double differencing / RTK, triple-frequency combinations,
+  and any change to the underlying native primitives.
   """
 
   import Bitwise, only: [band: 2]
+
+  alias Orbis.GNSS.IonosphereFree
 
   @c 299_792_458.0
 
@@ -109,6 +121,32 @@ defmodule Orbis.GNSS.CarrierPhase do
           window: non_neg_integer(),
           reset: boolean()
         }
+  @type iono_free_smooth_result :: %{
+          epoch: term(),
+          p_smooth: float() | nil,
+          p_if: float() | nil,
+          l_if: float() | nil,
+          window: non_neg_integer(),
+          reset: boolean()
+        }
+
+  @doc """
+  Carrier phase in metres, `L = c / f * phi`.
+
+  `phi_cyc` is carrier phase in cycles and `f_hz` is the carrier frequency in
+  hertz. Returns `{:ok, l_m}` or `{:error, :invalid_frequency}` when the
+  frequency is not positive. Never raises.
+  """
+  @spec phase_meters(number(), number()) :: {:ok, float()} | {:error, :invalid_frequency}
+  def phase_meters(phi_cyc, f_hz) when is_number(phi_cyc) and is_number(f_hz) do
+    if f_hz > 0.0 do
+      {:ok, @c / f_hz * phi_cyc}
+    else
+      {:error, :invalid_frequency}
+    end
+  end
+
+  def phase_meters(_phi_cyc, _f_hz), do: {:error, :invalid_frequency}
 
   @doc """
   Geometry-free phase combination `L_GF = l1_m - l2_m` (metres).
@@ -188,6 +226,26 @@ defmodule Orbis.GNSS.CarrierPhase do
   end
 
   def melbourne_wubbena(_phi1, _phi2, _p1, _p2, _f1, _f2), do: {:error, :equal_frequencies}
+
+  @doc """
+  Code-minus-carrier diagnostic `CMC = P - L` (metres).
+
+  `p_m` is code pseudorange in metres, `phi_cyc` is carrier phase in cycles, and
+  `f_hz` is the carrier frequency. The carrier phase is converted to metres with
+  `phase_meters/2`, then subtracted from the code. Returns `{:ok, cmc_m}` or
+  `{:error, :invalid_frequency}`. Never raises.
+  """
+  @spec code_minus_carrier(number(), number(), number()) ::
+          {:ok, float()} | {:error, :invalid_frequency}
+  def code_minus_carrier(p_m, phi_cyc, f_hz)
+      when is_number(p_m) and is_number(phi_cyc) and is_number(f_hz) do
+    case phase_meters(phi_cyc, f_hz) do
+      {:ok, l_m} -> {:ok, p_m - l_m}
+      {:error, _} = err -> err
+    end
+  end
+
+  def code_minus_carrier(_p_m, _phi_cyc, _f_hz), do: {:error, :invalid_frequency}
 
   @doc """
   Detect cycle slips on a single-satellite arc.
@@ -302,6 +360,42 @@ defmodule Orbis.GNSS.CarrierPhase do
     results
   end
 
+  @doc """
+  Dual-frequency ionosphere-free Hatch carrier-smoothed code.
+
+  This uses the same arc shape and cycle-slip detector as `smooth_code/2`, but it
+  forms the ionosphere-free code and carrier phase at each epoch first:
+
+      P_IF = gamma * P1 - (gamma - 1) * P2
+      L_IF = gamma * L1 - (gamma - 1) * L2
+
+  The Hatch recursion then smooths `P_IF` with epoch-to-epoch changes in `L_IF`.
+  This avoids the ionospheric divergence of the single-frequency Hatch filter,
+  while still resetting on LLI/cycle-slip detections and data gaps.
+
+  Returns one map per epoch:
+
+      %{epoch: term(), p_smooth: float | nil, p_if: float | nil,
+        l_if: float | nil, window: non_neg_integer, reset: boolean()}
+
+  `p_smooth`, `p_if`, and `l_if` are `nil` (with `window: 0`) when an epoch is
+  missing a required dual-frequency code/phase/frequency value.
+  """
+  @spec smooth_iono_free_code([epoch_map()], keyword()) :: [iono_free_smooth_result()]
+  def smooth_iono_free_code(arc, opts \\ []) when is_list(arc) do
+    cap = validate_cap!(opts)
+    slips = detect_cycle_slips(arc, opts)
+
+    {results, _state} =
+      arc
+      |> Enum.zip(slips)
+      |> Enum.map_reduce(nil, fn {ep, slip}, state ->
+        iono_free_hatch_step(ep, slip, state, cap)
+      end)
+
+    results
+  end
+
   # --- option validation --------------------------------------------------
 
   # Slip thresholds gate an absolute step, so a negative value would flag every
@@ -371,9 +465,12 @@ defmodule Orbis.GNSS.CarrierPhase do
 
   defp current_gf(phi1, phi2, f1, f2)
        when is_number(phi1) and is_number(phi2) and is_number(f1) and is_number(f2) do
-    l1 = @c / f1 * phi1
-    l2 = @c / f2 * phi2
-    geometry_free(l1, l2)
+    with {:ok, l1} <- phase_meters(phi1, f1),
+         {:ok, l2} <- phase_meters(phi2, f2) do
+      geometry_free(l1, l2)
+    else
+      {:error, _} -> nil
+    end
   end
 
   defp current_gf(_phi1, _phi2, _f1, _f2), do: nil
@@ -433,8 +530,10 @@ defmodule Orbis.GNSS.CarrierPhase do
       # next usable epoch restarts cleanly.
       {%{epoch: epoch, p_smooth: nil, window: 0, reset: false}, nil}
     else
-      l1 = @c / f1 * phi1
-      do_hatch(epoch, p1, l1, slip.slip, state, cap)
+      case phase_meters(phi1, f1) do
+        {:ok, l1} -> do_hatch(epoch, p1, l1, slip.slip, state, cap)
+        {:error, _} -> {%{epoch: epoch, p_smooth: nil, window: 0, reset: false}, nil}
+      end
     end
   end
 
@@ -449,6 +548,68 @@ defmodule Orbis.GNSS.CarrierPhase do
       p_smooth = p1 / n + (n - 1) / n * (prev_smooth + (l1 - prev_l1))
       result = %{epoch: epoch, p_smooth: p_smooth, window: n, reset: false}
       {result, %{p_smooth: p_smooth, l1: l1, window: n}}
+    end
+  end
+
+  # --- ionosphere-free Hatch smoothing ------------------------------------
+
+  defp iono_free_hatch_step(ep, slip, state, cap) do
+    epoch = Map.get(ep, :epoch)
+
+    case current_iono_free_code_phase(ep) do
+      {:ok, p_if, l_if} ->
+        do_iono_free_hatch(epoch, p_if, l_if, slip.slip, state, cap)
+
+      {:error, _} ->
+        result = %{epoch: epoch, p_smooth: nil, p_if: nil, l_if: nil, window: 0, reset: false}
+        {result, nil}
+    end
+  end
+
+  defp current_iono_free_code_phase(ep) do
+    f1 = Map.get(ep, :f1)
+    f2 = Map.get(ep, :f2)
+    p1 = Map.get(ep, :p1)
+    p2 = Map.get(ep, :p2)
+    phi1 = Map.get(ep, :phi1)
+    phi2 = Map.get(ep, :phi2)
+
+    with true <- Enum.all?([f1, f2, p1, p2, phi1, phi2], &is_number/1),
+         {:ok, p_if} <- IonosphereFree.iono_free(p1, p2, f1, f2),
+         {:ok, l_if} <- IonosphereFree.iono_free_phase_cycles(phi1, phi2, f1, f2) do
+      {:ok, p_if, l_if}
+    else
+      _ -> {:error, :missing_observation}
+    end
+  end
+
+  defp do_iono_free_hatch(epoch, p_if, l_if, slip?, state, cap) do
+    if slip? or is_nil(state) do
+      result = %{
+        epoch: epoch,
+        p_smooth: p_if,
+        p_if: p_if,
+        l_if: l_if,
+        window: 1,
+        reset: state != nil and slip?
+      }
+
+      {result, %{p_smooth: p_if, l_if: l_if, window: 1}}
+    else
+      %{p_smooth: prev_smooth, l_if: prev_l_if, window: prev_window} = state
+      n = min(prev_window + 1, cap)
+      p_smooth = p_if / n + (n - 1) / n * (prev_smooth + (l_if - prev_l_if))
+
+      result = %{
+        epoch: epoch,
+        p_smooth: p_smooth,
+        p_if: p_if,
+        l_if: l_if,
+        window: n,
+        reset: false
+      }
+
+      {result, %{p_smooth: p_smooth, l_if: l_if, window: n}}
     end
   end
 end

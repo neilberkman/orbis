@@ -22,6 +22,10 @@ defmodule Orbis.GNSS.FormulaOracleTest do
         f2 = h(c["f2_hz"])
         pr1 = h(c["pr1_m"])
         pr2 = h(c["pr2_m"])
+        l1 = h(c["phase1_m"])
+        l2 = h(c["phase2_m"])
+        phi1 = h(c["phi1_cycles"])
+        phi2 = h(c["phi2_cycles"])
 
         assert {:ok, gamma} = IonosphereFree.gamma(f1, f2)
         assert_ulp(gamma, h(c["gamma"]), 0, "#{c["system"]} gamma")
@@ -31,6 +35,18 @@ defmodule Orbis.GNSS.FormulaOracleTest do
 
         assert {:ok, pr_if} = IonosphereFree.iono_free(pr1, pr2, f1, f2)
         assert_ulp(pr_if, h(c["iono_free_m"]), 0, "#{c["system"]} iono-free")
+
+        assert {:ok, l_if} = IonosphereFree.iono_free_phase(l1, l2, f1, f2)
+        assert_ulp(l_if, h(c["iono_free_phase_m"]), 0, "#{c["system"]} phase IF")
+
+        assert {:ok, l_if_cycles} = IonosphereFree.iono_free_phase_cycles(phi1, phi2, f1, f2)
+
+        assert_ulp(
+          l_if_cycles,
+          h(c["iono_free_phase_from_cycles_m"]),
+          0,
+          "#{c["system"]} phase IF cycles"
+        )
       end
     end
   end
