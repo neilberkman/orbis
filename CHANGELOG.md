@@ -22,6 +22,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   float carrier-phase estimator that holds one ambiguity per satellite across an
   arc while estimating one receiver clock per epoch. This is the bridge from
   single-epoch float positioning toward PPP/RTK ambiguity fixing.
+- `Orbis.GNSS.PrecisePositioning.solve_fixed_epochs/3`, an integer-fixed
+  multi-epoch carrier-phase estimator. It starts from the float arc, searches a
+  bounded integer ambiguity grid on explicit caller-supplied wavelengths, then
+  re-solves receiver position and epoch clocks with the selected ambiguities
+  held fixed. The fixed solution reports the ratio-test status and the
+  integer-candidate scores.
 
 ## [0.9.2] - 2026-06-06
 

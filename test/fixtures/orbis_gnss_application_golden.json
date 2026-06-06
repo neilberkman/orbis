@@ -1253,6 +1253,433 @@
           "weighted_rms_m": "0x1.6d90f44891db9p-23"
         }
       }
+    },
+    "precise_positioning_fixed_epoch": {
+      "receiver_ecef_m": [
+        "0x1.acd2200000000p+21",
+        "0x1.7d1a800000000p+19",
+        "0x1.405af00000000p+22"
+      ],
+      "epoch_clocks_m": [
+        "0x1.9000000000000p+3",
+        "-0x1.0800000000000p+3",
+        "0x1.0000000000000p+2"
+      ],
+      "initial_guess": [
+        "0x1.ace1c00000000p+21",
+        "0x1.7ce8800000000p+19",
+        "0x1.405fa00000000p+22",
+        "-0x1.4000000000000p+4"
+      ],
+      "ambiguity_wavelength_m": "0x1.85b8b06a70079p-3",
+      "epochs": [
+        {
+          "epoch": "2020-06-24T12:00:00",
+          "clock_m": "0x1.9000000000000p+3",
+          "observations": [
+            {
+              "sat": "G21",
+              "code_m": "0x1.3ce210908289fp+24",
+              "phase_m": "0x1.3d1d880eedc7bp+24",
+              "ambiguity_cycles": 80000,
+              "ambiguity_m": "0x1.dbbbf359edc14p+13"
+            },
+            {
+              "sat": "G16",
+              "code_m": "0x1.3bd4a449f96a7p+24",
+              "phase_m": "0x1.3c1022d2dad81p+24",
+              "ambiguity_cycles": 80037,
+              "ambiguity_m": "0x1.dbf4470b6d237p+13"
+            },
+            {
+              "sat": "G18",
+              "code_m": "0x1.424e328bc6114p+24",
+              "phase_m": "0x1.4289b81f1daedp+24",
+              "ambiguity_cycles": 80074,
+              "ambiguity_m": "0x1.dc2c9abcec85ap+13"
+            },
+            {
+              "sat": "G27",
+              "code_m": "0x1.44905a865c02fp+24",
+              "phase_m": "0x1.44cbe72429d07p+24",
+              "ambiguity_cycles": 80111,
+              "ambiguity_m": "0x1.dc64ee6e6be7dp+13"
+            },
+            {
+              "sat": "G20",
+              "code_m": "0x1.46c139fecd80fp+24",
+              "phase_m": "0x1.46fccda7117e6p+24",
+              "ambiguity_cycles": 80148,
+              "ambiguity_m": "0x1.dc9d421feb4a0p+13"
+            },
+            {
+              "sat": "G26",
+              "code_m": "0x1.4e18aadc740f9p+24",
+              "phase_m": "0x1.4e54458f2e3cep+24",
+              "ambiguity_cycles": 80185,
+              "ambiguity_m": "0x1.dcd595d16aac3p+13"
+            },
+            {
+              "sat": "G10",
+              "code_m": "0x1.66e25406bf828p+24",
+              "phase_m": "0x1.671df5c3efdfcp+24",
+              "ambiguity_cycles": 80222,
+              "ambiguity_m": "0x1.dd0de982ea0e6p+13"
+            },
+            {
+              "sat": "G08",
+              "code_m": "0x1.6ba1cc4fb1d4ap+24",
+              "phase_m": "0x1.6bdd75175861dp+24",
+              "ambiguity_cycles": 80259,
+              "ambiguity_m": "0x1.dd463d3469709p+13"
+            }
+          ]
+        },
+        {
+          "epoch": "2020-06-24T12:15:00",
+          "clock_m": "-0x1.0800000000000p+3",
+          "observations": [
+            {
+              "sat": "G21",
+              "code_m": "0x1.3d992976d053bp+24",
+              "phase_m": "0x1.3dd4a0f53b917p+24",
+              "ambiguity_cycles": 80000,
+              "ambiguity_m": "0x1.dbbbf359edc14p+13"
+            },
+            {
+              "sat": "G16",
+              "code_m": "0x1.3e268fcba4d18p+24",
+              "phase_m": "0x1.3e620e54863f2p+24",
+              "ambiguity_cycles": 80037,
+              "ambiguity_m": "0x1.dbf4470b6d237p+13"
+            },
+            {
+              "sat": "G18",
+              "code_m": "0x1.4824eed235359p+24",
+              "phase_m": "0x1.486074658cd32p+24",
+              "ambiguity_cycles": 80074,
+              "ambiguity_m": "0x1.dc2c9abcec85ap+13"
+            },
+            {
+              "sat": "G27",
+              "code_m": "0x1.3f4972b048e60p+24",
+              "phase_m": "0x1.3f84ff4e16b38p+24",
+              "ambiguity_cycles": 80111,
+              "ambiguity_m": "0x1.dc64ee6e6be7dp+13"
+            },
+            {
+              "sat": "G20",
+              "code_m": "0x1.42a0c1af75ad7p+24",
+              "phase_m": "0x1.42dc5557b9aaep+24",
+              "ambiguity_cycles": 80148,
+              "ambiguity_m": "0x1.dc9d421feb4a0p+13"
+            },
+            {
+              "sat": "G26",
+              "code_m": "0x1.55f96f39e4892p+24",
+              "phase_m": "0x1.563509ec9eb67p+24",
+              "ambiguity_cycles": 80185,
+              "ambiguity_m": "0x1.dcd595d16aac3p+13"
+            },
+            {
+              "sat": "G10",
+              "code_m": "0x1.5e26426e7a6a4p+24",
+              "phase_m": "0x1.5e61e42baac78p+24",
+              "ambiguity_cycles": 80222,
+              "ambiguity_m": "0x1.dd0de982ea0e6p+13"
+            },
+            {
+              "sat": "G08",
+              "code_m": "0x1.6315415ff003dp+24",
+              "phase_m": "0x1.6350ea2796910p+24",
+              "ambiguity_cycles": 80259,
+              "ambiguity_m": "0x1.dd463d3469709p+13"
+            }
+          ]
+        },
+        {
+          "epoch": "2020-06-24T12:30:00",
+          "clock_m": "0x1.0000000000000p+2",
+          "observations": [
+            {
+              "sat": "G21",
+              "code_m": "0x1.3f4bc6a8afa12p+24",
+              "phase_m": "0x1.3f873e271adeep+24",
+              "ambiguity_cycles": 80000,
+              "ambiguity_m": "0x1.dbbbf359edc14p+13"
+            },
+            {
+              "sat": "G16",
+              "code_m": "0x1.4202d546f763cp+24",
+              "phase_m": "0x1.423e53cfd8d16p+24",
+              "ambiguity_cycles": 80037,
+              "ambiguity_m": "0x1.dbf4470b6d237p+13"
+            },
+            {
+              "sat": "G18",
+              "code_m": "0x1.4edd94cc79f69p+24",
+              "phase_m": "0x1.4f191a5fd1942p+24",
+              "ambiguity_cycles": 80074,
+              "ambiguity_m": "0x1.dc2c9abcec85ap+13"
+            },
+            {
+              "sat": "G27",
+              "code_m": "0x1.3b099b0119a38p+24",
+              "phase_m": "0x1.3b45279ee7710p+24",
+              "ambiguity_cycles": 80111,
+              "ambiguity_m": "0x1.dc64ee6e6be7dp+13"
+            },
+            {
+              "sat": "G20",
+              "code_m": "0x1.3ff6bc79531a5p+24",
+              "phase_m": "0x1.403250219717cp+24",
+              "ambiguity_cycles": 80148,
+              "ambiguity_m": "0x1.dc9d421feb4a0p+13"
+            },
+            {
+              "sat": "G26",
+              "code_m": "0x1.5ea9489bd5525p+24",
+              "phase_m": "0x1.5ee4e34e8f7fap+24",
+              "ambiguity_cycles": 80185,
+              "ambiguity_m": "0x1.dcd595d16aac3p+13"
+            },
+            {
+              "sat": "G10",
+              "code_m": "0x1.562c604605fc7p+24",
+              "phase_m": "0x1.566802033659bp+24",
+              "ambiguity_cycles": 80222,
+              "ambiguity_m": "0x1.dd0de982ea0e6p+13"
+            },
+            {
+              "sat": "G08",
+              "code_m": "0x1.5af35c735b7b1p+24",
+              "phase_m": "0x1.5b2f053b02084p+24",
+              "ambiguity_cycles": 80259,
+              "ambiguity_m": "0x1.dd463d3469709p+13"
+            }
+          ]
+        }
+      ],
+      "solution": {
+        "position_m": [
+          "0x1.acd2200000002p+21",
+          "0x1.7d1a80000000cp+19",
+          "0x1.405aeffffffffp+22"
+        ],
+        "epoch_clocks": [
+          {
+            "epoch": "2020-06-24T12:00:00",
+            "clock_m": "0x1.8fffffff5d9b0p+3",
+            "clock_s": "0x1.6629667ac94a9p-25"
+          },
+          {
+            "epoch": "2020-06-24T12:15:00",
+            "clock_m": "-0x1.07ffffffd62f5p+3",
+            "clock_s": "-0x1.d8c60227a7b89p-26"
+          },
+          {
+            "epoch": "2020-06-24T12:30:00",
+            "clock_m": "0x1.ffffffffae823p+1",
+            "clock_s": "0x1.ca726eb216a5fp-27"
+          }
+        ],
+        "fixed_ambiguities_cycles": {
+          "G08": 80259,
+          "G10": 80222,
+          "G16": 80037,
+          "G18": 80074,
+          "G20": 80148,
+          "G21": 80000,
+          "G26": 80185,
+          "G27": 80111
+        },
+        "fixed_ambiguities_m": {
+          "G08": "0x1.dd463d3469709p+13",
+          "G10": "0x1.dd0de982ea0e6p+13",
+          "G16": "0x1.dbf4470b6d237p+13",
+          "G18": "0x1.dc2c9abcec85ap+13",
+          "G20": "0x1.dc9d421feb4a0p+13",
+          "G21": "0x1.dbbbf359edc14p+13",
+          "G26": "0x1.dcd595d16aac3p+13",
+          "G27": "0x1.dc64ee6e6be7dp+13"
+        },
+        "residuals_m": [
+          {
+            "epoch": "2020-06-24T12:00:00",
+            "sat": "G08",
+            "code_m": "0x0.0p+0",
+            "phase_m": "0x0.0p+0"
+          },
+          {
+            "epoch": "2020-06-24T12:00:00",
+            "sat": "G10",
+            "code_m": "0x0.0p+0",
+            "phase_m": "0x0.0p+0"
+          },
+          {
+            "epoch": "2020-06-24T12:00:00",
+            "sat": "G16",
+            "code_m": "0x0.0p+0",
+            "phase_m": "0x0.0p+0"
+          },
+          {
+            "epoch": "2020-06-24T12:00:00",
+            "sat": "G18",
+            "code_m": "0x1.0000000000000p-28",
+            "phase_m": "0x1.0000000000000p-28"
+          },
+          {
+            "epoch": "2020-06-24T12:00:00",
+            "sat": "G20",
+            "code_m": "0x0.0p+0",
+            "phase_m": "0x0.0p+0"
+          },
+          {
+            "epoch": "2020-06-24T12:00:00",
+            "sat": "G21",
+            "code_m": "0x0.0p+0",
+            "phase_m": "0x0.0p+0"
+          },
+          {
+            "epoch": "2020-06-24T12:00:00",
+            "sat": "G26",
+            "code_m": "0x0.0p+0",
+            "phase_m": "0x0.0p+0"
+          },
+          {
+            "epoch": "2020-06-24T12:00:00",
+            "sat": "G27",
+            "code_m": "0x0.0p+0",
+            "phase_m": "0x0.0p+0"
+          },
+          {
+            "epoch": "2020-06-24T12:15:00",
+            "sat": "G08",
+            "code_m": "0x0.0p+0",
+            "phase_m": "0x0.0p+0"
+          },
+          {
+            "epoch": "2020-06-24T12:15:00",
+            "sat": "G10",
+            "code_m": "0x0.0p+0",
+            "phase_m": "0x0.0p+0"
+          },
+          {
+            "epoch": "2020-06-24T12:15:00",
+            "sat": "G16",
+            "code_m": "0x0.0p+0",
+            "phase_m": "0x0.0p+0"
+          },
+          {
+            "epoch": "2020-06-24T12:15:00",
+            "sat": "G18",
+            "code_m": "0x1.0000000000000p-28",
+            "phase_m": "0x1.0000000000000p-28"
+          },
+          {
+            "epoch": "2020-06-24T12:15:00",
+            "sat": "G20",
+            "code_m": "0x1.0000000000000p-28",
+            "phase_m": "0x1.0000000000000p-28"
+          },
+          {
+            "epoch": "2020-06-24T12:15:00",
+            "sat": "G21",
+            "code_m": "0x0.0p+0",
+            "phase_m": "0x0.0p+0"
+          },
+          {
+            "epoch": "2020-06-24T12:15:00",
+            "sat": "G26",
+            "code_m": "0x1.0000000000000p-28",
+            "phase_m": "0x1.0000000000000p-28"
+          },
+          {
+            "epoch": "2020-06-24T12:15:00",
+            "sat": "G27",
+            "code_m": "0x1.0000000000000p-28",
+            "phase_m": "0x1.0000000000000p-28"
+          },
+          {
+            "epoch": "2020-06-24T12:30:00",
+            "sat": "G08",
+            "code_m": "0x0.0p+0",
+            "phase_m": "0x0.0p+0"
+          },
+          {
+            "epoch": "2020-06-24T12:30:00",
+            "sat": "G10",
+            "code_m": "0x0.0p+0",
+            "phase_m": "0x0.0p+0"
+          },
+          {
+            "epoch": "2020-06-24T12:30:00",
+            "sat": "G16",
+            "code_m": "0x0.0p+0",
+            "phase_m": "0x0.0p+0"
+          },
+          {
+            "epoch": "2020-06-24T12:30:00",
+            "sat": "G18",
+            "code_m": "0x0.0p+0",
+            "phase_m": "0x0.0p+0"
+          },
+          {
+            "epoch": "2020-06-24T12:30:00",
+            "sat": "G20",
+            "code_m": "0x0.0p+0",
+            "phase_m": "0x0.0p+0"
+          },
+          {
+            "epoch": "2020-06-24T12:30:00",
+            "sat": "G21",
+            "code_m": "0x0.0p+0",
+            "phase_m": "0x0.0p+0"
+          },
+          {
+            "epoch": "2020-06-24T12:30:00",
+            "sat": "G26",
+            "code_m": "0x0.0p+0",
+            "phase_m": "0x0.0p+0"
+          },
+          {
+            "epoch": "2020-06-24T12:30:00",
+            "sat": "G27",
+            "code_m": "0x0.0p+0",
+            "phase_m": "0x0.0p+0"
+          }
+        ],
+        "used_sats": [
+          "G08",
+          "G10",
+          "G16",
+          "G18",
+          "G20",
+          "G21",
+          "G26",
+          "G27"
+        ],
+        "epochs": [
+          "2020-06-24T12:00:00",
+          "2020-06-24T12:15:00",
+          "2020-06-24T12:30:00"
+        ],
+        "metadata": {
+          "iterations": 1,
+          "converged": true,
+          "status": "state_tolerance",
+          "n_epochs": 3,
+          "n_observations": 24,
+          "code_rms_m": "0x1.d363d1848dcbfp-30",
+          "phase_rms_m": "0x1.d363d1848dcbfp-30",
+          "weighted_rms_m": "0x1.0236387bc2cecp-23",
+          "integer_status": "fixed",
+          "integer_ratio": "0x1.d7686241128c4p+44",
+          "integer_best_score": "0x1.160b31d6da531p-45",
+          "integer_second_best_score": "0x1.fffff7f581088p-1",
+          "integer_candidates": 6561
+        }
+      }
     }
   }
 }

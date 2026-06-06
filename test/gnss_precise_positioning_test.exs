@@ -5,6 +5,7 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
 
   alias Orbis.GNSS.Observables
   alias Orbis.GNSS.PrecisePositioning
+  alias Orbis.GNSS.PrecisePositioning.FixedSolution
   alias Orbis.GNSS.PrecisePositioning.Solution
   alias Orbis.GNSS.SP3
 
@@ -17,6 +18,7 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
   @clock_m 12.5
   @epoch_clocks_m [12.5, -8.25, 4.0]
   @c 299_792_458.0
+  @l1_wavelength_m @c / 1_575_420_000.0
 
   setup_all do
     sp3 = SP3.load!(@sp3_path)
@@ -61,7 +63,8 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
      sats: sats,
      observations: synth_observations(sats),
      multi_sats: multi_sats,
-     epoch_observations: synth_epoch_observations(multi_sats)}
+     epoch_observations: synth_epoch_observations(multi_sats),
+     fixed_epoch_observations: synth_fixed_epoch_observations(multi_sats)}
   end
 
   describe "solve_float/4" do
@@ -193,6 +196,58 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
     end
   end
 
+  describe "solve_fixed_epochs/3" do
+    test "recovers position, clocks, and integer ambiguities from exact code+phase", ctx do
+      assert {:ok, %FixedSolution{} = sol} =
+               PrecisePositioning.solve_fixed_epochs(ctx.sp3, ctx.fixed_epoch_observations,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 ambiguity_wavelength_m: @l1_wavelength_m
+               )
+
+      assert position_error(sol.position, @truth) < 1.0e-3
+      assert sol.epochs == @epochs
+      assert sol.used_sats == ctx.multi_sats |> Enum.map(&elem(&1, 0)) |> Enum.sort()
+      assert sol.metadata.integer_status == :fixed
+      assert sol.metadata.integer_ratio > 1.0e6
+      assert sol.metadata.integer_candidates == 6_561
+
+      for {clock, expected} <- Enum.zip(sol.epoch_clocks, @epoch_clocks_m) do
+        assert abs(clock.rx_clock_m - expected) < 1.0e-4
+      end
+
+      for {sat, cycles} <- true_fixed_cycles(ctx.multi_sats) do
+        assert sol.fixed_ambiguities_cycles[sat] == cycles
+        assert abs(sol.fixed_ambiguities_m[sat] - cycles * @l1_wavelength_m) < 1.0e-9
+      end
+
+      for residual <- sol.residuals_m do
+        assert abs(residual.code_m) < 1.0e-4
+        assert abs(residual.phase_m) < 1.0e-4
+      end
+    end
+
+    test "fixed-ambiguity input errors are tagged", ctx do
+      assert {:error, :ambiguity_wavelength_required} =
+               PrecisePositioning.solve_fixed_epochs(ctx.sp3, ctx.fixed_epoch_observations,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0}
+               )
+
+      assert {:error, {:invalid_option, :integer_search_radius_cycles}} =
+               PrecisePositioning.solve_fixed_epochs(ctx.sp3, ctx.fixed_epoch_observations,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 ambiguity_wavelength_m: @l1_wavelength_m,
+                 integer_search_radius_cycles: -1
+               )
+
+      assert {:error, {:too_many_integer_candidates, 6_561, 100}} =
+               PrecisePositioning.solve_fixed_epochs(ctx.sp3, ctx.fixed_epoch_observations,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 ambiguity_wavelength_m: @l1_wavelength_m,
+                 integer_candidate_limit: 100
+               )
+    end
+  end
+
   describe "solve_float/4 errors" do
     test "empty and too-few observation sets are tagged", ctx do
       assert {:error, :no_observations} = PrecisePositioning.solve_float(ctx.sp3, [], @epoch)
@@ -278,6 +333,29 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
     end)
   end
 
+  defp synth_fixed_epoch_observations(multi_sats) do
+    @epochs
+    |> Enum.zip(@epoch_clocks_m)
+    |> Enum.map(fn {epoch, clock_m} ->
+      observations =
+        Enum.map(multi_sats, fn {sat, predictions} ->
+          {_epoch, obs} =
+            Enum.find(predictions, fn {prediction_epoch, _obs} -> prediction_epoch == epoch end)
+
+          code = obs.geometric_range_m - @c * obs.sat_clock_s + clock_m
+          idx = Enum.find_index(multi_sats, fn {candidate, _} -> candidate == sat end)
+
+          %{
+            satellite_id: sat,
+            code_m: code,
+            phase_m: code + fixed_ambiguity_cycles(idx) * @l1_wavelength_m
+          }
+        end)
+
+      %{epoch: epoch, observations: observations}
+    end)
+  end
+
   defp true_ambiguities(sats) do
     sats
     |> Enum.with_index()
@@ -285,6 +363,13 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
   end
 
   defp ambiguity_m(idx), do: 15_000.0 + idx * 17.25
+  defp fixed_ambiguity_cycles(idx), do: 80_000 + idx * 37
+
+  defp true_fixed_cycles(sats) do
+    sats
+    |> Enum.with_index()
+    |> Map.new(fn {{sat, _obs}, idx} -> {sat, fixed_ambiguity_cycles(idx)} end)
+  end
 
   defp position_error(%{x_m: x, y_m: y, z_m: z}, {tx, ty, tz}) do
     :math.sqrt((x - tx) * (x - tx) + (y - ty) * (y - ty) + (z - tz) * (z - tz))

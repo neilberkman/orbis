@@ -409,6 +409,130 @@ defmodule Orbis.GNSS.ApplicationOracleTest do
       )
     end
 
+    test "integer-fixed carrier-phase positioning matches the Python oracle", %{
+      golden: golden,
+      sp3: sp3
+    } do
+      p = golden["sp3_application"]["precise_positioning_fixed_epoch"]
+      [x0, y0, z0, b0] = Enum.map(p["initial_guess"], &h/1)
+
+      epoch_observations =
+        Enum.map(p["epochs"], fn epoch_row ->
+          %{
+            epoch: NaiveDateTime.from_iso8601!(epoch_row["epoch"]),
+            observations:
+              Enum.map(epoch_row["observations"], fn o ->
+                %{satellite_id: o["sat"], code_m: h(o["code_m"]), phase_m: h(o["phase_m"])}
+              end)
+          }
+        end)
+
+      assert {:ok, got} =
+               PrecisePositioning.solve_fixed_epochs(sp3, epoch_observations,
+                 initial_guess: {x0, y0, z0, b0},
+                 ambiguity_wavelength_m: h(p["ambiguity_wavelength_m"])
+               )
+
+      sol = p["solution"]
+      [ex, ey, ez] = Enum.map(sol["position_m"], &h/1)
+
+      assert_ulp(got.position.x_m, ex, 0, "fixed precise position x")
+      assert_ulp(got.position.y_m, ey, 0, "fixed precise position y")
+      assert_ulp(got.position.z_m, ez, 0, "fixed precise position z")
+      assert got.used_sats == sol["used_sats"]
+      assert Enum.map(got.epochs, &NaiveDateTime.to_iso8601/1) == sol["epochs"]
+      assert got.fixed_ambiguities_cycles == sol["fixed_ambiguities_cycles"]
+
+      for {got_clock, expected} <- Enum.zip(got.epoch_clocks, sol["epoch_clocks"]) do
+        assert NaiveDateTime.to_iso8601(got_clock.epoch) == expected["epoch"]
+
+        assert_ulp(
+          got_clock.rx_clock_m,
+          h(expected["clock_m"]),
+          0,
+          "#{expected["epoch"]} fixed clock m"
+        )
+
+        assert_ulp(
+          got_clock.rx_clock_s,
+          h(expected["clock_s"]),
+          0,
+          "#{expected["epoch"]} fixed clock s"
+        )
+      end
+
+      for {sat, expected} <- sol["fixed_ambiguities_m"] do
+        assert_ulp(got.fixed_ambiguities_m[sat], h(expected), 0, "#{sat} fixed ambiguity m")
+      end
+
+      expected_residuals =
+        Map.new(sol["residuals_m"], fn r -> {{r["epoch"], r["sat"]}, r} end)
+
+      for got_residual <- got.residuals_m do
+        key = {NaiveDateTime.to_iso8601(got_residual.epoch), got_residual.satellite_id}
+        expected = Map.fetch!(expected_residuals, key)
+
+        assert_ulp(
+          got_residual.code_m,
+          h(expected["code_m"]),
+          0,
+          "#{elem(key, 0)} #{elem(key, 1)} fixed code residual"
+        )
+
+        assert_ulp(
+          got_residual.phase_m,
+          h(expected["phase_m"]),
+          0,
+          "#{elem(key, 0)} #{elem(key, 1)} fixed phase residual"
+        )
+      end
+
+      assert got.metadata.iterations == sol["metadata"]["iterations"]
+      assert got.metadata.converged == sol["metadata"]["converged"]
+      assert got.metadata.status == String.to_atom(sol["metadata"]["status"])
+      assert got.metadata.n_epochs == sol["metadata"]["n_epochs"]
+      assert got.metadata.n_observations == sol["metadata"]["n_observations"]
+      assert got.metadata.integer_status == String.to_atom(sol["metadata"]["integer_status"])
+      assert got.metadata.integer_candidates == sol["metadata"]["integer_candidates"]
+
+      assert_ulp(got.metadata.code_rms_m, h(sol["metadata"]["code_rms_m"]), 0, "fixed code RMS")
+
+      assert_ulp(
+        got.metadata.phase_rms_m,
+        h(sol["metadata"]["phase_rms_m"]),
+        0,
+        "fixed phase RMS"
+      )
+
+      assert_ulp(
+        got.metadata.weighted_rms_m,
+        h(sol["metadata"]["weighted_rms_m"]),
+        0,
+        "fixed weighted RMS"
+      )
+
+      assert_ulp(
+        got.metadata.integer_best_score,
+        h(sol["metadata"]["integer_best_score"]),
+        0,
+        "fixed best score"
+      )
+
+      assert_ulp(
+        got.metadata.integer_second_best_score,
+        h(sol["metadata"]["integer_second_best_score"]),
+        0,
+        "fixed second-best score"
+      )
+
+      assert_ulp(
+        got.metadata.integer_ratio,
+        h(sol["metadata"]["integer_ratio"]),
+        0,
+        "fixed ratio"
+      )
+    end
+
     test "SolutionReport sky rows and residual RMS match Python-derived expectations", %{
       golden: golden,
       sp3: sp3

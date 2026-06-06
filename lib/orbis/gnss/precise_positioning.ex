@@ -1,6 +1,6 @@
 defmodule Orbis.GNSS.PrecisePositioning do
   @moduledoc """
-  Float-ambiguity carrier-phase positioning primitives.
+  Carrier-phase precise-positioning primitives.
 
   This is the first precise-positioning layer above the code and carrier-phase
   combinations in `Orbis.GNSS.IonosphereFree` / `Orbis.GNSS.CarrierPhase`. It
@@ -14,15 +14,18 @@ defmodule Orbis.GNSS.PrecisePositioning do
   and `N_i` is one float carrier-phase ambiguity per satellite, also in metres.
   The state is linearized and iterated over `[x, y, z, b, N_1, N_2, ...]`.
 
-  This is deliberately **float ambiguity only**: no integer fixing, no LAMBDA,
-  no double differencing, and no stochastic PPP process model. The output exposes
-  the float ambiguities and residuals so later RTK/PPP layers can build on them.
-
   `solve_float/4` solves one epoch. `solve_float_epochs/3` solves a static
   multi-epoch arc with one receiver position, one receiver clock per epoch, and
   one ambiguity per satellite held constant across the arc. That multi-epoch
   model is the first step where carrier phase can tighten position instead of
   being absorbed entirely by one ambiguity per epoch.
+
+  `solve_fixed_epochs/3` starts from the same multi-epoch float model, searches
+  integer ambiguity candidates on an explicit caller-supplied wavelength grid,
+  then re-solves position and per-epoch clocks with those ambiguities held
+  fixed. It is intentionally explicit about wavelengths because an
+  ionosphere-free carrier phase in metres has no universal integer grid unless
+  the caller supplies the effective combination wavelength.
 
   ## Observation shape
 
@@ -47,6 +50,9 @@ defmodule Orbis.GNSS.PrecisePositioning do
   @default_clock_tolerance_m 1.0e-4
   @default_code_sigma_m 1.0
   @default_phase_sigma_m 0.01
+  @default_integer_search_radius_cycles 1
+  @default_integer_ratio_threshold 3.0
+  @default_integer_candidate_limit 50_000
   @pivot_epsilon 1.0e-12
 
   defmodule Solution do
@@ -149,6 +155,76 @@ defmodule Orbis.GNSS.PrecisePositioning do
               code_rms_m: float(),
               phase_rms_m: float(),
               weighted_rms_m: float()
+            }
+          }
+  end
+
+  defmodule FixedSolution do
+    @moduledoc """
+    Static multi-epoch integer-fixed carrier-phase solution.
+    """
+
+    @enforce_keys [
+      :position,
+      :epoch_clocks,
+      :fixed_ambiguities_cycles,
+      :fixed_ambiguities_m,
+      :float_solution,
+      :residuals_m,
+      :used_sats,
+      :epochs,
+      :metadata
+    ]
+    defstruct [
+      :position,
+      :epoch_clocks,
+      :fixed_ambiguities_cycles,
+      :fixed_ambiguities_m,
+      :float_solution,
+      :residuals_m,
+      :used_sats,
+      :epochs,
+      :metadata
+    ]
+
+    @type position :: %{x_m: float(), y_m: float(), z_m: float()}
+
+    @type epoch_clock :: %{
+            epoch: NaiveDateTime.t(),
+            rx_clock_s: float(),
+            rx_clock_m: float()
+          }
+
+    @type residual :: %{
+            epoch: NaiveDateTime.t(),
+            satellite_id: String.t(),
+            code_m: float(),
+            phase_m: float()
+          }
+
+    @type t :: %__MODULE__{
+            position: position(),
+            epoch_clocks: [epoch_clock()],
+            fixed_ambiguities_cycles: %{String.t() => integer()},
+            fixed_ambiguities_m: %{String.t() => float()},
+            float_solution: MultiEpochSolution.t(),
+            residuals_m: [residual()],
+            used_sats: [String.t()],
+            epochs: [NaiveDateTime.t()],
+            metadata: %{
+              iterations: pos_integer(),
+              converged: boolean(),
+              status: :state_tolerance | :max_iterations,
+              n_epochs: pos_integer(),
+              n_observations: pos_integer(),
+              code_rms_m: float(),
+              phase_rms_m: float(),
+              weighted_rms_m: float(),
+              integer_status: :fixed | :not_fixed,
+              integer_ratio: float() | :infinity,
+              integer_best_score: float(),
+              integer_second_best_score: float() | nil,
+              integer_candidates: pos_integer()
             }
           }
   end
@@ -259,6 +335,71 @@ defmodule Orbis.GNSS.PrecisePositioning do
   end
 
   def solve_float_epochs(%SP3{}, _epoch_observations, _opts), do: {:error, :no_epochs}
+
+  @doc """
+  Solve a static multi-epoch position with integer-fixed ambiguities.
+
+  The function first solves the float multi-epoch model (`solve_float_epochs/3`),
+  converts each float ambiguity from metres to cycles using the explicit
+  `:ambiguity_wavelength_m` option, searches nearby integer candidates, and
+  re-solves the receiver position and per-epoch clocks with the best integer
+  ambiguities held fixed.
+
+  ## Required option
+
+    * `:ambiguity_wavelength_m` - either a positive scalar wavelength in metres
+      for every satellite, or a map `%{"G05" => wavelength_m, ...}`.
+
+  ## Additional options
+
+    * `:integer_search_radius_cycles` - integer half-window around each rounded
+      float ambiguity (default `1`).
+    * `:integer_ratio_threshold` - minimum second-best / best weighted-score
+      ratio for `metadata.integer_status == :fixed` (default `3.0`).
+    * `:integer_candidate_limit` - maximum candidates to evaluate before
+      returning `{:error, {:too_many_integer_candidates, count, limit}}`
+      (default `50_000`).
+
+  The fixed solution is returned even when the ratio test is not met; in that
+  case `metadata.integer_status` is `:not_fixed` so callers can reject it.
+  """
+  @spec solve_fixed_epochs(SP3.t(), [epoch_observations()], keyword()) ::
+          {:ok, FixedSolution.t()} | {:error, term()}
+  def solve_fixed_epochs(source, epoch_observations, opts \\ [])
+
+  def solve_fixed_epochs(%SP3{} = sp3, epoch_observations, opts)
+      when is_list(epoch_observations) do
+    with {:ok, epochs} <- normalize_epoch_observations(epoch_observations),
+         :ok <- ensure_multi_enough(epochs),
+         {:ok, weights} <- weights(opts),
+         {:ok, solve_opts} <- solve_options(opts),
+         {:ok, integer_opts} <- integer_options(opts),
+         {:ok, float_sol} <- solve_float_epochs(sp3, epochs, opts),
+         {:ok, wavelengths} <- ambiguity_wavelengths(float_sol.used_sats, opts),
+         {:ok, fixed_cycles, fixed_meta} <-
+           search_integer_ambiguities(float_sol, wavelengths, integer_opts),
+         fixed_m = fixed_ambiguities_m(fixed_cycles, wavelengths),
+         state = fixed_state_from_float(float_sol),
+         {:ok, fixed_state, iterations, converged, status} <-
+           iterate_fixed_multi(sp3, epochs, fixed_m, state, weights, solve_opts, 1) do
+      finalize_fixed_multi(
+        sp3,
+        epochs,
+        float_sol.used_sats,
+        fixed_cycles,
+        fixed_m,
+        float_sol,
+        fixed_state,
+        weights,
+        iterations,
+        converged,
+        status,
+        fixed_meta
+      )
+    end
+  end
+
+  def solve_fixed_epochs(%SP3{}, _epoch_observations, _opts), do: {:error, :no_epochs}
 
   # --- input normalization -------------------------------------------------
 
@@ -413,6 +554,58 @@ defmodule Orbis.GNSS.PrecisePositioning do
            clock_tolerance_m: clock_tol / 1.0,
            ambiguity_tolerance_m: ambiguity_tol / 1.0
          }}
+    end
+  end
+
+  defp integer_options(opts) do
+    radius =
+      Keyword.get(opts, :integer_search_radius_cycles, @default_integer_search_radius_cycles)
+
+    ratio = Keyword.get(opts, :integer_ratio_threshold, @default_integer_ratio_threshold)
+    limit = Keyword.get(opts, :integer_candidate_limit, @default_integer_candidate_limit)
+
+    cond do
+      not is_integer(radius) or radius < 0 ->
+        {:error, {:invalid_option, :integer_search_radius_cycles}}
+
+      not is_number(ratio) or ratio < 0.0 ->
+        {:error, {:invalid_option, :integer_ratio_threshold}}
+
+      not is_integer(limit) or limit < 1 ->
+        {:error, {:invalid_option, :integer_candidate_limit}}
+
+      true ->
+        {:ok,
+         %{
+           radius_cycles: radius,
+           ratio_threshold: ratio / 1.0,
+           candidate_limit: limit
+         }}
+    end
+  end
+
+  defp ambiguity_wavelengths(sat_ids, opts) do
+    case Keyword.fetch(opts, :ambiguity_wavelength_m) do
+      {:ok, wavelength} when is_number(wavelength) and wavelength > 0.0 ->
+        {:ok, Map.new(sat_ids, &{&1, wavelength / 1.0})}
+
+      {:ok, wavelength_by_sat} when is_map(wavelength_by_sat) ->
+        sat_ids
+        |> Enum.reduce_while({:ok, %{}}, fn sat, {:ok, acc} ->
+          case Map.fetch(wavelength_by_sat, sat) do
+            {:ok, value} when is_number(value) and value > 0.0 ->
+              {:cont, {:ok, Map.put(acc, sat, value / 1.0)}}
+
+            _ ->
+              {:halt, {:error, {:invalid_ambiguity_wavelength, sat}}}
+          end
+        end)
+
+      {:ok, _other} ->
+        {:error, {:invalid_option, :ambiguity_wavelength_m}}
+
+      :error ->
+        {:error, :ambiguity_wavelength_required}
     end
   end
 
@@ -586,6 +779,25 @@ defmodule Orbis.GNSS.PrecisePositioning do
     end
   end
 
+  defp iterate_fixed_multi(sp3, epochs, fixed_m, state, weights, opts, iter) do
+    with {:ok, rows} <- build_fixed_multi_rows(sp3, epochs, fixed_m, state, weights),
+         {:ok, dx} <- solve_normal_equations(rows, 3 + length(epochs)) do
+      next = apply_fixed_multi_delta(state, dx, length(epochs))
+      {pos_step, clock_step} = fixed_multi_step_norms(dx)
+
+      cond do
+        pos_step <= opts.position_tolerance_m and clock_step <= opts.clock_tolerance_m ->
+          {:ok, next, iter, true, :state_tolerance}
+
+        iter >= opts.max_iterations ->
+          {:ok, next, iter, false, :max_iterations}
+
+        true ->
+          iterate_fixed_multi(sp3, epochs, fixed_m, next, weights, opts, iter + 1)
+      end
+    end
+  end
+
   defp build_rows(sp3, obs, epoch, state, weights) do
     {rx, ry, rz} = state.position
 
@@ -687,10 +899,68 @@ defmodule Orbis.GNSS.PrecisePositioning do
     end
   end
 
+  defp build_fixed_multi_rows(sp3, epochs, fixed_m, state, weights) do
+    {rx, ry, rz} = state.position
+
+    epochs
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, fn {epoch_row, epoch_idx}, {:ok, acc} ->
+      clock_m = Enum.at(state.clocks_m, epoch_idx)
+
+      epoch_row.observations
+      |> Enum.reduce_while({:ok, acc}, fn o, {:ok, rows_acc} ->
+        case Observables.predict(sp3, o.satellite_id, {rx, ry, rz}, epoch_row.epoch) do
+          {:ok, pred} ->
+            {ex, ey, ez} = pred.los_unit
+            sat_clock_m = Constants.speed_of_light_m_s() * (pred.sat_clock_s || 0.0)
+            model_code = pred.geometric_range_m + clock_m - sat_clock_m
+            ambiguity = Map.fetch!(fixed_m, o.satellite_id)
+            h = fixed_multi_design_row({-ex, -ey, -ez}, epoch_idx, length(epochs))
+
+            code_row = %{
+              kind: :code,
+              sat: o.satellite_id,
+              epoch: epoch_row.epoch,
+              h: h,
+              y: o.code_m - model_code,
+              weight: weights.code
+            }
+
+            phase_row = %{
+              kind: :phase,
+              sat: o.satellite_id,
+              epoch: epoch_row.epoch,
+              h: h,
+              y: o.phase_m - (model_code + ambiguity),
+              weight: weights.phase
+            }
+
+            {:cont, {:ok, [phase_row, code_row | rows_acc]}}
+
+          {:error, reason} ->
+            {:halt, {:error, {:no_ephemeris, o.satellite_id, reason}}}
+        end
+      end)
+      |> case do
+        {:ok, rows_acc} -> {:cont, {:ok, rows_acc}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, rows} -> {:ok, Enum.reverse(rows)}
+      {:error, _} = err -> err
+    end
+  end
+
   defp multi_design_row({dx, dy, dz}, epoch_idx, ambiguity_sat, n_epochs, sat_ids) do
     clock_cols = for idx <- 0..(n_epochs - 1), do: if(idx == epoch_idx, do: 1.0, else: 0.0)
     ambiguity_cols = Enum.map(sat_ids, &if(&1 == ambiguity_sat, do: 1.0, else: 0.0))
     [dx, dy, dz | clock_cols ++ ambiguity_cols]
+  end
+
+  defp fixed_multi_design_row({dx, dy, dz}, epoch_idx, n_epochs) do
+    clock_cols = for idx <- 0..(n_epochs - 1), do: if(idx == epoch_idx, do: 1.0, else: 0.0)
+    [dx, dy, dz | clock_cols]
   end
 
   defp apply_delta(state, obs, dx) do
@@ -737,6 +1007,21 @@ defmodule Orbis.GNSS.PrecisePositioning do
     }
   end
 
+  defp apply_fixed_multi_delta(state, dx, n_epochs) do
+    {rx, ry, rz} = state.position
+    [dx0, dx1, dx2 | clock_deltas] = dx
+
+    clocks =
+      state.clocks_m
+      |> Enum.zip(Enum.take(clock_deltas, n_epochs))
+      |> Enum.map(fn {clock, delta} -> clock + delta end)
+
+    %{
+      position: {rx + dx0, ry + dx1, rz + dx2},
+      clocks_m: clocks
+    }
+  end
+
   defp multi_step_norms([dx, dy, dz | rest], n_epochs) do
     {clock_deltas, ambiguity_deltas} = Enum.split(rest, n_epochs)
 
@@ -747,8 +1032,107 @@ defmodule Orbis.GNSS.PrecisePositioning do
     }
   end
 
+  defp fixed_multi_step_norms([dx, dy, dz | clock_deltas]) do
+    {:math.sqrt(dx * dx + dy * dy + dz * dz), max_abs(clock_deltas)}
+  end
+
   defp max_abs([]), do: 0.0
   defp max_abs(xs), do: xs |> Enum.map(&abs/1) |> Enum.max()
+
+  # --- integer ambiguity fixing -------------------------------------------
+
+  defp search_integer_ambiguities(float_sol, wavelengths, opts) do
+    sat_ids = float_sol.used_sats
+
+    ranges =
+      Enum.map(
+        sat_ids,
+        &candidate_range(&1, float_sol.ambiguities_m, wavelengths, opts.radius_cycles)
+      )
+
+    count = Enum.reduce(ranges, 1, fn range, acc -> acc * length(range) end)
+
+    if count > opts.candidate_limit do
+      {:error, {:too_many_integer_candidates, count, opts.candidate_limit}}
+    else
+      candidates =
+        ranges
+        |> cartesian_product()
+        |> Enum.map(fn cycles ->
+          fixed_cycles = Map.new(Enum.zip(sat_ids, cycles))
+          score = ambiguity_score(float_sol.ambiguities_m, fixed_cycles, wavelengths, sat_ids)
+          {score, fixed_cycles}
+        end)
+        |> Enum.sort_by(fn {score, fixed_cycles} ->
+          {score, Enum.map(sat_ids, &Map.fetch!(fixed_cycles, &1))}
+        end)
+
+      [{best_score, fixed_cycles} | rest] = candidates
+
+      second_best_score =
+        case rest do
+          [{score, _} | _] -> score
+          [] -> nil
+        end
+
+      ratio = integer_ratio(best_score, second_best_score)
+      status = if integer_ratio_pass?(ratio, opts.ratio_threshold), do: :fixed, else: :not_fixed
+
+      {:ok, fixed_cycles,
+       %{
+         integer_status: status,
+         integer_ratio: ratio,
+         integer_best_score: best_score,
+         integer_second_best_score: second_best_score,
+         integer_candidates: count
+       }}
+    end
+  end
+
+  defp candidate_range(sat, ambiguities_m, wavelengths, radius) do
+    wavelength = Map.fetch!(wavelengths, sat)
+    center = round(Map.fetch!(ambiguities_m, sat) / wavelength)
+    (center - radius)..(center + radius) |> Enum.to_list()
+  end
+
+  defp cartesian_product([]), do: [[]]
+
+  defp cartesian_product([range | rest]) do
+    for value <- range, tail <- cartesian_product(rest), do: [value | tail]
+  end
+
+  defp ambiguity_score(ambiguities_m, fixed_cycles, wavelengths, sat_ids) do
+    Enum.reduce(sat_ids, 0.0, fn sat, acc ->
+      wavelength = Map.fetch!(wavelengths, sat)
+      delta = Map.fetch!(ambiguities_m, sat) - Map.fetch!(fixed_cycles, sat) * wavelength
+      normalized = delta / wavelength
+      acc + normalized * normalized
+    end)
+  end
+
+  defp fixed_ambiguities_m(fixed_cycles, wavelengths) do
+    Map.new(fixed_cycles, fn {sat, cycles} -> {sat, cycles * Map.fetch!(wavelengths, sat)} end)
+  end
+
+  defp fixed_state_from_float(float_sol) do
+    %{
+      position: {float_sol.position.x_m, float_sol.position.y_m, float_sol.position.z_m},
+      clocks_m: Enum.map(float_sol.epoch_clocks, & &1.rx_clock_m)
+    }
+  end
+
+  defp integer_ratio(_best_score, nil), do: :infinity
+
+  defp integer_ratio(best_score, second_best_score) do
+    cond do
+      best_score == 0.0 and second_best_score > 0.0 -> :infinity
+      best_score == 0.0 -> 0.0
+      true -> second_best_score / best_score
+    end
+  end
+
+  defp integer_ratio_pass?(:infinity, _threshold), do: true
+  defp integer_ratio_pass?(ratio, threshold), do: ratio >= threshold
 
   # --- dynamic least squares ----------------------------------------------
 
@@ -933,6 +1317,60 @@ defmodule Orbis.GNSS.PrecisePositioning do
     end
   end
 
+  defp finalize_fixed_multi(
+         sp3,
+         epochs,
+         sat_ids,
+         fixed_cycles,
+         fixed_m,
+         float_sol,
+         state,
+         weights,
+         iterations,
+         converged,
+         status,
+         fixed_meta
+       ) do
+    with {:ok, residual_rows} <- fixed_multi_residual_rows(sp3, epochs, fixed_m, state) do
+      code = residual_rows |> Enum.map(& &1.code_m)
+      phase = residual_rows |> Enum.map(& &1.phase_m)
+      {x, y, z} = state.position
+
+      {:ok,
+       %FixedSolution{
+         position: %{x_m: x, y_m: y, z_m: z},
+         epoch_clocks:
+           epochs
+           |> Enum.map(& &1.epoch)
+           |> Enum.zip(state.clocks_m)
+           |> Enum.map(fn {epoch, clock_m} ->
+             %{
+               epoch: epoch,
+               rx_clock_s: clock_m / Constants.speed_of_light_m_s(),
+               rx_clock_m: clock_m
+             }
+           end),
+         fixed_ambiguities_cycles: fixed_cycles,
+         fixed_ambiguities_m: fixed_m,
+         float_solution: float_sol,
+         residuals_m: residual_rows,
+         used_sats: sat_ids,
+         epochs: Enum.map(epochs, & &1.epoch),
+         metadata:
+           Map.merge(fixed_meta, %{
+             iterations: iterations,
+             converged: converged,
+             status: status,
+             n_epochs: length(epochs),
+             n_observations: multi_observation_count(epochs),
+             code_rms_m: rms(code),
+             phase_rms_m: rms(phase),
+             weighted_rms_m: weighted_rms(residual_rows, weights)
+           })
+       }}
+    end
+  end
+
   defp residual_rows(sp3, obs, epoch, state) do
     {rx, ry, rz} = state.position
 
@@ -976,6 +1414,46 @@ defmodule Orbis.GNSS.PrecisePositioning do
             sat_clock_m = Constants.speed_of_light_m_s() * (pred.sat_clock_s || 0.0)
             model_code = pred.geometric_range_m + clock_m - sat_clock_m
             ambiguity = Map.fetch!(state.ambiguities, o.satellite_id)
+
+            row = %{
+              epoch: epoch_row.epoch,
+              satellite_id: o.satellite_id,
+              code_m: o.code_m - model_code,
+              phase_m: o.phase_m - (model_code + ambiguity)
+            }
+
+            {:cont, {:ok, [row | rows_acc]}}
+
+          {:error, reason} ->
+            {:halt, {:error, {:no_ephemeris, o.satellite_id, reason}}}
+        end
+      end)
+      |> case do
+        {:ok, rows_acc} -> {:cont, {:ok, rows_acc}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, rows} -> {:ok, Enum.reverse(rows)}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp fixed_multi_residual_rows(sp3, epochs, fixed_m, state) do
+    {rx, ry, rz} = state.position
+
+    epochs
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, fn {epoch_row, epoch_idx}, {:ok, acc} ->
+      clock_m = Enum.at(state.clocks_m, epoch_idx)
+
+      epoch_row.observations
+      |> Enum.reduce_while({:ok, acc}, fn o, {:ok, rows_acc} ->
+        case Observables.predict(sp3, o.satellite_id, {rx, ry, rz}, epoch_row.epoch) do
+          {:ok, pred} ->
+            sat_clock_m = Constants.speed_of_light_m_s() * (pred.sat_clock_s || 0.0)
+            model_code = pred.geometric_range_m + clock_m - sat_clock_m
+            ambiguity = Map.fetch!(fixed_m, o.satellite_id)
 
             row = %{
               epoch: epoch_row.epoch,
