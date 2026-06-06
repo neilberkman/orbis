@@ -334,6 +334,11 @@ defmodule Orbis.GNSS.Constellation do
   The result separates added/removed PRNs from identity/status changes on a PRN
   that exists in both snapshots.
 
+  `diff/2` assumes each input has at most one record per `{system, prn}`. Run
+  `validate/1` on both snapshots first when ingesting external or hand-edited
+  catalogs, and treat duplicate findings as malformed input rather than a
+  constellation change.
+
       iex> previous = [
       ...>   %Orbis.GNSS.Constellation.Record{
       ...>     system: :gps,
