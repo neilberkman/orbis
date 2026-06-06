@@ -18,6 +18,12 @@ defmodule Orbis.GNSS.PrecisePositioning do
   no double differencing, and no stochastic PPP process model. The output exposes
   the float ambiguities and residuals so later RTK/PPP layers can build on them.
 
+  `solve_float/4` solves one epoch. `solve_float_epochs/3` solves a static
+  multi-epoch arc with one receiver position, one receiver clock per epoch, and
+  one ambiguity per satellite held constant across the arc. That multi-epoch
+  model is the first step where carrier phase can tighten position instead of
+  being absorbed entirely by one ambiguity per epoch.
+
   ## Observation shape
 
   Observations may be maps or tuples:
@@ -88,6 +94,65 @@ defmodule Orbis.GNSS.PrecisePositioning do
           }
   end
 
+  defmodule MultiEpochSolution do
+    @moduledoc """
+    Static multi-epoch float-ambiguity phase positioning solution.
+    """
+
+    @enforce_keys [
+      :position,
+      :epoch_clocks,
+      :ambiguities_m,
+      :residuals_m,
+      :used_sats,
+      :epochs,
+      :metadata
+    ]
+    defstruct [
+      :position,
+      :epoch_clocks,
+      :ambiguities_m,
+      :residuals_m,
+      :used_sats,
+      :epochs,
+      :metadata
+    ]
+
+    @type position :: %{x_m: float(), y_m: float(), z_m: float()}
+
+    @type epoch_clock :: %{
+            epoch: NaiveDateTime.t(),
+            rx_clock_s: float(),
+            rx_clock_m: float()
+          }
+
+    @type residual :: %{
+            epoch: NaiveDateTime.t(),
+            satellite_id: String.t(),
+            code_m: float(),
+            phase_m: float()
+          }
+
+    @type t :: %__MODULE__{
+            position: position(),
+            epoch_clocks: [epoch_clock()],
+            ambiguities_m: %{String.t() => float()},
+            residuals_m: [residual()],
+            used_sats: [String.t()],
+            epochs: [NaiveDateTime.t()],
+            metadata: %{
+              iterations: pos_integer(),
+              converged: boolean(),
+              status: :state_tolerance | :max_iterations,
+              n_epochs: pos_integer(),
+              n_observations: pos_integer(),
+              code_rms_m: float(),
+              phase_rms_m: float(),
+              weighted_rms_m: float()
+            }
+          }
+  end
+
   @typedoc "A dual-frequency ionosphere-free code/phase observation."
   @type observation ::
           %{satellite_id: String.t(), code_m: number(), phase_m: number()}
@@ -96,6 +161,11 @@ defmodule Orbis.GNSS.PrecisePositioning do
   @typedoc "A receiver ECEF position in metres."
   @type receiver ::
           {number(), number(), number()} | %{x_m: number(), y_m: number(), z_m: number()}
+
+  @typedoc "A set of code/phase observations for one epoch."
+  @type epoch_observations ::
+          %{epoch: NaiveDateTime.t(), observations: [observation()]}
+          | {NaiveDateTime.t(), [observation()]}
 
   @doc """
   Solve a float-ambiguity carrier-phase position for one SP3-backed epoch.
@@ -149,6 +219,47 @@ defmodule Orbis.GNSS.PrecisePositioning do
   def solve_float(%SP3{}, observations, %NaiveDateTime{}, _opts) when not is_list(observations),
     do: {:error, :no_observations}
 
+  @doc """
+  Solve a static multi-epoch float-ambiguity carrier-phase position.
+
+  `epoch_observations` is a list of `%{epoch: epoch, observations: obs}` maps or
+  `{epoch, obs}` tuples. The receiver position is static across the whole arc,
+  each epoch gets its own receiver clock, and each satellite gets one ambiguity
+  held constant across every epoch where that satellite appears.
+
+  This model is still float ambiguity only. It does not fix integer ambiguities
+  or estimate a stochastic PPP process, but it lets changing geometry across the
+  arc separate position from carrier ambiguities.
+
+  Options are the same as `solve_float/4`, plus:
+
+    * `:ambiguity_tolerance_m` - maximum ambiguity-update convergence threshold
+      (default `1.0e-4` m).
+
+  Returns `{:ok, %MultiEpochSolution{}}` or `{:error, reason}`. Reasons include
+  `:no_epochs`, `{:too_few_epochs, used, 2}`, `{:duplicate_epoch, epoch}`,
+  `{:too_few_epoch_observations, epoch, used, 4}`,
+  `{:too_few_equations, equations, unknowns}`, and the same observation,
+  option, ephemeris, seeding, and geometry errors as `solve_float/4`.
+  """
+  @spec solve_float_epochs(SP3.t(), [epoch_observations()], keyword()) ::
+          {:ok, MultiEpochSolution.t()} | {:error, term()}
+  def solve_float_epochs(source, epoch_observations, opts \\ [])
+
+  def solve_float_epochs(%SP3{} = sp3, epoch_observations, opts)
+      when is_list(epoch_observations) do
+    with {:ok, epochs} <- normalize_epoch_observations(epoch_observations),
+         :ok <- ensure_multi_enough(epochs),
+         {:ok, weights} <- weights(opts),
+         {:ok, solve_opts} <- solve_options(opts),
+         {:ok, state} <- initial_multi_state(sp3, epochs, opts) do
+      sat_ids = multi_satellite_ids(epochs)
+      iterate_multi(sp3, epochs, sat_ids, state, weights, solve_opts, 1)
+    end
+  end
+
+  def solve_float_epochs(%SP3{}, _epoch_observations, _opts), do: {:error, :no_epochs}
+
   # --- input normalization -------------------------------------------------
 
   defp ensure_nonempty([]), do: {:error, :no_observations}
@@ -193,6 +304,72 @@ defmodule Orbis.GNSS.PrecisePositioning do
   defp ensure_enough(obs) when length(obs) >= 4, do: :ok
   defp ensure_enough(obs), do: {:error, {:too_few_satellites, length(obs), 4}}
 
+  defp normalize_epoch_observations([]), do: {:error, :no_epochs}
+
+  defp normalize_epoch_observations(epoch_observations) do
+    epoch_observations
+    |> Enum.reduce_while({:ok, [], MapSet.new()}, fn entry, {:ok, acc, seen} ->
+      case normalize_epoch_entry(entry) do
+        {:ok, epoch, observations} ->
+          if MapSet.member?(seen, epoch) do
+            {:halt, {:error, {:duplicate_epoch, epoch}}}
+          else
+            with {:ok, obs} <- normalize_observations(observations),
+                 :ok <- ensure_epoch_enough(epoch, obs) do
+              {:cont, {:ok, [%{epoch: epoch, observations: obs} | acc], MapSet.put(seen, epoch)}}
+            else
+              {:error, _} = err -> {:halt, err}
+            end
+          end
+
+        {:error, _} = err ->
+          {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, acc, _seen} ->
+        {:ok, Enum.sort_by(acc, &NaiveDateTime.to_iso8601(&1.epoch))}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp normalize_epoch_entry(%{epoch: %NaiveDateTime{} = epoch, observations: observations})
+       when is_list(observations), do: {:ok, epoch, observations}
+
+  defp normalize_epoch_entry({%NaiveDateTime{} = epoch, observations}) when is_list(observations),
+    do: {:ok, epoch, observations}
+
+  defp normalize_epoch_entry(entry), do: {:error, {:invalid_epoch_observations, entry}}
+
+  defp ensure_epoch_enough(_epoch, obs) when length(obs) >= 4, do: :ok
+
+  defp ensure_epoch_enough(epoch, obs),
+    do: {:error, {:too_few_epoch_observations, epoch, length(obs), 4}}
+
+  defp ensure_multi_enough(epochs) when length(epochs) < 2,
+    do: {:error, {:too_few_epochs, length(epochs), 2}}
+
+  defp ensure_multi_enough(epochs) do
+    n_epochs = length(epochs)
+    n_sats = length(multi_satellite_ids(epochs))
+    n_observations = multi_observation_count(epochs)
+    equations = 2 * n_observations
+    unknowns = 3 + n_epochs + n_sats
+
+    cond do
+      n_sats < 4 ->
+        {:error, {:too_few_satellites, n_sats, 4}}
+
+      equations < unknowns ->
+        {:error, {:too_few_equations, equations, unknowns}}
+
+      true ->
+        :ok
+    end
+  end
+
   defp weights(opts) do
     code_sigma = Keyword.get(opts, :code_sigma_m, @default_code_sigma_m)
     phase_sigma = Keyword.get(opts, :phase_sigma_m, @default_phase_sigma_m)
@@ -213,6 +390,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
     max_iterations = Keyword.get(opts, :max_iterations, @default_max_iterations)
     pos_tol = Keyword.get(opts, :position_tolerance_m, @default_position_tolerance_m)
     clock_tol = Keyword.get(opts, :clock_tolerance_m, @default_clock_tolerance_m)
+    ambiguity_tol = Keyword.get(opts, :ambiguity_tolerance_m, @default_position_tolerance_m)
 
     cond do
       not is_integer(max_iterations) or max_iterations < 1 ->
@@ -224,12 +402,16 @@ defmodule Orbis.GNSS.PrecisePositioning do
       not is_number(clock_tol) or clock_tol < 0.0 ->
         {:error, {:invalid_option, :clock_tolerance_m}}
 
+      not is_number(ambiguity_tol) or ambiguity_tol < 0.0 ->
+        {:error, {:invalid_option, :ambiguity_tolerance_m}}
+
       true ->
         {:ok,
          %{
            max_iterations: max_iterations,
            position_tolerance_m: pos_tol / 1.0,
-           clock_tolerance_m: clock_tol / 1.0
+           clock_tolerance_m: clock_tol / 1.0,
+           ambiguity_tolerance_m: ambiguity_tol / 1.0
          }}
     end
   end
@@ -283,11 +465,81 @@ defmodule Orbis.GNSS.PrecisePositioning do
     end
   end
 
+  defp initial_multi_state(sp3, epochs, opts) do
+    case Keyword.fetch(opts, :initial_guess) do
+      {:ok, guess} ->
+        with {:ok, {x, y, z, clock_m}} <- normalize_guess(guess) do
+          {:ok,
+           %{
+             position: {x, y, z},
+             clocks_m: List.duplicate(clock_m, length(epochs)),
+             ambiguities: initial_ambiguities(epochs)
+           }}
+        end
+
+      :error ->
+        multi_spp_seed(sp3, epochs, opts)
+    end
+  end
+
+  defp initial_ambiguities(epochs) do
+    epochs
+    |> Enum.flat_map(& &1.observations)
+    |> Enum.reduce(%{}, fn obs, acc ->
+      Map.put_new(acc, obs.satellite_id, obs.phase_m - obs.code_m)
+    end)
+  end
+
+  defp multi_spp_seed(sp3, epochs, opts) do
+    epochs
+    |> Enum.reduce_while({:ok, [], []}, fn epoch_row, {:ok, positions, clocks} ->
+      observations = Enum.map(epoch_row.observations, &{&1.satellite_id, &1.code_m})
+      spp_initial = Keyword.get(opts, :spp_initial_guess, {0.0, 0.0, 0.0, 0.0})
+
+      case Positioning.solve(sp3, observations, epoch_row.epoch,
+             ionosphere: false,
+             troposphere: false,
+             initial_guess: spp_initial,
+             with_geodetic: false
+           ) do
+        {:ok, sol} ->
+          pos = {sol.position.x_m, sol.position.y_m, sol.position.z_m}
+          clock_m = sol.rx_clock_s * Constants.speed_of_light_m_s()
+          {:cont, {:ok, [pos | positions], [clock_m | clocks]}}
+
+        {:error, reason} ->
+          {:halt, {:error, {:code_seed_failed, epoch_row.epoch, reason}}}
+      end
+    end)
+    |> case do
+      {:ok, positions, clocks} ->
+        {:ok,
+         %{
+           position: mean_position(positions),
+           clocks_m: Enum.reverse(clocks),
+           ambiguities: initial_ambiguities(epochs)
+         }}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp mean_position(positions) do
+    {sx, sy, sz} =
+      Enum.reduce(positions, {0.0, 0.0, 0.0}, fn {x, y, z}, {ax, ay, az} ->
+        {ax + x, ay + y, az + z}
+      end)
+
+    n = length(positions)
+    {sx / n, sy / n, sz / n}
+  end
+
   # --- nonlinear solve -----------------------------------------------------
 
   defp iterate(sp3, obs, epoch, state, weights, opts, iter) do
     with {:ok, rows} <- build_rows(sp3, obs, epoch, state, weights),
-         {:ok, dx} <- solve_normal_equations(rows, length(obs)) do
+         {:ok, dx} <- solve_normal_equations(rows, 4 + length(obs)) do
       next = apply_delta(state, obs, dx)
       {pos_step, clock_step} = step_norms(dx)
 
@@ -300,6 +552,36 @@ defmodule Orbis.GNSS.PrecisePositioning do
 
         true ->
           iterate(sp3, obs, epoch, next, weights, opts, iter + 1)
+      end
+    end
+  end
+
+  defp iterate_multi(sp3, epochs, sat_ids, state, weights, opts, iter) do
+    with {:ok, rows} <- build_multi_rows(sp3, epochs, sat_ids, state, weights),
+         {:ok, dx} <- solve_normal_equations(rows, 3 + length(epochs) + length(sat_ids)) do
+      next = apply_multi_delta(state, epochs, sat_ids, dx)
+      {pos_step, clock_step, ambiguity_step} = multi_step_norms(dx, length(epochs))
+
+      cond do
+        pos_step <= opts.position_tolerance_m and
+          clock_step <= opts.clock_tolerance_m and
+            ambiguity_step <= opts.ambiguity_tolerance_m ->
+          finalize_multi(
+            sp3,
+            epochs,
+            sat_ids,
+            next,
+            weights,
+            iter,
+            true,
+            :state_tolerance
+          )
+
+        iter >= opts.max_iterations ->
+          finalize_multi(sp3, epochs, sat_ids, next, weights, iter, false, :max_iterations)
+
+        true ->
+          iterate_multi(sp3, epochs, sat_ids, next, weights, opts, iter + 1)
       end
     end
   end
@@ -352,6 +634,65 @@ defmodule Orbis.GNSS.PrecisePositioning do
     [dx, dy, dz, dc | ambiguity_cols]
   end
 
+  defp build_multi_rows(sp3, epochs, sat_ids, state, weights) do
+    {rx, ry, rz} = state.position
+
+    epochs
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, fn {epoch_row, epoch_idx}, {:ok, acc} ->
+      clock_m = Enum.at(state.clocks_m, epoch_idx)
+
+      epoch_row.observations
+      |> Enum.reduce_while({:ok, acc}, fn o, {:ok, rows_acc} ->
+        case Observables.predict(sp3, o.satellite_id, {rx, ry, rz}, epoch_row.epoch) do
+          {:ok, pred} ->
+            {ex, ey, ez} = pred.los_unit
+            sat_clock_m = Constants.speed_of_light_m_s() * (pred.sat_clock_s || 0.0)
+            model_code = pred.geometric_range_m + clock_m - sat_clock_m
+            ambiguity = Map.fetch!(state.ambiguities, o.satellite_id)
+            base = {-ex, -ey, -ez}
+
+            code_row = %{
+              kind: :code,
+              sat: o.satellite_id,
+              epoch: epoch_row.epoch,
+              h: multi_design_row(base, epoch_idx, nil, length(epochs), sat_ids),
+              y: o.code_m - model_code,
+              weight: weights.code
+            }
+
+            phase_row = %{
+              kind: :phase,
+              sat: o.satellite_id,
+              epoch: epoch_row.epoch,
+              h: multi_design_row(base, epoch_idx, o.satellite_id, length(epochs), sat_ids),
+              y: o.phase_m - (model_code + ambiguity),
+              weight: weights.phase
+            }
+
+            {:cont, {:ok, [phase_row, code_row | rows_acc]}}
+
+          {:error, reason} ->
+            {:halt, {:error, {:no_ephemeris, o.satellite_id, reason}}}
+        end
+      end)
+      |> case do
+        {:ok, rows_acc} -> {:cont, {:ok, rows_acc}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, rows} -> {:ok, Enum.reverse(rows)}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp multi_design_row({dx, dy, dz}, epoch_idx, ambiguity_sat, n_epochs, sat_ids) do
+    clock_cols = for idx <- 0..(n_epochs - 1), do: if(idx == epoch_idx, do: 1.0, else: 0.0)
+    ambiguity_cols = Enum.map(sat_ids, &if(&1 == ambiguity_sat, do: 1.0, else: 0.0))
+    [dx, dy, dz | clock_cols ++ ambiguity_cols]
+  end
+
   defp apply_delta(state, obs, dx) do
     {rx, ry, rz} = state.position
     [dx0, dx1, dx2, dclock | ambiguity_deltas] = dx
@@ -374,11 +715,44 @@ defmodule Orbis.GNSS.PrecisePositioning do
     {:math.sqrt(dx * dx + dy * dy + dz * dz), dclock}
   end
 
+  defp apply_multi_delta(state, epochs, sat_ids, dx) do
+    {rx, ry, rz} = state.position
+    [dx0, dx1, dx2 | rest] = dx
+    {clock_deltas, ambiguity_deltas} = Enum.split(rest, length(epochs))
+
+    clocks =
+      state.clocks_m
+      |> Enum.zip(clock_deltas)
+      |> Enum.map(fn {clock, delta} -> clock + delta end)
+
+    ambiguities =
+      sat_ids
+      |> Enum.zip(ambiguity_deltas)
+      |> Map.new(fn {sat, delta} -> {sat, Map.fetch!(state.ambiguities, sat) + delta} end)
+
+    %{
+      position: {rx + dx0, ry + dx1, rz + dx2},
+      clocks_m: clocks,
+      ambiguities: ambiguities
+    }
+  end
+
+  defp multi_step_norms([dx, dy, dz | rest], n_epochs) do
+    {clock_deltas, ambiguity_deltas} = Enum.split(rest, n_epochs)
+
+    {
+      :math.sqrt(dx * dx + dy * dy + dz * dz),
+      max_abs(clock_deltas),
+      max_abs(ambiguity_deltas)
+    }
+  end
+
+  defp max_abs([]), do: 0.0
+  defp max_abs(xs), do: xs |> Enum.map(&abs/1) |> Enum.max()
+
   # --- dynamic least squares ----------------------------------------------
 
-  defp solve_normal_equations(rows, n_obs) do
-    n = 4 + n_obs
-
+  defp solve_normal_equations(rows, n) do
     {ata, aty} =
       Enum.reduce(rows, {zero_matrix(n), zero_vector(n)}, fn row, {ata, aty} ->
         h = Enum.map(row.h, &(&1 * row.weight))
@@ -521,6 +895,44 @@ defmodule Orbis.GNSS.PrecisePositioning do
     end
   end
 
+  defp finalize_multi(sp3, epochs, sat_ids, state, weights, iterations, converged, status) do
+    with {:ok, residual_rows} <- multi_residual_rows(sp3, epochs, state) do
+      code = residual_rows |> Enum.map(& &1.code_m)
+      phase = residual_rows |> Enum.map(& &1.phase_m)
+      {x, y, z} = state.position
+
+      {:ok,
+       %MultiEpochSolution{
+         position: %{x_m: x, y_m: y, z_m: z},
+         epoch_clocks:
+           epochs
+           |> Enum.map(& &1.epoch)
+           |> Enum.zip(state.clocks_m)
+           |> Enum.map(fn {epoch, clock_m} ->
+             %{
+               epoch: epoch,
+               rx_clock_s: clock_m / Constants.speed_of_light_m_s(),
+               rx_clock_m: clock_m
+             }
+           end),
+         ambiguities_m: state.ambiguities,
+         residuals_m: residual_rows,
+         used_sats: sat_ids,
+         epochs: Enum.map(epochs, & &1.epoch),
+         metadata: %{
+           iterations: iterations,
+           converged: converged,
+           status: status,
+           n_epochs: length(epochs),
+           n_observations: multi_observation_count(epochs),
+           code_rms_m: rms(code),
+           phase_rms_m: rms(phase),
+           weighted_rms_m: weighted_rms(residual_rows, weights)
+         }
+       }}
+    end
+  end
+
   defp residual_rows(sp3, obs, epoch, state) do
     {rx, ry, rz} = state.position
 
@@ -547,6 +959,58 @@ defmodule Orbis.GNSS.PrecisePositioning do
       {:ok, rows} -> {:ok, Enum.reverse(rows)}
       {:error, _} = err -> err
     end
+  end
+
+  defp multi_residual_rows(sp3, epochs, state) do
+    {rx, ry, rz} = state.position
+
+    epochs
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, fn {epoch_row, epoch_idx}, {:ok, acc} ->
+      clock_m = Enum.at(state.clocks_m, epoch_idx)
+
+      epoch_row.observations
+      |> Enum.reduce_while({:ok, acc}, fn o, {:ok, rows_acc} ->
+        case Observables.predict(sp3, o.satellite_id, {rx, ry, rz}, epoch_row.epoch) do
+          {:ok, pred} ->
+            sat_clock_m = Constants.speed_of_light_m_s() * (pred.sat_clock_s || 0.0)
+            model_code = pred.geometric_range_m + clock_m - sat_clock_m
+            ambiguity = Map.fetch!(state.ambiguities, o.satellite_id)
+
+            row = %{
+              epoch: epoch_row.epoch,
+              satellite_id: o.satellite_id,
+              code_m: o.code_m - model_code,
+              phase_m: o.phase_m - (model_code + ambiguity)
+            }
+
+            {:cont, {:ok, [row | rows_acc]}}
+
+          {:error, reason} ->
+            {:halt, {:error, {:no_ephemeris, o.satellite_id, reason}}}
+        end
+      end)
+      |> case do
+        {:ok, rows_acc} -> {:cont, {:ok, rows_acc}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, rows} -> {:ok, Enum.reverse(rows)}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp multi_satellite_ids(epochs) do
+    epochs
+    |> Enum.flat_map(& &1.observations)
+    |> Enum.map(& &1.satellite_id)
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  defp multi_observation_count(epochs) do
+    Enum.reduce(epochs, 0, fn epoch, acc -> acc + length(epoch.observations) end)
   end
 
   defp rms([]), do: 0.0

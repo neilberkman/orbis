@@ -18,6 +18,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   phase observations. It estimates receiver ECEF position, clock, and one float
   ambiguity per satellite, exposing residuals and metadata for later PPP/RTK
   layers.
+- `Orbis.GNSS.PrecisePositioning.solve_float_epochs/3`, a static multi-epoch
+  float carrier-phase estimator that holds one ambiguity per satellite across an
+  arc while estimating one receiver clock per epoch. This is the bridge from
+  single-epoch float positioning toward PPP/RTK ambiguity fixing.
 
 ## [0.9.2] - 2026-06-06
 
