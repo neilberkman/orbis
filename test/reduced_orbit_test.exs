@@ -508,6 +508,67 @@ defmodule Orbis.GNSS.ReducedOrbitTest do
     end
   end
 
+  describe "fit/2 from TLE/SGP4" do
+    test "fits an ISS TLE source through SGP4 TEME -> ECEF sampling" do
+      tle = iss_tle!()
+      t0 = ~N[2018-07-04 00:00:00]
+      t1 = ~N[2018-07-04 01:30:00]
+
+      {:ok, model} =
+        ReducedOrbit.fit(tle,
+          window: {t0, t1},
+          cadence_s: 120,
+          model: :eccentric_secular
+        )
+
+      assert model.time_scale == "UTC"
+      assert model.fit.source == "sgp4:25544"
+      assert model.fit.requested == 46
+      assert model.fit.n_samples == 46
+      assert model.fit.rms_m < 1_500.0
+      assert model.fit.max_m < 2_000.0
+      assert_in_delta model.a_m / 1000.0, 6_783.0, 20.0
+      assert_in_delta model.i_rad * 180.0 / :math.pi(), 51.6, 1.0
+    end
+
+    test "drift/3 against the same TLE source is source-backed and bounded" do
+      tle = iss_tle!()
+      t0 = ~N[2018-07-04 00:00:00]
+      fit_end = ~N[2018-07-04 01:30:00]
+      drift_end = ~N[2018-07-04 04:00:00]
+
+      {:ok, model} =
+        ReducedOrbit.fit(tle,
+          window: {t0, fit_end},
+          cadence_s: 120,
+          model: :eccentric_secular
+        )
+
+      {:ok, drift} =
+        ReducedOrbit.drift(model, tle,
+          window: {t0, drift_end},
+          cadence_s: 300,
+          threshold_m: 1_000.0
+        )
+
+      assert drift.requested == 49
+      assert drift.used == 49
+      assert drift.max_m < 3_000.0
+      assert drift.rms_m < 2_000.0
+      assert %NaiveDateTime{} = drift.threshold_horizon
+      assert %{epoch: %NaiveDateTime{}, error_m: e} = hd(drift.per_epoch)
+      assert is_float(e)
+    end
+
+    test "a TLE fit rejects invalid cadence before sampling" do
+      assert {:error, :invalid_cadence} =
+               ReducedOrbit.fit(iss_tle!(),
+                 window: {~N[2018-07-04 00:00:00], ~N[2018-07-04 01:00:00]},
+                 cadence_s: 0
+               )
+    end
+  end
+
   # A short list of real ECEF samples for the near-circular satellite.
   defp sample_list(sp3) do
     for k <- 0..10 do
@@ -515,5 +576,12 @@ defmodule Orbis.GNSS.ReducedOrbitTest do
       {:ok, st} = Orbis.GNSS.SP3.position(sp3, @sat, ep)
       {ep, {st.x_m, st.y_m, st.z_m}}
     end
+  end
+
+  defp iss_tle! do
+    l1 = "1 25544U 98067A   18184.80969102  .00001614  00000-0  31745-4 0  9993"
+    l2 = "2 25544  51.6414 295.8524 0003435 262.6267 204.2868 15.54005638121106"
+    {:ok, tle} = Orbis.Format.TLE.parse(l1, l2)
+    tle
   end
 end

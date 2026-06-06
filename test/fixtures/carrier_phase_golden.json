@@ -435,6 +435,7 @@
         "value_cycles": "0x1.a3eadd18e5604p+26",
         "lli": 0,
         "ssi": 8,
+        "frequency_hz": "0x1.779c018000000p+30",
         "wavelength_m": "0x1.85b8b06a70079p-3",
         "value_m": "0x1.3fa16a12e6ba0p+24"
       },
@@ -445,6 +446,7 @@
         "value_cycles": "0x1.47355c6df3b64p+26",
         "lli": 0,
         "ssi": 9,
+        "frequency_hz": "0x1.24aec20000000p+30",
         "wavelength_m": "0x1.f4247c000fc57p-3",
         "value_m": "0x1.3fa16d42d6320p+24"
       },
@@ -455,6 +457,7 @@
         "value_cycles": "0x1.14cd5a43645a2p+27",
         "lli": 0,
         "ssi": 6,
+        "frequency_hz": "0x1.779c018000000p+30",
         "wavelength_m": "0x1.85b8b06a70079p-3",
         "value_m": "0x1.a563bc818c24dp+24"
       },
@@ -465,6 +468,7 @@
         "value_cycles": "0x1.9d67e830a3d71p+26",
         "lli": 0,
         "ssi": 5,
+        "frequency_hz": "0x1.187ccf4000000p+30",
         "wavelength_m": "0x1.04f1a4dea40e0p-2",
         "value_m": "0x1.a563c0e115f86p+24"
       },
@@ -475,6 +479,7 @@
         "value_cycles": "0x1.883c8dd7a5e35p+27",
         "lli": 0,
         "ssi": 6,
+        "frequency_hz": "0x1.7431dc4000000p+30",
         "wavelength_m": "0x1.894bff89f23b5p-3",
         "value_m": "0x1.2d4cb382a456bp+25"
       },
@@ -485,6 +490,7 @@
         "value_cycles": "0x1.3eb9688dfbe77p+27",
         "lli": 0,
         "ssi": 5,
+        "frequency_hz": "0x1.2e70510000000p+30",
         "wavelength_m": "0x1.e4024673ac2a7p-3",
         "value_m": "0x1.2d4caf6afbcbep+25"
       },
@@ -495,6 +501,7 @@
         "value_cycles": "0x1.89b70bef2b021p+26",
         "lli": 0,
         "ssi": 7,
+        "frequency_hz": "0x1.7e14a71000000p+30",
         "wavelength_m": "0x1.7f1ee9c2c3ed4p-3",
         "value_m": "0x1.269c32e8ada31p+24"
       },
@@ -505,6 +512,7 @@
         "value_cycles": "0x1.3239125d3f7cfp+26",
         "lli": 0,
         "ssi": 7,
+        "frequency_hz": "0x1.292c81f000000p+30",
         "wavelength_m": "0x1.ec9575b1450c8p-3",
         "value_m": "0x1.269c3ba583de6p+24"
       },
@@ -515,6 +523,7 @@
         "value_cycles": "0x1.a4098a6dd2f1bp+26",
         "lli": 0,
         "ssi": 8,
+        "frequency_hz": "0x1.779c018000000p+30",
         "wavelength_m": "0x1.85b8b06a70079p-3",
         "value_m": "0x1.3fb8c3d4c9b42p+24"
       },
@@ -525,6 +534,7 @@
         "value_cycles": "0x1.474d43e8624ddp+26",
         "lli": 0,
         "ssi": 9,
+        "frequency_hz": "0x1.24aec20000000p+30",
         "wavelength_m": "0x1.f4247c000fc57p-3",
         "value_m": "0x1.3fb8c70476de3p+24"
       },
@@ -535,6 +545,7 @@
         "value_cycles": "0x1.14f3cc13f7ceep+27",
         "lli": 0,
         "ssi": 6,
+        "frequency_hz": "0x1.779c018000000p+30",
         "wavelength_m": "0x1.85b8b06a70079p-3",
         "value_m": "0x1.a59e432fc85a9p+24"
       },
@@ -545,6 +556,7 @@
         "value_cycles": "0x1.9da1530041893p+26",
         "lli": 0,
         "ssi": 5,
+        "frequency_hz": "0x1.187ccf4000000p+30",
         "wavelength_m": "0x1.04f1a4dea40e0p-2",
         "value_m": "0x1.a59e478e79f12p+24"
       },
@@ -555,6 +567,7 @@
         "value_cycles": "0x1.8843afdb43958p+27",
         "lli": 0,
         "ssi": 6,
+        "frequency_hz": "0x1.7431dc4000000p+30",
         "wavelength_m": "0x1.894bff89f23b5p-3",
         "value_m": "0x1.2d522e2d75c66p+25"
       },
@@ -565,6 +578,7 @@
         "value_cycles": "0x1.3ebf3456872b0p+27",
         "lli": 0,
         "ssi": 5,
+        "frequency_hz": "0x1.2e70510000000p+30",
         "wavelength_m": "0x1.e4024673ac2a7p-3",
         "value_m": "0x1.2d522a152765fp+25"
       },
@@ -575,6 +589,7 @@
         "value_cycles": "0x1.89c4fda0f5c29p+26",
         "lli": 0,
         "ssi": 7,
+        "frequency_hz": "0x1.7e14a71000000p+30",
         "wavelength_m": "0x1.7f1ee9c2c3ed4p-3",
         "value_m": "0x1.26a6a20cb4045p+24"
       },
@@ -585,6 +600,7 @@
         "value_cycles": "0x1.3243eacbd70a4p+26",
         "lli": 0,
         "ssi": 7,
+        "frequency_hz": "0x1.292c81f000000p+30",
         "wavelength_m": "0x1.ec9575b1450c8p-3",
         "value_m": "0x1.26a6aaca43e5dp+24"
       }

@@ -151,6 +151,37 @@ defmodule Orbis.GNSS.ReducedOrbit.PiecewiseTest do
       assert m2 < m4
       assert m4 < m6
     end
+
+    test "ISS TLE/SGP4 source: 30-minute eccentric segments stay near SGP4" do
+      tle = iss_tle!()
+      t0 = ~N[2018-07-04 00:00:00]
+      tend = ~N[2018-07-04 04:00:00]
+
+      {:ok, pw} =
+        Piecewise.fit(tle,
+          window: {t0, tend},
+          segment_s: 1800,
+          cadence_s: 120,
+          model: :eccentric_secular
+        )
+
+      assert pw.time_scale == "UTC"
+      assert length(pw.segments) == 8
+      assert Enum.all?(pw.segments, &(&1.model.fit.source == "sgp4:25544"))
+
+      {:ok, d} =
+        Piecewise.drift(pw, tle,
+          window: {t0, tend},
+          cadence_s: 300,
+          threshold_m: 2_000.0
+        )
+
+      assert d.requested == 49
+      assert d.used == 49
+      assert d.max_m < 1_500.0
+      assert d.rms_m < 1_000.0
+      assert d.threshold_horizon == nil
+    end
   end
 
   describe "segment selection" do
@@ -568,5 +599,12 @@ defmodule Orbis.GNSS.ReducedOrbit.PiecewiseTest do
       # In-window residual for the eccentric model is sub-km.
       assert d.max_m < 2_000.0
     end
+  end
+
+  defp iss_tle! do
+    l1 = "1 25544U 98067A   18184.80969102  .00001614  00000-0  31745-4 0  9993"
+    l2 = "2 25544  51.6414 295.8524 0003435 262.6267 204.2868 15.54005638121106"
+    {:ok, tle} = Orbis.Format.TLE.parse(l1, l2)
+    tle
   end
 end

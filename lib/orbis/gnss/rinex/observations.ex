@@ -303,7 +303,8 @@ defmodule Orbis.GNSS.RINEX.Observations do
   Returns `{:ok, %{satellite_id => [phase]}}` where each `phase` is
 
       %{code: "L1C", value_cycles: 1.23e8, lli: 0 | nil, ssi: 7 | nil,
-        wavelength_m: 0.1903 | nil, value_m: 2.34e7 | nil}
+        frequency_hz: 1.57542e9 | nil, wavelength_m: 0.1903 | nil,
+        value_m: 2.34e7 | nil}
   """
   @spec phases(t(), non_neg_integer() | tuple(), keyword()) ::
           {:ok, %{String.t() => [map()]}} | {:error, term()}
@@ -431,6 +432,7 @@ defmodule Orbis.GNSS.RINEX.Observations do
       value_cycles: obs.value,
       lli: obs.lli,
       ssi: obs.ssi,
+      frequency_hz: freq,
       wavelength_m: wavelength_m,
       value_m: value_m
     }

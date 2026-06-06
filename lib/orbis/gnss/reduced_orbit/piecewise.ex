@@ -89,6 +89,7 @@ defmodule Orbis.GNSS.ReducedOrbit.Piecewise do
   the version and model and reconstructs, with the same tagged-error discipline
   as the single model.
   """
+  alias Orbis.Elements
   alias Orbis.GNSS.Core.Epoch
   alias Orbis.GNSS.Core.Sampling
   alias Orbis.GNSS.Core.Source
@@ -135,6 +136,8 @@ defmodule Orbis.GNSS.ReducedOrbit.Piecewise do
     * an `Orbis.GNSS.SP3` handle — requires `:satellite_id` and `:window`; each
       segment is fitted with `Orbis.GNSS.ReducedOrbit.fit/2` over its sub-window at
       `:cadence_s`;
+    * an `%Orbis.Elements{}` TLE/OMM element set — requires `:window`; each
+      segment samples SGP4 over its sub-window and fits in UTC;
     * a list of `{epoch, {x_m, y_m, z_m}}` ECEF samples — partitioned by segment
       interval, each sublist fitted directly.
 
@@ -144,7 +147,7 @@ defmodule Orbis.GNSS.ReducedOrbit.Piecewise do
       `t0`, else `:invalid_window`)
     * `:segment_s` — positive segment length in seconds, e.g. `7200`
       (non-positive → `:invalid_segment`)
-    * `:cadence_s` — positive SP3 sampling step in seconds
+    * `:cadence_s` — positive sampling step in seconds for SP3/TLE sources
     * `:satellite_id` — e.g. `"G05"` (SP3 source)
     * `:model` — `:circular_secular` (**default**) or `:eccentric_secular`
     * `:time_scale` — for the sample-list source, the scale its epochs are in
@@ -163,7 +166,10 @@ defmodule Orbis.GNSS.ReducedOrbit.Piecewise do
   hole); only the terminal short segment may be dropped. If nothing fits at all,
   `{:error, {:too_few_samples, 0, #{@min_samples}}}`.
   """
-  @spec fit(Orbis.GNSS.SP3.t() | [{epoch(), {number(), number(), number()}}], keyword()) ::
+  @spec fit(
+          Orbis.GNSS.SP3.t() | Elements.t() | [{epoch(), {number(), number(), number()}}],
+          keyword()
+        ) ::
           {:ok, t()} | {:error, term()}
   def fit(source, opts \\ []) do
     with {:ok, {t0, t1}} <- Epoch.fetch_window(opts),
@@ -255,6 +261,11 @@ defmodule Orbis.GNSS.ReducedOrbit.Piecewise do
   defp fit_one(%Orbis.GNSS.SP3{} = sp3, opts, seg_t0, seg_t1) do
     forwarded = opts |> Keyword.delete(:segment_s) |> Keyword.put(:window, {seg_t0, seg_t1})
     ReducedOrbit.fit(sp3, forwarded)
+  end
+
+  defp fit_one(%Elements{} = tle, opts, seg_t0, seg_t1) do
+    forwarded = opts |> Keyword.delete(:segment_s) |> Keyword.put(:window, {seg_t0, seg_t1})
+    ReducedOrbit.fit(tle, forwarded)
   end
 
   defp fit_one(samples, opts, seg_t0, seg_t1) when is_list(samples) do
@@ -356,8 +367,8 @@ defmodule Orbis.GNSS.ReducedOrbit.Piecewise do
   covering segment's ECEF position (the single-segment drift NIF is per-model, so
   the piecewise report is composed in Elixir from `position/3`). For an
   `Orbis.GNSS.SP3` source it samples over `:window` (defaulting to the model's full
-  span) at `:cadence_s` for `:satellite_id`; for a sample list it uses those
-  directly. Returns
+  span) at `:cadence_s` for `:satellite_id`; for an `%Orbis.Elements{}` source it
+  samples SGP4 over the window; for a sample list it uses those directly. Returns
 
       {:ok, %{per_epoch: [%{epoch:, error_m:}], max_m:, rms_m:, threshold_horizon:,
               requested:, used:}}
@@ -367,7 +378,11 @@ defmodule Orbis.GNSS.ReducedOrbit.Piecewise do
   `threshold_horizon` is the first epoch the ECEF error exceeds `:threshold_m`
   (or `nil`).
   """
-  @spec drift(t(), Orbis.GNSS.SP3.t() | [{epoch(), {number(), number(), number()}}], keyword()) ::
+  @spec drift(
+          t(),
+          Orbis.GNSS.SP3.t() | Elements.t() | [{epoch(), {number(), number(), number()}}],
+          keyword()
+        ) ::
           {:ok, map()} | {:error, term()}
   def drift(%__MODULE__{} = pw, %Orbis.GNSS.SP3{} = sp3, opts) do
     sat_id = Keyword.get(opts, :satellite_id)
@@ -377,6 +392,15 @@ defmodule Orbis.GNSS.ReducedOrbit.Piecewise do
          {:ok, cadence} <- Validation.cadence(Keyword.get(opts, :cadence_s, 900)),
          {:ok, {t0, t1}} <- Epoch.fetch_window(opts, pw.window),
          {:ok, samples, requested} <- Sampling.sample_sp3(sp3, sat_id, t0, t1, cadence) do
+      run_drift(pw, samples, requested, opts)
+    end
+  end
+
+  def drift(%__MODULE__{} = pw, %Elements{} = tle, opts) do
+    with :ok <- Source.same_time_scale(pw, %{time_scale: "UTC"}),
+         {:ok, cadence} <- Validation.cadence(Keyword.get(opts, :cadence_s, 900)),
+         {:ok, {t0, t1}} <- Epoch.fetch_window(opts, pw.window),
+         {:ok, samples, requested} <- Sampling.sample_sgp4(tle, t0, t1, cadence) do
       run_drift(pw, samples, requested, opts)
     end
   end

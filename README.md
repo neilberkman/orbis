@@ -247,8 +247,6 @@ combinations:
 g03 = phases["G03"]
 l1 = Enum.find(g03, &(&1.code == "L1C"))
 l2 = Enum.find(g03, &(&1.code == "L2W"))
-f1 = Orbis.GNSS.RINEX.Observations.band_frequency_hz("G", "1")
-f2 = Orbis.GNSS.RINEX.Observations.band_frequency_hz("G", "2")
 
 geometry_free_m = Orbis.GNSS.CarrierPhase.geometry_free(l1.value_m, l2.value_m)
 {:ok, mw_m} =
@@ -257,8 +255,8 @@ geometry_free_m = Orbis.GNSS.CarrierPhase.geometry_free(l1.value_m, l2.value_m)
     l2.value_cycles,
     24_000_000.0,
     24_000_005.0,
-    f1,
-    f2
+    l1.frequency_hz,
+    l2.frequency_hz
   )
 ```
 
@@ -274,6 +272,18 @@ Fit a compact reduced-orbit model and check its drift against the source:
 
 {:ok, pos} = Orbis.GNSS.ReducedOrbit.position(model, ~N[2020-06-24 12:00:00])  # ECEF m
 map = Orbis.GNSS.ReducedOrbit.to_map(model)   # versioned, transportable
+```
+
+The same reduced-orbit API accepts a parsed TLE/OMM element set and samples it
+through SGP4:
+
+```elixir
+{:ok, tle} = Orbis.Format.TLE.parse(line1, line2)
+{:ok, leo_model} =
+  Orbis.GNSS.ReducedOrbit.fit(tle,
+    window: {~N[2018-07-04 00:00:00], ~N[2018-07-04 01:30:00]},
+    model: :eccentric_secular
+  )
 ```
 
 A runnable walkthrough is in [`examples/gnss_positioning.livemd`](examples/gnss_positioning.livemd).
@@ -317,7 +327,7 @@ Orbis.GNSS.Constellation.valid?(report)
 | GNSS DOP               | cofactor inverse                | 0 ULP                           |
 | Single-point position  | scipy least squares             | sub-micron agreement            |
 | RINEX / CRINEX decode  | RNXCMP `crx2rnx`                | byte-exact                      |
-| Reduced orbit          | SP3 (drift-checked)             | approximate, ~km/day (see docs) |
+| Reduced orbit          | SP3 / SGP4 (drift-checked)      | approximate, source-backed drift |
 
 ## License
 

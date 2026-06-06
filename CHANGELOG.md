@@ -10,9 +10,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - GLONASS FDMA carrier-phase wavelengths. `Orbis.GNSS.RINEX.Observations`
   exposes the parsed `GLONASS SLOT / FRQ #` channel map and `phases/3` now
-  derives G1/G2 wavelengths/metre phases for GLONASS satellites with a channel
-  entry, so `Orbis.GNSS.CarrierPhase` can process real GLONASS phase arcs
-  instead of skipping them.
+  derives carrier frequency, G1/G2 wavelengths, and metre phases for GLONASS
+  satellites with a channel entry, so `Orbis.GNSS.CarrierPhase` can process
+  real GLONASS phase arcs instead of skipping them.
+- `Orbis.GNSS.ReducedOrbit` and `Orbis.GNSS.ReducedOrbit.Piecewise` can now fit
+  and drift against `%Orbis.Elements{}` TLE/OMM sources by sampling SGP4 over the
+  requested window (TEME → GCRS → ECEF, UTC scale). This closes the LEO reduced
+  orbit source path without changing the Rust reduced-orbit numerics.
 
 ## [0.9.1] - 2026-06-05
 

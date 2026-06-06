@@ -2,12 +2,13 @@ defmodule Orbis.GNSS.ReducedOrbit do
   @moduledoc """
   A compact, fitted mean-element approximation of a satellite's orbit.
 
-  `Orbis.GNSS.ReducedOrbit` distills a position track — from a precise SP3 product or
-  a list of ECEF samples — into a handful of mean elements that reproduce the
-  motion cheaply, for caching, transport, and quick visibility math. It is **not**
-  orbit determination and **not** a substitute for SGP4 or precise ephemeris: it
-  deliberately discards short-period structure and is honest about the error it
-  leaves behind (`rms_m`/`max_m` on the fit, and a source-backed `drift/3`).
+  `Orbis.GNSS.ReducedOrbit` distills a position track — from a precise SP3 product,
+  a TLE/SGP4 orbit, or a list of ECEF samples — into a handful of mean elements
+  that reproduce the motion cheaply, for caching, transport, and quick visibility
+  math. It is **not** orbit determination and **not** a substitute for SGP4 or
+  precise ephemeris: it deliberately discards short-period structure and is
+  honest about the error it leaves behind (`rms_m`/`max_m` on the fit, and a
+  source-backed `drift/3`).
 
   ## Models
 
@@ -65,7 +66,8 @@ defmodule Orbis.GNSS.ReducedOrbit do
   Representative drift (extrapolated model-vs-source position error): a fit to the
   first ~6 hours of an MGEX SP3 track, drifted over the rest of the day. Numbers
   are the **max** position error over the full day, measured against vendored MGEX
-  products (GRG for GPS/Galileo, a trimmed GBM product for BeiDou):
+  products (GRG for GPS/Galileo, a trimmed GBM product for BeiDou) and an ISS
+  TLE sampled through SGP4:
 
   | Orbit class                   | `circular_secular` | `eccentric_secular` |
   |-------------------------------|--------------------|---------------------|
@@ -74,6 +76,7 @@ defmodule Orbis.GNSS.ReducedOrbit do
   | BeiDou IGSO, e ~ 5e-3 (C08)   | ~2 200 km          | ~12 km              |
   | BeiDou MEO, e ~ 9e-4 (C21)    | ~140 km            | ~5 km               |
   | Galileo, e ~ 1e-4 (E01)       | ~8 km              | ~8 km (≈ circular)  |
+  | ISS LEO, TLE/SGP4, 4 h        | ~31 km             | ~2.5 km             |
 
   Reading of the table:
 
@@ -93,9 +96,8 @@ defmodule Orbis.GNSS.ReducedOrbit do
   fit window and drift cadence.
 
   These are characterisations, not guarantees: always measure a given fit with
-  `drift/3` against the source. LEO accuracy is characterised once the SGP4/TLE
-  source lands. This is a compact approximation for caching / visibility, never a
-  substitute for SP3 or SGP4.
+  `drift/3` against the source. This is a compact approximation for caching /
+  visibility, never a substitute for SP3 or SGP4.
 
   ## Persistence
 
@@ -104,6 +106,7 @@ defmodule Orbis.GNSS.ReducedOrbit do
   """
   # Serialization is the explicit, versioned `to_map/1`/`from_map/1` contract
   # (the `fit.window` tuple is not directly JSON-encodable), so no `@derive`.
+  alias Orbis.Elements
   alias Orbis.GNSS.Core.Epoch
   alias Orbis.GNSS.Core.Sampling
   alias Orbis.GNSS.Core.Source
@@ -169,6 +172,8 @@ defmodule Orbis.GNSS.ReducedOrbit do
 
     * an `Orbis.GNSS.SP3` handle — requires `:satellite_id` and `:window`; samples the
       product at `:cadence_s` over the window;
+    * an `%Orbis.Elements{}` TLE/OMM element set — requires `:window`; samples
+      SGP4 over the window, converts TEME → GCRS → ECEF, and fits in UTC;
     * a list of `{epoch, {x_m, y_m, z_m}}` ECEF samples — the window is taken from
       the samples; `:frame` must be `:ecef` (the default).
 
@@ -180,7 +185,8 @@ defmodule Orbis.GNSS.ReducedOrbit do
       and other eccentric orbits). See the moduledoc accuracy table.
     * `:satellite_id` — e.g. `"G05"` (SP3 source)
     * `:window` — `{t0, t1}` epochs bounding the fit (SP3 source)
-    * `:cadence_s` — positive sampling step in seconds (SP3 source, default `#{@default_cadence_s}`)
+    * `:cadence_s` — positive sampling step in seconds (sampled sources,
+      default `#{@default_cadence_s}`)
     * `:frame` — for the sample-list source, `:ecef` (default)
     * `:time_scale` — for the sample-list source, the scale its epochs are in
       (`"UTC"` default, e.g. `"GPST"`); SP3 sources use the product's own scale
@@ -195,7 +201,10 @@ defmodule Orbis.GNSS.ReducedOrbit do
   `{:unsupported_source_frame, frame}`, `{:unsupported_model, model}`,
   `:transform_unavailable`, `:fit_did_not_converge`.
   """
-  @spec fit(Orbis.GNSS.SP3.t() | [{epoch(), {number(), number(), number()}}], keyword()) ::
+  @spec fit(
+          Orbis.GNSS.SP3.t() | Elements.t() | [{epoch(), {number(), number(), number()}}],
+          keyword()
+        ) ::
           {:ok, t()} | {:error, term()}
   def fit(source, opts \\ [])
 
@@ -214,6 +223,24 @@ defmodule Orbis.GNSS.ReducedOrbit do
         window: {Epoch.to_naive!(t0), Epoch.to_naive!(t1)},
         cadence_s: cadence,
         scale: sp3.time_scale,
+        model: model,
+        requested: requested
+      }
+
+      run_fit(samples, meta)
+    end
+  end
+
+  def fit(%Elements{} = tle, opts) do
+    with {:ok, model} <- valid_model(Keyword.get(opts, :model, :circular_secular)),
+         {:ok, cadence} <- Validation.cadence(Keyword.get(opts, :cadence_s, @default_cadence_s)),
+         {:ok, {t0, t1}} <- Epoch.fetch_window(opts),
+         {:ok, samples, requested} <- Sampling.sample_sgp4(tle, t0, t1, cadence) do
+      meta = %{
+        source: "sgp4:#{String.trim(tle.catalog_number || "unknown")}",
+        window: {Epoch.to_naive!(t0), Epoch.to_naive!(t1)},
+        cadence_s: cadence,
+        scale: "UTC",
         model: model,
         requested: requested
       }
@@ -410,7 +437,8 @@ defmodule Orbis.GNSS.ReducedOrbit do
 
   This compares the model to fresh truth samples (not to itself): for an
   `Orbis.GNSS.SP3` source it samples the product over `:window` at `:cadence_s` for
-  `:satellite_id`; for a list of `{epoch, {x_m, y_m, z_m}}` samples it uses those
+  `:satellite_id`; for an `%Orbis.Elements{}` source it samples SGP4 over the
+  window; for a list of `{epoch, {x_m, y_m, z_m}}` samples it uses those
   directly. Returns
 
       {:ok, %{per_epoch: [%{epoch:, error_m:}], max_m:, rms_m:, threshold_horizon:,
@@ -419,7 +447,11 @@ defmodule Orbis.GNSS.ReducedOrbit do
   where `threshold_horizon` is the first epoch the ECEF error exceeds
   `:threshold_m` (or `nil` if it never does / no threshold given).
   """
-  @spec drift(t(), Orbis.GNSS.SP3.t() | [{epoch(), {number(), number(), number()}}], keyword()) ::
+  @spec drift(
+          t(),
+          Orbis.GNSS.SP3.t() | Elements.t() | [{epoch(), {number(), number(), number()}}],
+          keyword()
+        ) ::
           {:ok, map()} | {:error, term()}
   def drift(%__MODULE__{} = model, %Orbis.GNSS.SP3{} = sp3, opts) do
     sat_id = Keyword.get(opts, :satellite_id)
@@ -429,6 +461,15 @@ defmodule Orbis.GNSS.ReducedOrbit do
          {:ok, cadence} <- Validation.cadence(Keyword.get(opts, :cadence_s, @default_cadence_s)),
          {:ok, {t0, t1}} <- Epoch.fetch_window(opts),
          {:ok, samples, requested} <- Sampling.sample_sp3(sp3, sat_id, t0, t1, cadence) do
+      run_drift(model, samples, requested, opts)
+    end
+  end
+
+  def drift(%__MODULE__{} = model, %Elements{} = tle, opts) do
+    with :ok <- Source.same_time_scale(model, %{time_scale: "UTC"}),
+         {:ok, cadence} <- Validation.cadence(Keyword.get(opts, :cadence_s, @default_cadence_s)),
+         {:ok, {t0, t1}} <- Epoch.fetch_window(opts),
+         {:ok, samples, requested} <- Sampling.sample_sgp4(tle, t0, t1, cadence) do
       run_drift(model, samples, requested, opts)
     end
   end

@@ -63,6 +63,12 @@ defmodule Orbis.GNSS.CarrierPhaseOracleTest do
         )
 
         assert_float_or_nil(
+          actual.frequency_hz,
+          row["frequency_hz"],
+          "#{row["sat"]} #{row["code"]} frequency"
+        )
+
+        assert_float_or_nil(
           actual.wavelength_m,
           row["wavelength_m"],
           "#{row["sat"]} #{row["code"]} lambda"

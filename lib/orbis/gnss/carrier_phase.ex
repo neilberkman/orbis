@@ -7,9 +7,11 @@ defmodule Orbis.GNSS.CarrierPhase do
 
   This is pure Elixir over the existing observation primitives. The phase and
   code observations come from `Orbis.GNSS.RINEX.Observations` (`values/3`,
-  `phases/3`) and the carrier frequencies from
+  `phases/3`). `phases/3` includes `frequency_hz`, `wavelength_m`, and
+  `value_m` whenever the band is known; use
   `Orbis.GNSS.RINEX.Observations.band_frequency_hz/2` (or `/3` for GLONASS
-  FDMA channels); a clean synthetic arc for testing can be built from
+  FDMA channels) when building arcs manually. A clean synthetic arc for testing
+  can be built from
   `Orbis.GNSS.Observables.predict/5` over an `Orbis.GNSS.SP3` product.
 
   ## Notation
