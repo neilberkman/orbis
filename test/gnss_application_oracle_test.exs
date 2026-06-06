@@ -493,6 +493,7 @@ defmodule Orbis.GNSS.ApplicationOracleTest do
       assert got.metadata.n_epochs == sol["metadata"]["n_epochs"]
       assert got.metadata.n_observations == sol["metadata"]["n_observations"]
       assert got.metadata.integer_status == String.to_atom(sol["metadata"]["integer_status"])
+      assert got.metadata.integer_method == String.to_atom(sol["metadata"]["integer_method"])
       assert got.metadata.integer_candidates == sol["metadata"]["integer_candidates"]
 
       assert_ulp(got.metadata.code_rms_m, h(sol["metadata"]["code_rms_m"]), 0, "fixed code RMS")

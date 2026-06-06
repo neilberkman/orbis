@@ -221,6 +221,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
               phase_rms_m: float(),
               weighted_rms_m: float(),
               integer_status: :fixed | :not_fixed,
+              integer_method: :lambda,
               integer_ratio: float() | :infinity,
               integer_best_score: float(),
               integer_second_best_score: float() | nil,
@@ -352,8 +353,9 @@ defmodule Orbis.GNSS.PrecisePositioning do
 
   ## Additional options
 
-    * `:integer_search_radius_cycles` - integer half-window around each rounded
-      float ambiguity (default `1`).
+    * `:integer_search_radius_cycles` - initial search sphere is large enough
+      to contain this half-window around each rounded float ambiguity (default
+      `1`).
     * `:integer_ratio_threshold` - minimum second-best / best weighted-score
       ratio for `metadata.integer_status == :fixed` (default `3.0`).
     * `:integer_candidate_limit` - maximum candidates to evaluate before
@@ -377,7 +379,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
          {:ok, float_sol} <- solve_float_epochs(sp3, epochs, opts),
          {:ok, wavelengths} <- ambiguity_wavelengths(float_sol.used_sats, opts),
          {:ok, fixed_cycles, fixed_meta} <-
-           search_integer_ambiguities(float_sol, wavelengths, integer_opts),
+           search_integer_ambiguities(sp3, epochs, float_sol, wavelengths, weights, integer_opts),
          fixed_m = fixed_ambiguities_m(fixed_cycles, wavelengths),
          state = fixed_state_from_float(float_sol),
          {:ok, fixed_state, iterations, converged, status} <-
@@ -1041,73 +1043,72 @@ defmodule Orbis.GNSS.PrecisePositioning do
 
   # --- integer ambiguity fixing -------------------------------------------
 
-  defp search_integer_ambiguities(float_sol, wavelengths, opts) do
+  defp search_integer_ambiguities(sp3, epochs, float_sol, wavelengths, weights, opts) do
     sat_ids = float_sol.used_sats
 
-    ranges =
-      Enum.map(
-        sat_ids,
-        &candidate_range(&1, float_sol.ambiguities_m, wavelengths, opts.radius_cycles)
-      )
+    case ambiguity_covariance_cycles(sp3, epochs, sat_ids, float_sol, wavelengths, weights) do
+      {:ok, q_cycles} ->
+        q_cycles = symmetrize_matrix(q_cycles)
 
-    count = Enum.reduce(ranges, 1, fn range, acc -> acc * length(range) end)
+        case invert_matrix(q_cycles) do
+          {:ok, q_inv} ->
+            case lambda_decorrelate(q_cycles) do
+              {:ok, q_decorrelated, z_transform} ->
+                with {:ok, candidates, evaluated} <-
+                       lambda_sphere_search(
+                         float_ambiguities_cycles(float_sol, wavelengths),
+                         symmetrize_matrix(q_inv),
+                         q_decorrelated,
+                         z_transform,
+                         opts
+                       ) do
+                  lambda_search_result(candidates, evaluated, opts)
+                end
 
-    if count > opts.candidate_limit do
-      {:error, {:too_many_integer_candidates, count, opts.candidate_limit}}
-    else
-      candidates =
-        ranges
-        |> cartesian_product()
-        |> Enum.map(fn cycles ->
-          fixed_cycles = Map.new(Enum.zip(sat_ids, cycles))
-          score = ambiguity_score(float_sol.ambiguities_m, fixed_cycles, wavelengths, sat_ids)
-          {score, fixed_cycles}
-        end)
-        |> Enum.sort_by(fn {score, fixed_cycles} ->
-          {score, Enum.map(sat_ids, &Map.fetch!(fixed_cycles, &1))}
-        end)
+              {:error, _} = err ->
+                err
+            end
 
-      [{best_score, fixed_cycles} | rest] = candidates
-
-      second_best_score =
-        case rest do
-          [{score, _} | _] -> score
-          [] -> nil
+          {:error, _} = err ->
+            err
         end
 
-      ratio = integer_ratio(best_score, second_best_score)
-      status = if integer_ratio_pass?(ratio, opts.ratio_threshold), do: :fixed, else: :not_fixed
-
-      {:ok, fixed_cycles,
-       %{
-         integer_status: status,
-         integer_ratio: ratio,
-         integer_best_score: best_score,
-         integer_second_best_score: second_best_score,
-         integer_candidates: count
-       }}
+      {:error, _} = err ->
+        err
     end
   end
 
-  defp candidate_range(sat, ambiguities_m, wavelengths, radius) do
-    wavelength = Map.fetch!(wavelengths, sat)
-    center = round(Map.fetch!(ambiguities_m, sat) / wavelength)
-    (center - radius)..(center + radius) |> Enum.to_list()
+  defp lambda_search_result(candidates, evaluated, opts) do
+    [{best_score, fixed_cycles} | rest] = candidates
+
+    second_best_score =
+      case rest do
+        [{score, _} | _] -> score
+        [] -> nil
+      end
+
+    ratio = integer_ratio(best_score, second_best_score)
+    status = if integer_ratio_pass?(ratio, opts.ratio_threshold), do: :fixed, else: :not_fixed
+
+    {:ok, fixed_cycles,
+     %{
+       integer_status: status,
+       integer_method: :lambda,
+       integer_ratio: ratio,
+       integer_best_score: best_score,
+       integer_second_best_score: second_best_score,
+       integer_candidates: evaluated
+     }}
   end
 
-  defp cartesian_product([]), do: [[]]
+  defp symmetrize_matrix(matrix) do
+    n = length(matrix)
 
-  defp cartesian_product([range | rest]) do
-    for value <- range, tail <- cartesian_product(rest), do: [value | tail]
-  end
-
-  defp ambiguity_score(ambiguities_m, fixed_cycles, wavelengths, sat_ids) do
-    Enum.reduce(sat_ids, 0.0, fn sat, acc ->
-      wavelength = Map.fetch!(wavelengths, sat)
-      delta = Map.fetch!(ambiguities_m, sat) - Map.fetch!(fixed_cycles, sat) * wavelength
-      normalized = delta / wavelength
-      acc + normalized * normalized
-    end)
+    for i <- 0..(n - 1) do
+      for j <- 0..(n - 1) do
+        ((matrix |> Enum.at(i) |> Enum.at(j)) + (matrix |> Enum.at(j) |> Enum.at(i))) / 2.0
+      end
+    end
   end
 
   defp fixed_ambiguities_m(fixed_cycles, wavelengths) do
@@ -1119,6 +1120,327 @@ defmodule Orbis.GNSS.PrecisePositioning do
       position: {float_sol.position.x_m, float_sol.position.y_m, float_sol.position.z_m},
       clocks_m: Enum.map(float_sol.epoch_clocks, & &1.rx_clock_m)
     }
+  end
+
+  defp float_ambiguities_cycles(float_sol, wavelengths) do
+    Map.new(float_sol.used_sats, fn sat ->
+      {sat, Map.fetch!(float_sol.ambiguities_m, sat) / Map.fetch!(wavelengths, sat)}
+    end)
+  end
+
+  defp ambiguity_covariance_cycles(sp3, epochs, sat_ids, float_sol, wavelengths, weights) do
+    state = %{
+      position: {float_sol.position.x_m, float_sol.position.y_m, float_sol.position.z_m},
+      clocks_m: Enum.map(float_sol.epoch_clocks, & &1.rx_clock_m),
+      ambiguities: float_sol.ambiguities_m
+    }
+
+    n = 3 + length(epochs) + length(sat_ids)
+    start = 3 + length(epochs)
+
+    with {:ok, rows} <- build_multi_rows(sp3, epochs, sat_ids, state, weights),
+         {normal, _rhs} = normal_equations(rows, n),
+         {:ok, covariance_m} <- ambiguity_covariance_from_normal(normal, start, length(sat_ids)) do
+      covariance_cycles =
+        for i <- 0..(length(sat_ids) - 1) do
+          sat_i = Enum.at(sat_ids, i)
+          lambda_i = Map.fetch!(wavelengths, sat_i)
+
+          for j <- 0..(length(sat_ids) - 1) do
+            sat_j = Enum.at(sat_ids, j)
+            lambda_j = Map.fetch!(wavelengths, sat_j)
+            (covariance_m |> Enum.at(i) |> Enum.at(j)) / (lambda_i * lambda_j)
+          end
+        end
+
+      {:ok, covariance_cycles}
+    end
+  end
+
+  defp ambiguity_covariance_from_normal(normal, start, n_ambiguities) do
+    a = submatrix(normal, 0, start, 0, start)
+    b = submatrix(normal, 0, start, start, n_ambiguities)
+    c = submatrix(normal, start, n_ambiguities, start, n_ambiguities)
+
+    with {:ok, a_inv_b} <- solve_matrix(a, b) do
+      bt_a_inv_b = matmul(transpose(b), a_inv_b)
+      schur = matrix_sub(c, bt_a_inv_b)
+
+      case invert_matrix(schur) do
+        {:ok, covariance} ->
+          {:ok, covariance}
+
+        {:error, :singular_geometry} = err ->
+          err
+      end
+    end
+  end
+
+  defp lambda_sphere_search(float_cycles_by_sat, q_inv, q_decorrelated, z_transform, opts) do
+    sat_ids = float_cycles_by_sat |> Map.keys() |> Enum.sort()
+    float_cycles = Enum.map(sat_ids, &Map.fetch!(float_cycles_by_sat, &1))
+    bound = lambda_initial_bound(float_cycles, q_inv, opts.radius_cycles)
+    decorrelated_float_cycles = matvec_transpose(z_transform, float_cycles)
+
+    with {:ok, lower, diagonal} <- ldl_decompose(q_decorrelated) do
+      case lambda_recurse(
+             lower,
+             diagonal,
+             decorrelated_float_cycles,
+             length(float_cycles) - 1,
+             empty_solution(length(float_cycles)),
+             0.0,
+             bound,
+             [],
+             0,
+             opts.candidate_limit
+           ) do
+        {:error, _} = err ->
+          err
+
+        {:ok, [], evaluated} ->
+          {:error, {:too_many_integer_candidates, evaluated, opts.candidate_limit}}
+
+        {:ok, candidates, evaluated} ->
+          sorted =
+            candidates
+            |> Enum.map(fn {_score, decorrelated_cycles} ->
+              original_cycles = original_integer_cycles(z_transform, decorrelated_cycles)
+
+              {
+                quadratic_integer_score(float_cycles, original_cycles, q_inv),
+                Map.new(Enum.zip(sat_ids, original_cycles))
+              }
+            end)
+            |> Enum.sort_by(fn {score, fixed_cycles} ->
+              {score, Enum.map(sat_ids, &Map.fetch!(fixed_cycles, &1))}
+            end)
+
+          {:ok, sorted, evaluated}
+      end
+    end
+  end
+
+  defp lambda_decorrelate(q_cycles) do
+    n = length(q_cycles)
+    max_steps = max(100, n * n * 20)
+
+    lambda_reduce(q_cycles, identity_matrix(n), n - 2, n - 2, 0, max_steps)
+  end
+
+  defp lambda_reduce(q, z, j, _k, _steps, _max_steps) when j < 0, do: {:ok, q, z}
+
+  defp lambda_reduce(_q, _z, _j, _k, steps, max_steps) when steps > max_steps,
+    do: {:error, :singular_geometry}
+
+  defp lambda_reduce(q, z, j, k, steps, max_steps) do
+    n = length(q)
+
+    with {:ok, q, z} <- maybe_gauss_reduce(q, z, j, k),
+         {:ok, lower, diagonal} <- ldl_decompose(q) do
+      lij = lower |> Enum.at(j + 1) |> Enum.at(j)
+      delta = Enum.at(diagonal, j) + lij * lij * Enum.at(diagonal, j + 1)
+
+      if delta + 1.0e-12 < Enum.at(diagonal, j + 1) do
+        t = permutation_transform(n, j, j + 1)
+        q = transform_covariance(q, t)
+        z = matmul(z, t)
+        lambda_reduce(q, z, n - 2, j, steps + 1, max_steps)
+      else
+        lambda_reduce(q, z, j - 1, k, steps + 1, max_steps)
+      end
+    end
+  end
+
+  defp maybe_gauss_reduce(q, z, j, k) when j > k, do: {:ok, q, z}
+
+  defp maybe_gauss_reduce(q, z, j, _k) do
+    n = length(q)
+
+    Enum.reduce_while((j + 1)..(n - 1), {:ok, q, z}, fn i, {:ok, q_acc, z_acc} ->
+      case ldl_decompose(q_acc) do
+        {:ok, lower, _diagonal} ->
+          mu = lower |> Enum.at(i) |> Enum.at(j) |> round()
+
+          if mu == 0 do
+            {:cont, {:ok, q_acc, z_acc}}
+          else
+            t = integer_gauss_transform(n, i, j, mu)
+            {:cont, {:ok, transform_covariance(q_acc, t), matmul(z_acc, t)}}
+          end
+
+        {:error, _} = err ->
+          {:halt, err}
+      end
+    end)
+  end
+
+  defp integer_gauss_transform(n, i, j, mu) do
+    identity_matrix(n)
+    |> List.update_at(i, fn row -> List.replace_at(row, j, -mu / 1.0) end)
+  end
+
+  defp permutation_transform(n, i, j) do
+    identity_matrix(n)
+    |> swap_columns(i, j)
+  end
+
+  defp transform_covariance(q, transform) do
+    transform
+    |> transpose()
+    |> matmul(matmul(q, transform))
+    |> symmetrize_matrix()
+  end
+
+  defp original_integer_cycles(z_transform, decorrelated_cycles) do
+    {:ok, original} =
+      solve_linear(transpose(z_transform), Enum.map(decorrelated_cycles, &(&1 / 1.0)))
+
+    Enum.map(original, &round/1)
+  end
+
+  defp lambda_initial_bound(float_cycles, q_inv, radius) do
+    n = length(float_cycles)
+
+    rounded = Enum.map(float_cycles, &round/1)
+
+    alternatives =
+      if radius == 0 do
+        []
+      else
+        for idx <- 0..(n - 1),
+            step <- 1..radius,
+            sign <- [-1, 1] do
+          List.update_at(rounded, idx, &(&1 + sign * step))
+        end
+      end
+
+    scores =
+      [rounded | alternatives]
+      |> Enum.map(&quadratic_integer_score(float_cycles, &1, q_inv))
+      |> Enum.sort()
+
+    bound =
+      case scores do
+        [_best, second | _] -> second * (1.0 + 1.0e-12)
+        [best] -> best + 1.0
+      end
+
+    if bound > 0.0, do: bound, else: 1.0
+  end
+
+  defp quadratic_integer_score(float_cycles, fixed_cycles, q_inv) do
+    deltas =
+      fixed_cycles
+      |> Enum.zip(float_cycles)
+      |> Enum.map(fn {z, a} -> a - z end)
+
+    n = length(deltas)
+
+    Enum.reduce(0..(n - 1), 0.0, fn i, acc ->
+      Enum.reduce(0..(n - 1), acc, fn j, inner ->
+        inner + Enum.at(deltas, i) * (q_inv |> Enum.at(i) |> Enum.at(j)) * Enum.at(deltas, j)
+      end)
+    end)
+  end
+
+  defp empty_solution(n), do: List.duplicate(nil, n)
+
+  defp lambda_recurse(
+         _lower,
+         _diagonal,
+         _float_cycles,
+         k,
+         z,
+         dist,
+         _bound,
+         candidates,
+         evaluated,
+         limit
+       )
+       when k < 0 do
+    evaluated = evaluated + 1
+
+    if evaluated > limit do
+      {:error, {:too_many_integer_candidates, evaluated, limit}}
+    else
+      {:ok, [{dist, z} | candidates], evaluated}
+    end
+  end
+
+  defp lambda_recurse(
+         lower,
+         diagonal,
+         float_cycles,
+         k,
+         z,
+         dist,
+         bound,
+         candidates,
+         evaluated,
+         limit
+       ) do
+    dk = Enum.at(diagonal, k)
+    center = Enum.at(float_cycles, k) + lambda_conditional_offset(lower, float_cycles, z, k)
+    remaining = bound - dist
+
+    if remaining < 0.0 do
+      {:ok, candidates, evaluated}
+    else
+      span = :math.sqrt(remaining * dk)
+      low = Float.floor(center - span) |> trunc()
+      high = Float.ceil(center + span) |> trunc()
+
+      integers_near(center, low, high)
+      |> Enum.reduce_while({:ok, candidates, evaluated}, fn value,
+                                                            {:ok, acc_candidates, acc_evaluated} ->
+        term = center - value
+        next_dist = dist + term * term / dk
+
+        if next_dist > bound do
+          {:cont, {:ok, acc_candidates, acc_evaluated}}
+        else
+          next_z = List.replace_at(z, k, value)
+
+          case lambda_recurse(
+                 lower,
+                 diagonal,
+                 float_cycles,
+                 k - 1,
+                 next_z,
+                 next_dist,
+                 bound,
+                 acc_candidates,
+                 acc_evaluated,
+                 limit
+               ) do
+            {:ok, next_candidates, next_evaluated} ->
+              {:cont, {:ok, next_candidates, next_evaluated}}
+
+            {:error, _} = err ->
+              {:halt, err}
+          end
+        end
+      end)
+    end
+  end
+
+  defp lambda_conditional_offset(lower, float_cycles, z, k) do
+    n = length(z)
+
+    if k == n - 1 do
+      0.0
+    else
+      Enum.reduce((k + 1)..(n - 1), 0.0, fn j, acc ->
+        acc + (lower |> Enum.at(j) |> Enum.at(k)) * (Enum.at(float_cycles, j) - Enum.at(z, j))
+      end)
+    end
+  end
+
+  defp integers_near(center, low, high) do
+    low..high
+    |> Enum.to_list()
+    |> Enum.sort_by(fn value -> {abs(value - center), value} end)
   end
 
   defp integer_ratio(_best_score, nil), do: :infinity
@@ -1137,6 +1459,11 @@ defmodule Orbis.GNSS.PrecisePositioning do
   # --- dynamic least squares ----------------------------------------------
 
   defp solve_normal_equations(rows, n) do
+    {ata, aty} = normal_equations(rows, n)
+    solve_linear(ata, aty)
+  end
+
+  defp normal_equations(rows, n) do
     {ata, aty} =
       Enum.reduce(rows, {zero_matrix(n), zero_vector(n)}, fn row, {ata, aty} ->
         h = Enum.map(row.h, &(&1 * row.weight))
@@ -1144,7 +1471,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
         {accumulate_ata(ata, h), accumulate_aty(aty, h, y)}
       end)
 
-    solve_linear(ata, aty)
+    {ata, aty}
   end
 
   defp zero_matrix(n), do: for(_ <- 1..n, do: zero_vector(n))
@@ -1247,6 +1574,165 @@ defmodule Orbis.GNSS.PrecisePositioning do
       end)
 
     Enum.map(0..(n - 1), &Map.fetch!(solved, &1))
+  end
+
+  defp invert_matrix(a) do
+    n = length(a)
+
+    0..(n - 1)
+    |> Enum.reduce_while({:ok, []}, fn col, {:ok, columns} ->
+      case solve_linear(a, unit_vector(n, col)) do
+        {:ok, solution} -> {:cont, {:ok, [solution | columns]}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, columns} -> {:ok, columns |> Enum.reverse() |> transpose()}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp solve_matrix(a, b) do
+    columns = transpose(b)
+
+    columns
+    |> Enum.reduce_while({:ok, []}, fn col, {:ok, acc} ->
+      case solve_linear(a, col) do
+        {:ok, solution} -> {:cont, {:ok, [solution | acc]}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, solved_columns} -> {:ok, solved_columns |> Enum.reverse() |> transpose()}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp submatrix(matrix, row_start, row_count, col_start, col_count) do
+    matrix
+    |> Enum.slice(row_start, row_count)
+    |> Enum.map(&Enum.slice(&1, col_start, col_count))
+  end
+
+  defp identity_matrix(n) do
+    for i <- 0..(n - 1) do
+      for j <- 0..(n - 1), do: if(i == j, do: 1.0, else: 0.0)
+    end
+  end
+
+  defp swap_columns(matrix, i, j) do
+    Enum.map(matrix, fn row ->
+      vi = Enum.at(row, i)
+      vj = Enum.at(row, j)
+
+      row
+      |> List.replace_at(i, vj)
+      |> List.replace_at(j, vi)
+    end)
+  end
+
+  defp matvec_transpose(matrix, vector) do
+    matrix
+    |> transpose()
+    |> Enum.map(fn row ->
+      row
+      |> Enum.zip(vector)
+      |> Enum.reduce(0.0, fn {a, b}, acc -> acc + a * b end)
+    end)
+  end
+
+  defp matmul(a, b) do
+    b_t = transpose(b)
+
+    Enum.map(a, fn row ->
+      Enum.map(b_t, fn col ->
+        row
+        |> Enum.zip(col)
+        |> Enum.reduce(0.0, fn {x, y}, acc -> acc + x * y end)
+      end)
+    end)
+  end
+
+  defp matrix_sub(a, b) do
+    a
+    |> Enum.zip(b)
+    |> Enum.map(fn {row_a, row_b} ->
+      row_a
+      |> Enum.zip(row_b)
+      |> Enum.map(fn {x, y} -> x - y end)
+    end)
+  end
+
+  defp unit_vector(n, col) do
+    for idx <- 0..(n - 1), do: if(idx == col, do: 1.0, else: 0.0)
+  end
+
+  defp transpose(matrix) do
+    matrix
+    |> Enum.zip()
+    |> Enum.map(&Tuple.to_list/1)
+  end
+
+  defp ldl_decompose(a) do
+    n = length(a)
+
+    0..(n - 1)
+    |> Enum.reduce_while({:ok, [], []}, fn i, {:ok, rows, diagonal} ->
+      case ldl_row(a, rows, diagonal, i, n) do
+        {:ok, row, d_i} -> {:cont, {:ok, rows ++ [row], diagonal ++ [d_i]}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, rows, diagonal} -> {:ok, rows, diagonal}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp ldl_row(a, rows, diagonal, i, n) do
+    prefix =
+      if i == 0 do
+        {:ok, []}
+      else
+        0..(i - 1)
+        |> Enum.reduce_while({:ok, []}, fn j, {:ok, acc} ->
+          sum = (a |> Enum.at(i) |> Enum.at(j)) - ldl_cross_sum(rows, diagonal, acc, j)
+          d_j = Enum.at(diagonal, j)
+          {:cont, {:ok, acc ++ [sum / d_j]}}
+        end)
+      end
+
+    case prefix do
+      {:ok, l_values} ->
+        d_i = (a |> Enum.at(i) |> Enum.at(i)) - ldl_diag_sum(l_values, diagonal)
+
+        if not is_number(d_i) or d_i <= 0.0 do
+          {:error, :singular_geometry}
+        else
+          {:ok, l_values ++ [1.0] ++ List.duplicate(0.0, n - i - 1), d_i}
+        end
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp ldl_cross_sum(_rows, _diagonal, _current, 0), do: 0.0
+
+  defp ldl_cross_sum(rows, diagonal, current, j) do
+    Enum.reduce(0..(j - 1), 0.0, fn k, acc ->
+      lik = Enum.at(current, k)
+      ljk = rows |> Enum.at(j) |> Enum.at(k)
+      acc + lik * ljk * Enum.at(diagonal, k)
+    end)
+  end
+
+  defp ldl_diag_sum([], _diagonal), do: 0.0
+
+  defp ldl_diag_sum(l_values, diagonal) do
+    l_values
+    |> Enum.zip(diagonal)
+    |> Enum.reduce(0.0, fn {lik, d_k}, acc -> acc + lik * lik * d_k end)
   end
 
   # --- result assembly -----------------------------------------------------

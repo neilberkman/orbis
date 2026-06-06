@@ -1674,10 +1674,11 @@
           "phase_rms_m": "0x1.d363d1848dcbfp-30",
           "weighted_rms_m": "0x1.0236387bc2cecp-23",
           "integer_status": "fixed",
-          "integer_ratio": "0x1.d7686241128c4p+44",
-          "integer_best_score": "0x1.160b31d6da531p-45",
-          "integer_second_best_score": "0x1.fffff7f581088p-1",
-          "integer_candidates": 6561
+          "integer_method": "lambda",
+          "integer_ratio": "0x1.dde0725d05410p+48",
+          "integer_best_score": "0x1.8b61e2d078040p-42",
+          "integer_second_best_score": "0x1.710804f313db0p+7",
+          "integer_candidates": 1503
         }
       }
     }
