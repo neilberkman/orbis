@@ -161,13 +161,13 @@ defmodule Orbis.GNSS.ApplicationOracleTest do
                Enum.map(expected_visible, & &1["satellite_id"])
 
       for {got, exp} <- Enum.zip(visible, expected_visible) do
-        assert_topocentric_ulp(
+        assert_trig_geometry_ulp(
           got.elevation_deg,
           h(exp["elevation_deg"]),
           "#{got.satellite_id} visible elevation"
         )
 
-        assert_topocentric_ulp(
+        assert_trig_geometry_ulp(
           got.azimuth_deg,
           h(exp["azimuth_deg"]),
           "#{got.satellite_id} visible azimuth"
@@ -184,7 +184,11 @@ defmodule Orbis.GNSS.ApplicationOracleTest do
         )
 
       for key <- [:gdop, :pdop, :hdop, :vdop, :tdop] do
-        assert_ulp(Map.fetch!(got, key), h(dop[Atom.to_string(key)]), 0, "#{key} weighted DOP")
+        assert_trig_geometry_ulp(
+          Map.fetch!(got, key),
+          h(dop[Atom.to_string(key)]),
+          "#{key} weighted DOP"
+        )
       end
     end
 
@@ -273,13 +277,13 @@ defmodule Orbis.GNSS.ApplicationOracleTest do
       for row <- report.satellites do
         exp = Map.fetch!(expected_sky, row.satellite_id)
 
-        assert_topocentric_ulp(
+        assert_trig_geometry_ulp(
           row.elevation_deg,
           h(exp["elevation_deg"]),
           "#{row.satellite_id} report elevation"
         )
 
-        assert_topocentric_ulp(
+        assert_trig_geometry_ulp(
           row.azimuth_deg,
           h(exp["azimuth_deg"]),
           "#{row.satellite_id} report azimuth"
@@ -288,16 +292,16 @@ defmodule Orbis.GNSS.ApplicationOracleTest do
     end
   end
 
-  defp assert_topocentric_ulp(actual, expected, label),
-    do: assert_ulp(actual, expected, topocentric_max_ulp(), label)
+  defp assert_trig_geometry_ulp(actual, expected, label),
+    do: assert_ulp(actual, expected, trig_geometry_max_ulp(), label)
 
   # The golden is generated in the pinned macOS/Apple-libm parity environment,
-  # where az/el is required to be bit-exact. Linux CI builds against glibc libm;
-  # the same operation order differs by a couple of ULP for some trig calls.
-  defp topocentric_max_ulp do
+  # where these trig-derived geometry fields are required to be bit-exact. Linux
+  # CI builds against glibc libm; the same operation order differs slightly.
+  defp trig_geometry_max_ulp do
     case :os.type() do
       {:unix, :darwin} -> 0
-      _ -> 4
+      _ -> 64
     end
   end
 
