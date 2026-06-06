@@ -95,6 +95,7 @@ defmodule Orbis.MixProject do
         Conjunction: [Orbis.Conjunction],
         "GNSS Positioning": [
           Orbis.GNSS.Positioning,
+          Orbis.GNSS.PrecisePositioning,
           Orbis.GNSS.SP3,
           Orbis.GNSS.Broadcast,
           Orbis.GNSS.RINEX.Observations,

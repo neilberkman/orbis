@@ -13,6 +13,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   carrier-phase combinations, plus `Orbis.GNSS.CarrierPhase.phase_meters/2`,
   `code_minus_carrier/3`, and `smooth_iono_free_code/2` for code-carrier
   diagnostics and dual-frequency divergence-free Hatch smoothing.
+- `Orbis.GNSS.PrecisePositioning.solve_float/4`, a first float-ambiguity
+  carrier-phase estimator for one SP3-backed epoch from ionosphere-free code and
+  phase observations. It estimates receiver ECEF position, clock, and one float
+  ambiguity per satellite, exposing residuals and metadata for later PPP/RTK
+  layers.
 
 ## [0.9.2] - 2026-06-06
 
