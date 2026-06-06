@@ -161,17 +161,15 @@ defmodule Orbis.GNSS.ApplicationOracleTest do
                Enum.map(expected_visible, & &1["satellite_id"])
 
       for {got, exp} <- Enum.zip(visible, expected_visible) do
-        assert_ulp(
+        assert_topocentric_ulp(
           got.elevation_deg,
           h(exp["elevation_deg"]),
-          0,
           "#{got.satellite_id} visible elevation"
         )
 
-        assert_ulp(
+        assert_topocentric_ulp(
           got.azimuth_deg,
           h(exp["azimuth_deg"]),
-          0,
           "#{got.satellite_id} visible azimuth"
         )
       end
@@ -275,20 +273,31 @@ defmodule Orbis.GNSS.ApplicationOracleTest do
       for row <- report.satellites do
         exp = Map.fetch!(expected_sky, row.satellite_id)
 
-        assert_ulp(
+        assert_topocentric_ulp(
           row.elevation_deg,
           h(exp["elevation_deg"]),
-          0,
           "#{row.satellite_id} report elevation"
         )
 
-        assert_ulp(
+        assert_topocentric_ulp(
           row.azimuth_deg,
           h(exp["azimuth_deg"]),
-          0,
           "#{row.satellite_id} report azimuth"
         )
       end
+    end
+  end
+
+  defp assert_topocentric_ulp(actual, expected, label),
+    do: assert_ulp(actual, expected, topocentric_max_ulp(), label)
+
+  # The golden is generated in the pinned macOS/Apple-libm parity environment,
+  # where az/el is required to be bit-exact. Linux CI builds against glibc libm;
+  # the same operation order differs by a couple of ULP for some trig calls.
+  defp topocentric_max_ulp do
+    case :os.type() do
+      {:unix, :darwin} -> 0
+      _ -> 4
     end
   end
 
