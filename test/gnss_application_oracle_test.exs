@@ -8,6 +8,7 @@ defmodule Orbis.GNSS.ApplicationOracleTest do
   alias Orbis.GNSS.Navigation.LNAV
   alias Orbis.GNSS.Navigation.LNAV.Ephemeris
   alias Orbis.GNSS.Positioning
+  alias Orbis.GNSS.PrecisePositioning
   alias Orbis.GNSS.Signal.CA
   alias Orbis.GNSS.Signal.Correlator
   alias Orbis.GNSS.SolutionReport
@@ -238,6 +239,70 @@ defmodule Orbis.GNSS.ApplicationOracleTest do
       for {sat, pr} <- corrected do
         assert_ulp(pr, expected_corrected[sat], 0, "#{sat} corrected rover pseudorange")
       end
+    end
+
+    test "float carrier-phase positioning matches the Python normal-equation oracle", %{
+      golden: golden,
+      sp3: sp3
+    } do
+      p = golden["sp3_application"]["precise_positioning"]
+      epoch = NaiveDateTime.from_iso8601!(golden["sp3_application"]["epoch"])
+      [x0, y0, z0, b0] = Enum.map(p["initial_guess"], &h/1)
+
+      observations =
+        Enum.map(p["observations"], fn o ->
+          %{satellite_id: o["sat"], code_m: h(o["code_m"]), phase_m: h(o["phase_m"])}
+        end)
+
+      assert {:ok, got} =
+               PrecisePositioning.solve_float(sp3, observations, epoch,
+                 initial_guess: {x0, y0, z0, b0}
+               )
+
+      sol = p["solution"]
+      [ex, ey, ez] = Enum.map(sol["position_m"], &h/1)
+
+      assert_ulp(got.position.x_m, ex, 0, "precise position x")
+      assert_ulp(got.position.y_m, ey, 0, "precise position y")
+      assert_ulp(got.position.z_m, ez, 0, "precise position z")
+      assert_ulp(got.rx_clock_m, h(sol["clock_m"]), 0, "precise receiver clock m")
+      assert_ulp(got.rx_clock_s, h(sol["clock_s"]), 0, "precise receiver clock s")
+      assert got.used_sats == sol["used_sats"]
+
+      for {sat, expected} <- sol["ambiguities_m"] do
+        assert_ulp(got.ambiguities_m[sat], h(expected), 0, "#{sat} float ambiguity")
+      end
+
+      for {sat, residual} <- sol["residuals_m"] do
+        got_residual = got.residuals_m[sat]
+        assert_ulp(got_residual.code_m, h(residual["code_m"]), 0, "#{sat} code residual")
+        assert_ulp(got_residual.phase_m, h(residual["phase_m"]), 0, "#{sat} phase residual")
+      end
+
+      assert got.metadata.iterations == sol["metadata"]["iterations"]
+      assert got.metadata.converged == sol["metadata"]["converged"]
+      assert got.metadata.status == String.to_atom(sol["metadata"]["status"])
+
+      assert_ulp(
+        got.metadata.code_rms_m,
+        h(sol["metadata"]["code_rms_m"]),
+        0,
+        "precise code RMS"
+      )
+
+      assert_ulp(
+        got.metadata.phase_rms_m,
+        h(sol["metadata"]["phase_rms_m"]),
+        0,
+        "precise phase RMS"
+      )
+
+      assert_ulp(
+        got.metadata.weighted_rms_m,
+        h(sol["metadata"]["weighted_rms_m"]),
+        0,
+        "precise weighted RMS"
+      )
     end
 
     test "SolutionReport sky rows and residual RMS match Python-derived expectations", %{

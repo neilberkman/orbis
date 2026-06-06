@@ -731,6 +731,141 @@
         }
       ],
       "residual_rms_m": "0x1.8e2d3cc4d824bp-3"
+    },
+    "precise_positioning": {
+      "receiver_ecef_m": [
+        "0x1.acd2200000000p+21",
+        "0x1.7d1a800000000p+19",
+        "0x1.405af00000000p+22"
+      ],
+      "clock_m": "0x1.9000000000000p+3",
+      "initial_guess": [
+        "0x1.ace1c00000000p+21",
+        "0x1.7ce8800000000p+19",
+        "0x1.405fa00000000p+22",
+        "-0x1.4000000000000p+4"
+      ],
+      "observations": [
+        {
+          "sat": "G21",
+          "code_m": "0x1.3ce210908289fp+24",
+          "phase_m": "0x1.3d1ca8908289fp+24",
+          "ambiguity_m": "0x1.d4c0000000000p+13"
+        },
+        {
+          "sat": "G16",
+          "code_m": "0x1.3bd4a449f96a7p+24",
+          "phase_m": "0x1.3c0f4d89f96a7p+24",
+          "ambiguity_m": "0x1.d54a000000000p+13"
+        },
+        {
+          "sat": "G18",
+          "code_m": "0x1.424e328bc6114p+24",
+          "phase_m": "0x1.4288ed0bc6114p+24",
+          "ambiguity_m": "0x1.d5d4000000000p+13"
+        },
+        {
+          "sat": "G27",
+          "code_m": "0x1.44905a865c02fp+24",
+          "phase_m": "0x1.44cb26465c02fp+24",
+          "ambiguity_m": "0x1.d65e000000000p+13"
+        },
+        {
+          "sat": "G20",
+          "code_m": "0x1.46c139fecd80fp+24",
+          "phase_m": "0x1.46fc16fecd80fp+24",
+          "ambiguity_m": "0x1.d6e8000000000p+13"
+        },
+        {
+          "sat": "G26",
+          "code_m": "0x1.4e18aadc740f9p+24",
+          "phase_m": "0x1.4e53991c740f9p+24",
+          "ambiguity_m": "0x1.d772000000000p+13"
+        },
+        {
+          "sat": "G10",
+          "code_m": "0x1.66e25406bf828p+24",
+          "phase_m": "0x1.671d5386bf828p+24",
+          "ambiguity_m": "0x1.d7fc000000000p+13"
+        },
+        {
+          "sat": "G08",
+          "code_m": "0x1.6ba1cc4fb1d4ap+24",
+          "phase_m": "0x1.6bdcdd0fb1d4ap+24",
+          "ambiguity_m": "0x1.d886000000000p+13"
+        }
+      ],
+      "solution": {
+        "position_m": [
+          "0x1.acd21fffffffcp+21",
+          "0x1.7d1a800000007p+19",
+          "0x1.405aefffffffdp+22"
+        ],
+        "clock_m": "0x1.9000000026422p+3",
+        "clock_s": "0x1.6629667b7cf4ep-25",
+        "ambiguities_m": {
+          "G08": "0x1.d886000000294p+13",
+          "G10": "0x1.d7fbffffffd35p+13",
+          "G16": "0x1.d549ffffffa15p+13",
+          "G18": "0x1.d5d4000000647p+13",
+          "G20": "0x1.d6e7ffffffb61p+13",
+          "G21": "0x1.d4c0000000417p+13",
+          "G26": "0x1.d77200000085ep+13",
+          "G27": "0x1.d65dffffffe17p+13"
+        },
+        "residuals_m": {
+          "G08": {
+            "code_m": "-0x1.0000000000000p-28",
+            "phase_m": "-0x1.0000000000000p-28"
+          },
+          "G10": {
+            "code_m": "0x0.0p+0",
+            "phase_m": "0x0.0p+0"
+          },
+          "G16": {
+            "code_m": "-0x1.0000000000000p-28",
+            "phase_m": "0x0.0p+0"
+          },
+          "G18": {
+            "code_m": "-0x1.0000000000000p-28",
+            "phase_m": "-0x1.0000000000000p-27"
+          },
+          "G20": {
+            "code_m": "-0x1.0000000000000p-28",
+            "phase_m": "0x0.0p+0"
+          },
+          "G21": {
+            "code_m": "-0x1.0000000000000p-28",
+            "phase_m": "-0x1.0000000000000p-27"
+          },
+          "G26": {
+            "code_m": "0x0.0p+0",
+            "phase_m": "-0x1.0000000000000p-28"
+          },
+          "G27": {
+            "code_m": "-0x1.0000000000000p-28",
+            "phase_m": "-0x1.0000000000000p-28"
+          }
+        },
+        "used_sats": [
+          "G08",
+          "G10",
+          "G16",
+          "G18",
+          "G20",
+          "G21",
+          "G26",
+          "G27"
+        ],
+        "metadata": {
+          "iterations": 3,
+          "converged": true,
+          "status": "position_tolerance",
+          "code_rms_m": "0x1.bb67ae8584caap-29",
+          "phase_rms_m": "0x1.2c2fc595456a7p-28",
+          "weighted_rms_m": "0x1.4babe9036f1bfp-22"
+        }
+      }
     }
   }
 }
