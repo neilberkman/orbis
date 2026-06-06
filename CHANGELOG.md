@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- GLONASS FDMA carrier-phase wavelengths. `Orbis.GNSS.RINEX.Observations`
+  exposes the parsed `GLONASS SLOT / FRQ #` channel map and `phases/3` now
+  derives G1/G2 wavelengths/metre phases for GLONASS satellites with a channel
+  entry, so `Orbis.GNSS.CarrierPhase` can process real GLONASS phase arcs
+  instead of skipping them.
+
 ## [0.9.1] - 2026-06-05
 
 ### Added

@@ -133,6 +133,18 @@ defmodule Orbis.GNSS.RINEX.ObservationsSppTest do
     end
   end
 
+  describe "glonass_slots/1" do
+    test "exposes the RINEX GLONASS FDMA channel map" do
+      obs = Observations.load!(@obs_path)
+      slots = Observations.glonass_slots(obs)
+
+      assert map_size(slots) == 23
+      assert slots["R01"] == 1
+      assert slots["R10"] == -7
+      assert slots["R21"] == 4
+    end
+  end
+
   describe "phases/3 (carrier phase with wavelength)" do
     test "returns cycles plus metres for GPS, and the L1/L2 geometry-free offset is small" do
       obs = Observations.load!(@obs_path)
@@ -154,16 +166,22 @@ defmodule Orbis.GNSS.RINEX.ObservationsSppTest do
       assert abs(l1.value_m - l2.value_m) < 5.0
     end
 
-    test "GLONASS phase has nil wavelength (FDMA channel not yet exposed)" do
+    test "returns channel-dependent GLONASS G1/G2 wavelengths from the header slot map" do
       obs = Observations.load!(@obs_path)
-      {:ok, by_sat} = Observations.phases(obs, 0)
+      {:ok, by_sat} = Observations.phases(obs, 0, codes: %{"R" => ["L1C", "L2C"]})
 
-      glonass = Enum.find(by_sat, fn {sat, _} -> String.starts_with?(sat, "R") end)
+      r01 = Map.fetch!(by_sat, "R01")
+      l1 = Enum.find(r01, &(&1.code == "L1C"))
+      l2 = Enum.find(r01, &(&1.code == "L2C"))
 
-      if glonass do
-        {_sat, rows} = glonass
-        assert Enum.all?(rows, &(&1.wavelength_m == nil and &1.value_m == nil))
-      end
+      # R01 has frequency channel +1 in the fixture's GLONASS SLOT / FRQ # map.
+      f1 = 1_602_000_000.0 + 562_500.0
+      f2 = 1_246_000_000.0 + 437_500.0
+
+      assert_in_delta l1.wavelength_m, 299_792_458.0 / f1, 1.0e-15
+      assert_in_delta l2.wavelength_m, 299_792_458.0 / f2, 1.0e-15
+      assert_in_delta l1.value_m, l1.value_cycles * l1.wavelength_m, 1.0e-8
+      assert_in_delta l2.value_m, l2.value_cycles * l2.wavelength_m, 1.0e-8
     end
   end
 end

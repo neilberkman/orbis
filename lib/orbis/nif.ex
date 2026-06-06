@@ -1,5 +1,13 @@
 checksum_file = Path.expand("../../checksum-Elixir.Orbis.NIF.exs", __DIR__)
-force_build = System.get_env("ORBIS_BUILD") in ["1", "true"] or not File.exists?(checksum_file)
+version = Mix.Project.config()[:version]
+source_checkout? = File.exists?(Path.expand("../../.git", __DIR__))
+
+checksum_current? =
+  File.exists?(checksum_file) and
+    checksum_file |> File.read!() |> String.contains?("-v#{version}-")
+
+force_build =
+  System.get_env("ORBIS_BUILD") in ["1", "true"] or source_checkout? or not checksum_current?
 
 defmodule Orbis.NIF do
   @moduledoc false
@@ -7,8 +15,7 @@ defmodule Orbis.NIF do
   use RustlerPrecompiled,
     otp_app: :orbis,
     crate: "orbis_nif",
-    base_url:
-      "https://github.com/neilberkman/orbis/releases/download/v#{Mix.Project.config()[:version]}",
+    base_url: "https://github.com/neilberkman/orbis/releases/download/v#{version}",
     force_build: force_build,
     nif_versions: ["2.15"],
     targets: [
@@ -18,7 +25,7 @@ defmodule Orbis.NIF do
       "x86_64-pc-windows-msvc",
       "x86_64-unknown-linux-gnu"
     ],
-    version: Mix.Project.config()[:version]
+    version: version
 
   def propagate_with_elements(_tle_map, _datetime_tuple), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -93,6 +100,8 @@ defmodule Orbis.NIF do
   def rinex_obs_approx_position(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
   def rinex_obs_codes(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
+  def rinex_obs_glonass_slots(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
   def rinex_obs_epoch_count(_handle), do: :erlang.nif_error(:nif_not_loaded)
 

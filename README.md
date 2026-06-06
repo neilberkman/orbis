@@ -247,16 +247,18 @@ combinations:
 g03 = phases["G03"]
 l1 = Enum.find(g03, &(&1.code == "L1C"))
 l2 = Enum.find(g03, &(&1.code == "L2W"))
+f1 = Orbis.GNSS.RINEX.Observations.band_frequency_hz("G", "1")
+f2 = Orbis.GNSS.RINEX.Observations.band_frequency_hz("G", "2")
 
 geometry_free_m = Orbis.GNSS.CarrierPhase.geometry_free(l1.value_m, l2.value_m)
 {:ok, mw_m} =
   Orbis.GNSS.CarrierPhase.melbourne_wubbena(
-    l1.value,
-    l2.value,
+    l1.value_cycles,
+    l2.value_cycles,
     24_000_000.0,
     24_000_005.0,
-    l1.frequency_hz,
-    l2.frequency_hz
+    f1,
+    f2
   )
 ```
 

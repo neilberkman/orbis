@@ -52,6 +52,9 @@ defmodule Orbis.GNSS.RINEX.Observations do
           sat_count: non_neg_integer()
         }
 
+  @typedoc "GLONASS satellite id to FDMA frequency-channel number."
+  @type glonass_slot_map :: %{String.t() => integer()}
+
   @doc """
   Load and parse a RINEX observation file from disk.
 
@@ -147,6 +150,24 @@ defmodule Orbis.GNSS.RINEX.Observations do
   rescue
     e in ErlangError ->
       raise ArgumentError, "could not read observation codes: #{inspect(e.original)}"
+  end
+
+  @doc """
+  The GLONASS satellite slot/frequency-channel map from the optional
+  `GLONASS SLOT / FRQ #` header records.
+
+  The keys are RINEX satellite ids such as `"R01"` and values are the FDMA
+  frequency-channel numbers used to derive GLONASS G1/G2 carrier frequencies.
+  Returns `%{}` when the observation file does not carry the header records.
+  """
+  @spec glonass_slots(t()) :: glonass_slot_map()
+  def glonass_slots(%__MODULE__{handle: handle}) do
+    handle
+    |> NIF.rinex_obs_glonass_slots()
+    |> Map.new()
+  rescue
+    e in ErlangError ->
+      raise ArgumentError, "could not read GLONASS slots: #{inspect(e.original)}"
   end
 
   @doc """
@@ -273,9 +294,11 @@ defmodule Orbis.GNSS.RINEX.Observations do
 
   Convenience over `values/3` that keeps only carrier phase and adds the
   wavelength and the phase expressed in metres when the carrier frequency is
-  known for the satellite's system and band (GPS, Galileo, BeiDou). For GLONASS
-  the FDMA wavelength depends on the satellite's frequency channel, which is not
-  yet exposed, so `wavelength_m`/`value_m` are `nil` there.
+  known for the satellite's system and band (GPS, Galileo, BeiDou, and GLONASS
+  when the file carries `GLONASS SLOT / FRQ #` records). GLONASS G1/G2
+  wavelengths are derived from the satellite's parsed FDMA frequency-channel
+  number; a GLONASS satellite without a channel map entry keeps
+  `wavelength_m`/`value_m` as `nil`.
 
   Returns `{:ok, %{satellite_id => [phase]}}` where each `phase` is
 
@@ -284,14 +307,16 @@ defmodule Orbis.GNSS.RINEX.Observations do
   """
   @spec phases(t(), non_neg_integer() | tuple(), keyword()) ::
           {:ok, %{String.t() => [map()]}} | {:error, term()}
-  def phases(obs, epoch, opts \\ []) do
+  def phases(%__MODULE__{} = obs, epoch, opts \\ []) do
     with {:ok, by_sat} <- values(obs, epoch, opts) do
+      glonass_slots = glonass_slots(obs)
+
       phases =
         Map.new(by_sat, fn {sat, observations} ->
           rows =
             observations
             |> Enum.filter(&(&1.kind == :carrier_phase))
-            |> Enum.map(&phase_row(sat, &1))
+            |> Enum.map(&phase_row(sat, &1, glonass_slots))
 
           {sat, rows}
         end)
@@ -301,13 +326,25 @@ defmodule Orbis.GNSS.RINEX.Observations do
   end
 
   @doc """
-  Carrier frequency in hertz for a system letter (`"G"`/`"E"`/`"C"`) and a RINEX
-  band digit (the second character of an observation code, e.g. `"1"` in `"L1C"`).
+  Carrier frequency in hertz for a system letter and RINEX band digit.
 
-  Returns `nil` for GLONASS (FDMA — channel-dependent) and unknown bands.
+  The two-argument form covers fixed-frequency systems (`"G"`, `"E"`, `"C"`)
+  and returns `nil` for GLONASS because its G1/G2 carriers are FDMA
+  channel-dependent. Use the three-argument form with the parsed GLONASS
+  frequency-channel number:
+
+      Orbis.GNSS.RINEX.Observations.band_frequency_hz("R", "1", 1)
+      # => 1602562500.0
+
+  For GLONASS, band `"1"` is G1 (`1602 MHz + k * 562.5 kHz`) and band `"2"` is
+  G2 (`1246 MHz + k * 437.5 kHz`), where `k` is the frequency-channel number.
+  Unknown bands return `nil`.
   """
   @spec band_frequency_hz(String.t(), String.t()) :: float() | nil
-  def band_frequency_hz("G", band) do
+  def band_frequency_hz(system, band), do: band_frequency_hz(system, band, nil)
+
+  @spec band_frequency_hz(String.t(), String.t(), integer() | nil) :: float() | nil
+  def band_frequency_hz("G", band, _channel) do
     case band do
       "1" -> 1_575_420_000.0
       "2" -> 1_227_600_000.0
@@ -316,7 +353,7 @@ defmodule Orbis.GNSS.RINEX.Observations do
     end
   end
 
-  def band_frequency_hz("E", band) do
+  def band_frequency_hz("E", band, _channel) do
     case band do
       "1" -> 1_575_420_000.0
       "5" -> 1_176_450_000.0
@@ -327,7 +364,7 @@ defmodule Orbis.GNSS.RINEX.Observations do
     end
   end
 
-  def band_frequency_hz("C", band) do
+  def band_frequency_hz("C", band, _channel) do
     case band do
       "1" -> 1_575_420_000.0
       "2" -> 1_561_098_000.0
@@ -339,7 +376,15 @@ defmodule Orbis.GNSS.RINEX.Observations do
     end
   end
 
-  def band_frequency_hz(_system, _band), do: nil
+  def band_frequency_hz("R", band, channel) when is_integer(channel) do
+    case band do
+      "1" -> 1_602_000_000.0 + channel * 562_500.0
+      "2" -> 1_246_000_000.0 + channel * 437_500.0
+      _ -> nil
+    end
+  end
+
+  def band_frequency_hz(_system, _band, _channel), do: nil
 
   # --- helpers -------------------------------------------------------------
 
@@ -360,8 +405,13 @@ defmodule Orbis.GNSS.RINEX.Observations do
   defp obs_units(:signal_strength), do: :db_hz
   defp obs_units(:unknown), do: :unknown
 
-  defp phase_row(sat, obs) do
-    freq = band_frequency_hz(String.first(sat), String.at(obs.code, 1))
+  defp phase_row(sat, obs, glonass_slots) do
+    freq =
+      band_frequency_hz(
+        String.first(sat),
+        String.at(obs.code, 1),
+        Map.get(glonass_slots, sat)
+      )
 
     {wavelength_m, value_m} =
       cond do

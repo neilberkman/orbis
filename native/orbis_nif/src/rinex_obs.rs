@@ -90,6 +90,19 @@ fn rinex_obs_codes(handle: ResourceArc<RinexObsResource>) -> Vec<(String, Vec<St
         .collect()
 }
 
+/// The GLONASS satellite slot/frequency-channel map from the optional
+/// `GLONASS SLOT / FRQ #` header records, as `[{"R01", +1}, ...]`.
+#[rustler::nif]
+fn rinex_obs_glonass_slots(handle: ResourceArc<RinexObsResource>) -> Vec<(String, i8)> {
+    handle
+        .obs
+        .header
+        .glonass_slots
+        .iter()
+        .map(|(slot, channel)| (format!("R{slot:02}"), *channel))
+        .collect()
+}
+
 /// The number of parsed epochs.
 #[rustler::nif]
 fn rinex_obs_epoch_count(handle: ResourceArc<RinexObsResource>) -> usize {

@@ -8,9 +8,9 @@ defmodule Orbis.GNSS.CarrierPhase do
   This is pure Elixir over the existing observation primitives. The phase and
   code observations come from `Orbis.GNSS.RINEX.Observations` (`values/3`,
   `phases/3`) and the carrier frequencies from
-  `Orbis.GNSS.RINEX.Observations.band_frequency_hz/2`; a clean synthetic arc for
-  testing can be built from `Orbis.GNSS.Observables.predict/5` over an
-  `Orbis.GNSS.SP3` product.
+  `Orbis.GNSS.RINEX.Observations.band_frequency_hz/2` (or `/3` for GLONASS
+  FDMA channels); a clean synthetic arc for testing can be built from
+  `Orbis.GNSS.Observables.predict/5` over an `Orbis.GNSS.SP3` product.
 
   ## Notation
 
@@ -62,17 +62,18 @@ defmodule Orbis.GNSS.CarrierPhase do
         f2:   float | nil     # band-2 carrier frequency, Hz
       }
 
-  A GLONASS satellite (FDMA, so `band_frequency_hz/2` returns `nil`) or any
-  epoch with an unknown band frequency is **skipped and reported**, never
-  raised: such epochs come back with `skipped: true` and no slip flags.
+  An epoch with an unknown band frequency is **skipped and reported**, never
+  raised: such epochs come back with `skipped: true` and no slip flags. GLONASS
+  G1/G2 are usable when the RINEX observation header carries the satellite's
+  FDMA frequency-channel number; `Observations.phases/3` applies that map
+  automatically.
 
   ## Non-goals
 
   Out of scope here (documented so the boundary is explicit): integer ambiguity
   resolution (LAMBDA), double differencing / RTK, the ionosphere-free phase
-  positioning combination, triple-frequency combinations, GLONASS FDMA
-  channel-dependent wavelengths (those satellites are skipped), and any change to
-  the underlying native primitives.
+  positioning combination, triple-frequency combinations, and any change to the
+  underlying native primitives.
   """
 
   import Bitwise, only: [band: 2]
@@ -209,8 +210,8 @@ defmodule Orbis.GNSS.CarrierPhase do
   epoch whose predecessor lacked the needed observations) cannot flag `:gf` /
   `:mw` but can still flag `:lli`.
 
-  An epoch with an unknown band frequency (`f1` or `f2` `nil`, e.g. GLONASS) is
-  reported with `skipped: true`, `slip: false`, `reasons: []`, `gf: nil`,
+  An epoch with an unknown band frequency (`f1` or `f2` `nil`) is reported with
+  `skipped: true`, `slip: false`, `reasons: []`, `gf: nil`,
   `mw: nil`, and never breaks the arc for its neighbours' LLI check.
 
   ## Options / default thresholds

@@ -282,6 +282,21 @@ defmodule Orbis.GNSS.CarrierPhaseTest do
       assert Enum.all?(results, &(&1.gf == nil and &1.mw == nil))
     end
 
+    test "a GLONASS epoch with FDMA channel frequencies is not skipped" do
+      f1 = Observations.band_frequency_hz("R", "1", 1)
+      f2 = Observations.band_frequency_hz("R", "2", 1)
+
+      arc = [
+        %{epoch: 0, phi1: 10.0, phi2: 8.0, p1: 20.0, p2: 21.0, f1: f1, f2: f2, lli1: 0, lli2: 0},
+        %{epoch: 1, phi1: 10.1, phi2: 8.1, p1: 20.5, p2: 21.5, f1: f1, f2: f2, lli1: 0, lli2: 0}
+      ]
+
+      results = CarrierPhase.detect_cycle_slips(arc)
+      assert Enum.all?(results, &(&1.skipped == false))
+      assert Enum.all?(results, &is_number(&1.gf))
+      assert Enum.all?(results, &is_number(&1.mw))
+    end
+
     test "a real GLONASS satellite from the SP3 product is skipped, never raised",
          %{sp3: sp3} do
       glonass =
@@ -289,7 +304,8 @@ defmodule Orbis.GNSS.CarrierPhaseTest do
 
       assert glonass != nil, "expected a GLONASS satellite in the GRG product"
 
-      # band_frequency_hz returns nil for GLONASS, so the arc is all skipped.
+      # Without an observation-file channel map, band_frequency_hz/2 returns nil
+      # for GLONASS, so this synthetic arc is skipped.
       f1 = Observations.band_frequency_hz(String.first(glonass), "1")
       assert f1 == nil
 
@@ -445,8 +461,8 @@ defmodule Orbis.GNSS.CarrierPhaseTest do
       ]
 
       slips = CarrierPhase.detect_cycle_slips(arc)
-      # A non-numeric frequency is skipped (consistent with nil/GLONASS), with
-      # nil combinations and no slip — never raised.
+      # A non-numeric frequency is skipped, with nil combinations and no slip —
+      # never raised.
       assert Enum.all?(
                slips,
                &(&1.skipped == true and &1.slip == false and &1.gf == nil and &1.mw == nil)

@@ -495,8 +495,8 @@
         "value_cycles": "0x1.89b70bef2b021p+26",
         "lli": 0,
         "ssi": 7,
-        "wavelength_m": null,
-        "value_m": null
+        "wavelength_m": "0x1.7f1ee9c2c3ed4p-3",
+        "value_m": "0x1.269c32e8ada31p+24"
       },
       {
         "epoch_index": 0,
@@ -505,8 +505,8 @@
         "value_cycles": "0x1.3239125d3f7cfp+26",
         "lli": 0,
         "ssi": 7,
-        "wavelength_m": null,
-        "value_m": null
+        "wavelength_m": "0x1.ec9575b1450c8p-3",
+        "value_m": "0x1.269c3ba583de6p+24"
       },
       {
         "epoch_index": 1,
@@ -575,8 +575,8 @@
         "value_cycles": "0x1.89c4fda0f5c29p+26",
         "lli": 0,
         "ssi": 7,
-        "wavelength_m": null,
-        "value_m": null
+        "wavelength_m": "0x1.7f1ee9c2c3ed4p-3",
+        "value_m": "0x1.26a6a20cb4045p+24"
       },
       {
         "epoch_index": 1,
@@ -585,8 +585,8 @@
         "value_cycles": "0x1.3243eacbd70a4p+26",
         "lli": 0,
         "ssi": 7,
-        "wavelength_m": null,
-        "value_m": null
+        "wavelength_m": "0x1.ec9575b1450c8p-3",
+        "value_m": "0x1.26a6aaca43e5dp+24"
       }
     ]
   },
