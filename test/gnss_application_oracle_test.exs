@@ -148,7 +148,7 @@ defmodule Orbis.GNSS.ApplicationOracleTest do
     end
   end
 
-  describe "SP3-derived application helpers vs Python/scipy/pyproj oracle" do
+  describe "SP3-derived application helpers vs operation-order Python oracle" do
     test "visibility and weighted DOP match the oracle fixture", %{golden: golden, sp3: sp3} do
       app = golden["sp3_application"]
       rx = vec3(app["receiver_ecef_m"])
@@ -161,8 +161,19 @@ defmodule Orbis.GNSS.ApplicationOracleTest do
                Enum.map(expected_visible, & &1["satellite_id"])
 
       for {got, exp} <- Enum.zip(visible, expected_visible) do
-        assert_in_delta got.elevation_deg, h(exp["elevation_deg"]), 1.0e-8
-        assert_in_delta got.azimuth_deg, h(exp["azimuth_deg"]), 1.0e-8
+        assert_ulp(
+          got.elevation_deg,
+          h(exp["elevation_deg"]),
+          0,
+          "#{got.satellite_id} visible elevation"
+        )
+
+        assert_ulp(
+          got.azimuth_deg,
+          h(exp["azimuth_deg"]),
+          0,
+          "#{got.satellite_id} visible azimuth"
+        )
       end
 
       dop = app["dop_weighted"]
@@ -175,7 +186,7 @@ defmodule Orbis.GNSS.ApplicationOracleTest do
         )
 
       for key <- [:gdop, :pdop, :hdop, :vdop, :tdop] do
-        assert_in_delta Map.fetch!(got, key), h(dop[Atom.to_string(key)]), 1.0e-8
+        assert_ulp(Map.fetch!(got, key), h(dop[Atom.to_string(key)]), 0, "#{key} weighted DOP")
       end
     end
 
@@ -193,10 +204,10 @@ defmodule Orbis.GNSS.ApplicationOracleTest do
       {vx, vy, vz} = got.velocity_m_s
       [ex, ey, ez] = Enum.map(v["solution_velocity_m_s"], &h/1)
 
-      assert_in_delta vx, ex, 1.0e-7
-      assert_in_delta vy, ey, 1.0e-7
-      assert_in_delta vz, ez, 1.0e-7
-      assert_in_delta got.clock_drift_s_s, h(v["solution_clock_drift_s_s"]), 1.0e-15
+      assert_ulp(vx, ex, 0, "velocity x")
+      assert_ulp(vy, ey, 0, "velocity y")
+      assert_ulp(vz, ez, 0, "velocity z")
+      assert_ulp(got.clock_drift_s_s, h(v["solution_clock_drift_s_s"]), 0, "clock drift")
     end
 
     test "DGNSS corrections and corrected rover observations match the Python oracle", %{
@@ -212,7 +223,7 @@ defmodule Orbis.GNSS.ApplicationOracleTest do
       assert {:ok, corrections} = DGNSS.corrections(sp3, base, base_obs, epoch)
 
       for {sat, expected_hex} <- d["corrections_m"] do
-        assert_in_delta corrections[sat], h(expected_hex), 5.0e-5
+        assert_ulp(corrections[sat], h(expected_hex), 0, "#{sat} correction")
       end
 
       {corrected, dropped} = DGNSS.apply(rover_obs, corrections)
@@ -223,7 +234,7 @@ defmodule Orbis.GNSS.ApplicationOracleTest do
         |> Map.new(&{&1["sat"], h(&1["pseudorange_m"])})
 
       for {sat, pr} <- corrected do
-        assert_in_delta pr, expected_corrected[sat], 5.0e-5
+        assert_ulp(pr, expected_corrected[sat], 0, "#{sat} corrected rover pseudorange")
       end
     end
 
@@ -251,14 +262,32 @@ defmodule Orbis.GNSS.ApplicationOracleTest do
       }
 
       assert {:ok, report} = SolutionReport.build(solution, sp3, epoch)
-      assert_in_delta report.summary.residual_rms_m, h(sr["residual_rms_m"]), 1.0e-15
+
+      assert_ulp(
+        report.summary.residual_rms_m,
+        h(sr["residual_rms_m"]),
+        0,
+        "solution residual RMS"
+      )
 
       expected_sky = Map.new(sr["sky"], &{&1["sat"], &1})
 
       for row <- report.satellites do
         exp = Map.fetch!(expected_sky, row.satellite_id)
-        assert_in_delta row.elevation_deg, h(exp["elevation_deg"]), 1.0e-8
-        assert_in_delta row.azimuth_deg, h(exp["azimuth_deg"]), 1.0e-8
+
+        assert_ulp(
+          row.elevation_deg,
+          h(exp["elevation_deg"]),
+          0,
+          "#{row.satellite_id} report elevation"
+        )
+
+        assert_ulp(
+          row.azimuth_deg,
+          h(exp["azimuth_deg"]),
+          0,
+          "#{row.satellite_id} report azimuth"
+        )
       end
     end
   end

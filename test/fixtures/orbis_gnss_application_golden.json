@@ -1,6 +1,6 @@
 {
   "schema": "orbis-gnss-parity/orbis_gnss_application.v1",
-  "purpose": "Independent Python/scipy/pyproj oracle fixture for Orbis-only GNSS application modules.",
+  "purpose": "Independent Python oracle fixture for Orbis-only GNSS application modules.",
   "env_ref": {
     "fixture": "fixtures/env.json",
     "note": "Generated in the pinned parity virtualenv; floats are stored as Python float.hex()."
@@ -9,8 +9,7 @@
     "python": "3.14.4",
     "executable": "/Volumes/ExternalSSD/orbis-gnss-workspace/parity/.venv/bin/python",
     "numpy": "2.4.6",
-    "scipy": "1.17.1",
-    "pyproj": "3.7.2"
+    "scipy": "1.17.1"
   },
   "signal": {
     "ca": {
@@ -442,53 +441,53 @@
     "visible_gps_mask10": [
       {
         "satellite_id": "G21",
-        "elevation_deg": "0x1.45911896541e6p+6",
-        "azimuth_deg": "0x1.45fceda67495bp+7"
+        "elevation_deg": "0x1.4591189670ac1p+6",
+        "azimuth_deg": "0x1.45fceda657bdbp+7"
       },
       {
         "satellite_id": "G16",
-        "elevation_deg": "0x1.02d09e7360489p+6",
-        "azimuth_deg": "0x1.e45bd7206cec0p+7"
+        "elevation_deg": "0x1.02d09e736e382p+6",
+        "azimuth_deg": "0x1.e45bd72088dc0p+7"
       },
       {
         "satellite_id": "G18",
-        "elevation_deg": "0x1.a84efe5e19d54p+5",
-        "azimuth_deg": "0x1.171c4025b2995p+6"
+        "elevation_deg": "0x1.a84efe5e0530ep+5",
+        "azimuth_deg": "0x1.171c40258d5d8p+6"
       },
       {
         "satellite_id": "G27",
-        "elevation_deg": "0x1.92b89e8234c9ap+5",
-        "azimuth_deg": "0x1.1bcbc7105587cp+8"
+        "elevation_deg": "0x1.92b89e82268bfp+5",
+        "azimuth_deg": "0x1.1bcbc7105e465p+8"
       },
       {
         "satellite_id": "G20",
-        "elevation_deg": "0x1.7bf8cd083e633p+5",
-        "azimuth_deg": "0x1.09b4d5d4d67b4p+7"
+        "elevation_deg": "0x1.7bf8cd086700cp+5",
+        "azimuth_deg": "0x1.09b4d5d4ca89ep+7"
       },
       {
         "satellite_id": "G26",
-        "elevation_deg": "0x1.50889c63c4dcap+5",
-        "azimuth_deg": "0x1.7673e58ef6872p+7"
+        "elevation_deg": "0x1.50889c64001b0p+5",
+        "azimuth_deg": "0x1.7673e58ef8390p+7"
       },
       {
         "satellite_id": "G10",
-        "elevation_deg": "0x1.8837b8e0b8321p+4",
-        "azimuth_deg": "0x1.45dd7aa437729p+7"
+        "elevation_deg": "0x1.8837b8e12a5f3p+4",
+        "azimuth_deg": "0x1.45dd7aa435731p+7"
       },
       {
         "satellite_id": "G08",
-        "elevation_deg": "0x1.1c7949cb0ebf9p+4",
-        "azimuth_deg": "0x1.1d431e8cce283p+8"
+        "elevation_deg": "0x1.1c7949caef4f0p+4",
+        "azimuth_deg": "0x1.1d431e8cd0776p+8"
       },
       {
         "satellite_id": "G07",
-        "elevation_deg": "0x1.b92ae7024af33p+3",
-        "azimuth_deg": "0x1.4a8c320af76f1p+8"
+        "elevation_deg": "0x1.b92ae7017af2ep+3",
+        "azimuth_deg": "0x1.4a8c320af855ap+8"
       },
       {
         "satellite_id": "G15",
-        "elevation_deg": "0x1.4eff63f9c88e5p+3",
-        "azimuth_deg": "0x1.190562c416cf0p+6"
+        "elevation_deg": "0x1.4eff63f977db8p+3",
+        "azimuth_deg": "0x1.190562c4119dbp+6"
       }
     ],
     "dop_weighted": {
@@ -501,11 +500,11 @@
         "G26",
         "G10"
       ],
-      "gdop": "0x1.7a3e59e61a6fap+2",
-      "pdop": "0x1.2ae5c34b707d4p+2",
-      "hdop": "0x1.110f34999f3e0p+1",
-      "vdop": "0x1.09e4bdb1f81b2p+2",
-      "tdop": "0x1.cf9689d854664p+1"
+      "gdop": "0x1.7a3e59e60c164p+2",
+      "pdop": "0x1.2ae5c34b64e98p+2",
+      "hdop": "0x1.110f349980ad4p+1",
+      "vdop": "0x1.09e4bdb1f2f07p+2",
+      "tdop": "0x1.cf9689d8436d2p+1"
     },
     "velocity": {
       "receiver_ecef_m": [
@@ -522,39 +521,39 @@
       "observations": [
         {
           "sat": "G21",
-          "rho_dot_m_s": "0x1.3a9680329302fp+7"
+          "rho_dot_m_s": "0x1.3a9680328bb22p+7"
         },
         {
           "sat": "G16",
-          "rho_dot_m_s": "-0x1.5ec02b659d8f2p+5"
+          "rho_dot_m_s": "-0x1.5ec02b65d83e1p+5"
         },
         {
           "sat": "G26",
-          "rho_dot_m_s": "0x1.9ef6a5655efeep+8"
+          "rho_dot_m_s": "0x1.9ef6a5653bb2ap+8"
         },
         {
           "sat": "G20",
-          "rho_dot_m_s": "-0x1.89ed87ee26af4p+7"
+          "rho_dot_m_s": "-0x1.89ed87ede6d7cp+7"
         },
         {
           "sat": "G27",
-          "rho_dot_m_s": "-0x1.7521ab3a3ed54p+8"
+          "rho_dot_m_s": "-0x1.7521ab3a33211p+8"
         },
         {
           "sat": "G18",
-          "rho_dot_m_s": "0x1.ec071977e033ep+8"
+          "rho_dot_m_s": "0x1.ec071977de5a8p+8"
         },
         {
           "sat": "G10",
-          "rho_dot_m_s": "-0x1.1c9af689ac2c6p+9"
+          "rho_dot_m_s": "-0x1.1c9af689ad5a8p+9"
         }
       ],
       "solution_velocity_m_s": [
-        "0x1.7ffffffffffefp+3",
-        "-0x1.c000000000003p+2",
-        "0x1.7ffffffffffafp+1"
+        "0x1.8000000000000p+3",
+        "-0x1.c0000000000b0p+2",
+        "0x1.7fffffffffe80p+1"
       ],
-      "solution_clock_drift_s_s": "0x1.12e0be826d4acp-30"
+      "solution_clock_drift_s_s": "0x1.12e0be826d3d3p-30"
     },
     "dgnss": {
       "base_ecef_m": [
@@ -570,61 +569,61 @@
       "base_observations": [
         {
           "sat": "G21",
-          "pseudorange_m": "0x1.3ce3195b6114bp+24"
+          "pseudorange_m": "0x1.3ce3195b6110fp+24"
         },
         {
           "sat": "G16",
-          "pseudorange_m": "0x1.3bd5b9d4d83e3p+24"
+          "pseudorange_m": "0x1.3bd5b9d4d7f18p+24"
         },
         {
           "sat": "G18",
-          "pseudorange_m": "0x1.424f54d6a4273p+24"
+          "pseudorange_m": "0x1.424f54d6a4985p+24"
         },
         {
           "sat": "G27",
-          "pseudorange_m": "0x1.449189913b6fap+24"
+          "pseudorange_m": "0x1.449189913a89fp+24"
         },
         {
           "sat": "G20",
-          "pseudorange_m": "0x1.46c24809ac363p+24"
+          "pseudorange_m": "0x1.46c24809ac07fp+24"
         },
         {
           "sat": "G26",
-          "pseudorange_m": "0x1.4e19c5a753a07p+24"
+          "pseudorange_m": "0x1.4e19c5a752969p+24"
         },
         {
           "sat": "G10",
-          "pseudorange_m": "0x1.66e37b919cf80p+24"
+          "pseudorange_m": "0x1.66e37b919e098p+24"
         }
       ],
       "rover_observations": [
         {
           "sat": "G21",
-          "pseudorange_m": "0x1.3cd57553030aap+24"
+          "pseudorange_m": "0x1.3cd575530315ap+24"
         },
         {
           "sat": "G16",
-          "pseudorange_m": "0x1.3bc9956f3907fp+24"
+          "pseudorange_m": "0x1.3bc9956f38a32p+24"
         },
         {
           "sat": "G18",
-          "pseudorange_m": "0x1.4243b651da7d5p+24"
+          "pseudorange_m": "0x1.4243b651dbc86p+24"
         },
         {
           "sat": "G27",
-          "pseudorange_m": "0x1.4488806de3036p+24"
+          "pseudorange_m": "0x1.4488806de3ee5p+24"
         },
         {
           "sat": "G20",
-          "pseudorange_m": "0x1.46b4eddca556ap+24"
+          "pseudorange_m": "0x1.46b4eddca574ep+24"
         },
         {
           "sat": "G26",
-          "pseudorange_m": "0x1.4e0d498c6986dp+24"
+          "pseudorange_m": "0x1.4e0d498c69aadp+24"
         },
         {
           "sat": "G10",
-          "pseudorange_m": "0x1.66d83142b6570p+24"
+          "pseudorange_m": "0x1.66d83142b5f7fp+24"
         }
       ],
       "corrections_m": {
@@ -639,31 +638,31 @@
       "corrected_rover": [
         {
           "sat": "G21",
-          "pseudorange_m": "0x1.3cd460082483ap+24"
+          "pseudorange_m": "0x1.3cd46008248eap+24"
         },
         {
           "sat": "G16",
-          "pseudorange_m": "0x1.3bc873645a80ep+24"
+          "pseudorange_m": "0x1.3bc873645a1c1p+24"
         },
         {
           "sat": "G18",
-          "pseudorange_m": "0x1.42428786fbf64p+24"
+          "pseudorange_m": "0x1.42428786fd415p+24"
         },
         {
           "sat": "G27",
-          "pseudorange_m": "0x1.448744e3047c6p+24"
+          "pseudorange_m": "0x1.448744e305675p+24"
         },
         {
           "sat": "G20",
-          "pseudorange_m": "0x1.46b3d351c6cfap+24"
+          "pseudorange_m": "0x1.46b3d351c6edep+24"
         },
         {
           "sat": "G26",
-          "pseudorange_m": "0x1.4e0c22418affdp+24"
+          "pseudorange_m": "0x1.4e0c22418b23dp+24"
         },
         {
           "sat": "G10",
-          "pseudorange_m": "0x1.66d6fd37d7d00p+24"
+          "pseudorange_m": "0x1.66d6fd37d770fp+24"
         }
       ]
     },
@@ -697,38 +696,38 @@
       "sky": [
         {
           "sat": "G21",
-          "elevation_deg": "0x1.4590eed862edbp+6",
-          "azimuth_deg": "0x1.45ff5a08d7882p+7"
+          "elevation_deg": "0x1.4590eed87ea38p+6",
+          "azimuth_deg": "0x1.45ff5a08c0afcp+7"
         },
         {
           "sat": "G16",
-          "elevation_deg": "0x1.02d08fe48eedfp+6",
-          "azimuth_deg": "0x1.e45cb9c010735p+7"
+          "elevation_deg": "0x1.02d08fe49e2c2p+6",
+          "azimuth_deg": "0x1.e45cb9c032ec0p+7"
         },
         {
           "sat": "G18",
-          "elevation_deg": "0x1.a850706f83c6bp+5",
-          "azimuth_deg": "0x1.171c971a6a723p+6"
+          "elevation_deg": "0x1.a850706f6ad3fp+5",
+          "azimuth_deg": "0x1.171c971a44669p+6"
         },
         {
           "sat": "G27",
-          "elevation_deg": "0x1.92b71c6cf7044p+5",
-          "azimuth_deg": "0x1.1bcbca1051906p+8"
+          "elevation_deg": "0x1.92b71c6cf1532p+5",
+          "azimuth_deg": "0x1.1bcbca105a91dp+8"
         },
         {
           "sat": "G20",
-          "elevation_deg": "0x1.7bf84f6c960a7p+5",
-          "azimuth_deg": "0x1.09b55d24546d4p+7"
+          "elevation_deg": "0x1.7bf84f6cc01f4p+5",
+          "azimuth_deg": "0x1.09b55d2447ea4p+7"
         },
         {
           "sat": "G26",
-          "elevation_deg": "0x1.5089b60bb2fefp+5",
-          "azimuth_deg": "0x1.76743d1285216p+7"
+          "elevation_deg": "0x1.5089b60bf5fe3p+5",
+          "azimuth_deg": "0x1.76743d12877dcp+7"
         },
         {
           "sat": "G10",
-          "elevation_deg": "0x1.88359c76ff3c9p+4",
-          "azimuth_deg": "0x1.45ddc4b40036fp+7"
+          "elevation_deg": "0x1.88359c7764e07p+4",
+          "azimuth_deg": "0x1.45ddc4b3fea8ep+7"
         }
       ],
       "residual_rms_m": "0x1.8e2d3cc4d824bp-3"
