@@ -6,8 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-06-06
+
 ### Added
 
+- `Orbis.GNSS.Constellation.diff/2` and `changed?/1` for deterministic
+  snapshot-to-snapshot catalog comparisons keyed by `{system, prn}`. The diff
+  reports added/removed PRNs plus NORAD, SP3 id, SVN, activity, and usability
+  changes in structured lists.
 - GLONASS FDMA carrier-phase wavelengths. `Orbis.GNSS.RINEX.Observations`
   exposes the parsed `GLONASS SLOT / FRQ #` channel map and `phases/3` now
   derives carrier frequency, G1/G2 wavelengths, and metre phases for GLONASS

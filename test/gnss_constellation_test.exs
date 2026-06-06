@@ -46,6 +46,20 @@ defmodule Orbis.GNSS.ConstellationTest do
     Constellation.merge_navcen(records, statuses)
   end
 
+  defp record(prn, opts \\ []) do
+    %Record{
+      system: Keyword.get(opts, :system, :gps),
+      prn: prn,
+      svn: Keyword.get(opts, :svn, prn + 60),
+      norad_id: Keyword.get(opts, :norad_id, 40_000 + prn),
+      sp3_id:
+        Keyword.get(opts, :sp3_id, "G" <> String.pad_leading(Integer.to_string(prn), 2, "0")),
+      active?: Keyword.get(opts, :active?, true),
+      usable?: Keyword.get(opts, :usable?, true),
+      source: Keyword.get(opts, :source, %{})
+    }
+  end
+
   describe "fetch_gps/1" do
     test "surfaces the typed CelesTrak dependency error" do
       Application.put_env(:orbis, :celestrak_req_available, false)
@@ -216,6 +230,72 @@ defmodule Orbis.GNSS.ConstellationTest do
       # G05 is active+usable but absent from the product — a stale-active sat.
       assert_raise ArgumentError, ~r/missing_sp3_ids.*G05/, fn ->
         Constellation.validate_sp3!(clean, ["G03"])
+      end
+    end
+  end
+
+  describe "diff/2" do
+    test "reports no changes for identical catalog snapshots" do
+      previous = [record(3), record(5)]
+      diff = Constellation.diff(previous, Enum.reverse(previous))
+
+      assert diff.added == []
+      assert diff.removed == []
+      assert diff.norad_reassigned == []
+      assert diff.sp3_id_changed == []
+      assert diff.svn_changed == []
+      assert diff.activity_changed == []
+      assert diff.usability_changed == []
+      refute Constellation.changed?(diff)
+    end
+
+    test "reports added records sorted by system and PRN" do
+      diff = Constellation.diff([record(3)], [record(9), record(3), record(5)])
+
+      assert Enum.map(diff.added, & &1.prn) == [5, 9]
+      assert diff.removed == []
+      assert Constellation.changed?(diff)
+    end
+
+    test "reports removed records sorted by system and PRN" do
+      diff = Constellation.diff([record(9), record(3), record(5)], [record(3)])
+
+      assert Enum.map(diff.removed, & &1.prn) == [5, 9]
+      assert diff.added == []
+      assert Constellation.changed?(diff)
+    end
+
+    test "reports a NORAD reassignment on a held PRN" do
+      diff = Constellation.diff([record(13, norad_id: 28_190)], [record(13, norad_id: 68_791)])
+
+      assert diff.norad_reassigned == [%{system: :gps, prn: 13, from: 28_190, to: 68_791}]
+      assert diff.added == []
+      assert diff.removed == []
+      assert Constellation.changed?(diff)
+    end
+
+    test "reports active status flips" do
+      diff = Constellation.diff([record(19, active?: true)], [record(19, active?: false)])
+
+      assert diff.activity_changed == [%{system: :gps, prn: 19, from: true, to: false}]
+      assert diff.usability_changed == []
+      assert Constellation.changed?(diff)
+    end
+
+    test "reports SVN, SP3 id, and usability changes on common keys" do
+      previous = [record(3, svn: 69, sp3_id: "G03", usable?: true)]
+      current = [record(3, svn: 70, sp3_id: "G33", usable?: false)]
+
+      diff = Constellation.diff(previous, current)
+
+      assert diff.svn_changed == [%{system: :gps, prn: 3, from: 69, to: 70}]
+      assert diff.sp3_id_changed == [%{system: :gps, prn: 3, from: "G03", to: "G33"}]
+      assert diff.usability_changed == [%{system: :gps, prn: 3, from: true, to: false}]
+    end
+
+    test "raises a clear ArgumentError for non-list inputs" do
+      assert_raise ArgumentError, ~r/expects two record lists/, fn ->
+        Constellation.diff(record(3), [record(3)])
       end
     end
   end

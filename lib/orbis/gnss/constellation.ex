@@ -137,6 +137,48 @@ defmodule Orbis.GNSS.Constellation do
           }
   end
 
+  defmodule Diff do
+    @moduledoc """
+    Change report between two GNSS constellation catalog snapshots.
+    """
+
+    @enforce_keys [
+      :added,
+      :removed,
+      :norad_reassigned,
+      :sp3_id_changed,
+      :svn_changed,
+      :activity_changed,
+      :usability_changed
+    ]
+    defstruct [
+      :added,
+      :removed,
+      :norad_reassigned,
+      :sp3_id_changed,
+      :svn_changed,
+      :activity_changed,
+      :usability_changed
+    ]
+
+    @type record_change(value) :: %{
+            required(:system) => :gps,
+            required(:prn) => pos_integer(),
+            required(:from) => value,
+            required(:to) => value
+          }
+
+    @type t :: %__MODULE__{
+            added: [Record.t()],
+            removed: [Record.t()],
+            norad_reassigned: [record_change(pos_integer())],
+            sp3_id_changed: [record_change(String.t())],
+            svn_changed: [record_change(pos_integer() | nil)],
+            activity_changed: [record_change(boolean())],
+            usability_changed: [record_change(boolean())]
+          }
+  end
+
   @type error ::
           {:error, {:unsupported_system, term()}}
           | {:error, {:bad_celestrak_record, term(), map()}}
@@ -287,6 +329,70 @@ defmodule Orbis.GNSS.Constellation do
   defp format_bool(value, _lower), do: to_string(value)
 
   @doc """
+  Compare two constellation catalog snapshots by `{system, prn}` identity.
+
+  The result separates added/removed PRNs from identity/status changes on a PRN
+  that exists in both snapshots.
+
+      iex> previous = [
+      ...>   %Orbis.GNSS.Constellation.Record{
+      ...>     system: :gps,
+      ...>     prn: 3,
+      ...>     svn: 69,
+      ...>     norad_id: 40294,
+      ...>     sp3_id: "G03",
+      ...>     active?: true,
+      ...>     usable?: true,
+      ...>     source: %{}
+      ...>   }
+      ...> ]
+      iex> current = [%{hd(previous) | norad_id: 99999, active?: false}]
+      iex> diff = Orbis.GNSS.Constellation.diff(previous, current)
+      iex> [norad] = diff.norad_reassigned
+      iex> {norad.system, norad.prn, norad.from, norad.to}
+      {:gps, 3, 40294, 99999}
+      iex> [activity] = diff.activity_changed
+      iex> {activity.system, activity.prn, activity.from, activity.to}
+      {:gps, 3, true, false}
+      iex> Orbis.GNSS.Constellation.changed?(diff)
+      true
+  """
+  @spec diff([Record.t()], [Record.t()]) :: Diff.t()
+  def diff(previous, current) when is_list(previous) and is_list(current) do
+    previous_by_key = Map.new(previous, &{record_key(&1), &1})
+    current_by_key = Map.new(current, &{record_key(&1), &1})
+
+    previous_keys = previous_by_key |> Map.keys() |> MapSet.new()
+    current_keys = current_by_key |> Map.keys() |> MapSet.new()
+
+    common_keys =
+      previous_keys
+      |> MapSet.intersection(current_keys)
+      |> MapSet.to_list()
+      |> Enum.sort_by(&sort_key/1)
+
+    %Diff{
+      added:
+        current
+        |> Enum.reject(&Map.has_key?(previous_by_key, record_key(&1)))
+        |> Enum.sort_by(&record_sort_key/1),
+      removed:
+        previous
+        |> Enum.reject(&Map.has_key?(current_by_key, record_key(&1)))
+        |> Enum.sort_by(&record_sort_key/1),
+      norad_reassigned: changed_field(common_keys, previous_by_key, current_by_key, :norad_id),
+      sp3_id_changed: changed_field(common_keys, previous_by_key, current_by_key, :sp3_id),
+      svn_changed: changed_field(common_keys, previous_by_key, current_by_key, :svn),
+      activity_changed: changed_field(common_keys, previous_by_key, current_by_key, :active?),
+      usability_changed: changed_field(common_keys, previous_by_key, current_by_key, :usable?)
+    }
+  end
+
+  def diff(_previous, _current) do
+    raise ArgumentError, "Orbis.GNSS.Constellation.diff/2 expects two record lists"
+  end
+
+  @doc """
   Validate catalog identity without an SP3 product.
 
   Reports duplicate PRNs, duplicate NORAD ids, and PRNs that are inactive or
@@ -318,6 +424,16 @@ defmodule Orbis.GNSS.Constellation do
     report.missing_sp3_ids == [] and report.duplicate_prns == [] and
       report.duplicate_norad_ids == [] and report.inactive_unusable_prns == [] and
       report.extra_sp3_ids == []
+  end
+
+  @doc """
+  Returns `true` when a constellation diff has any findings.
+  """
+  @spec changed?(Diff.t()) :: boolean()
+  def changed?(%Diff{} = diff) do
+    diff.added != [] or diff.removed != [] or diff.norad_reassigned != [] or
+      diff.sp3_id_changed != [] or diff.svn_changed != [] or diff.activity_changed != [] or
+      diff.usability_changed != []
   end
 
   @doc """
@@ -653,6 +769,28 @@ defmodule Orbis.GNSS.Constellation do
   end
 
   defp operational?(%Record{} = record), do: record.active? and record.usable?
+
+  # --- catalog diff --------------------------------------------------------
+
+  defp changed_field(keys, previous_by_key, current_by_key, field) do
+    Enum.flat_map(keys, fn key ->
+      previous = Map.fetch!(previous_by_key, key)
+      current = Map.fetch!(current_by_key, key)
+      from = Map.fetch!(previous, field)
+      to = Map.fetch!(current, field)
+
+      if from == to do
+        []
+      else
+        {system, prn} = key
+        [%{system: system, prn: prn, from: from, to: to}]
+      end
+    end)
+  end
+
+  defp record_key(%Record{} = record), do: {record.system, record.prn}
+  defp record_sort_key(%Record{} = record), do: sort_key(record_key(record))
+  defp sort_key({system, prn}), do: {system, prn}
 
   # --- scalar helpers ------------------------------------------------------
 
