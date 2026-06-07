@@ -1630,9 +1630,30 @@ defmodule Orbis.GNSS.RTK do
   # the diagonal terms become satellite-specific but the reference covariance
   # remains shared by every row.
   defp double_difference_inverse_covariance(rows) do
-    covariance = double_difference_covariance(rows)
-    {:ok, inverse} = invert_matrix(covariance)
-    inverse
+    if constant_double_difference_variance?(rows) do
+      equal_double_difference_inverse_covariance(length(rows), hd(rows).sd_variance_m2)
+    else
+      covariance = double_difference_covariance(rows)
+      {:ok, inverse} = invert_matrix(covariance)
+      inverse
+    end
+  end
+
+  defp constant_double_difference_variance?(rows) do
+    first = hd(rows).sd_variance_m2
+
+    Enum.all?(rows, fn row ->
+      row.sd_variance_m2 == first and row.ref_sd_variance_m2 == first
+    end)
+  end
+
+  defp equal_double_difference_inverse_covariance(m, sd_variance_m2) do
+    diagonal_scale = 1.0 / sd_variance_m2 * (1.0 - 1.0 / (m + 1.0))
+    off_diagonal = -1.0 / (sd_variance_m2 * (m + 1.0))
+
+    for i <- 0..(m - 1) do
+      for j <- 0..(m - 1), do: if(i == j, do: diagonal_scale, else: off_diagonal)
+    end
   end
 
   defp double_difference_covariance(rows) do
