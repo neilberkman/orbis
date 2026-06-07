@@ -67,6 +67,7 @@ defmodule Orbis.GNSS.RTK do
   @default_integer_ratio_threshold 3.0
   @default_integer_candidate_limit 50_000
   @default_cycle_slip_policy :error
+  @min_elevation_sin 0.05
 
   defmodule FloatBaselineSolution do
     @moduledoc """
@@ -124,7 +125,9 @@ defmodule Orbis.GNSS.RTK do
               measurement_covariance: %{
                 model: :double_difference,
                 code_sigma_m: float(),
-                phase_sigma_m: float()
+                phase_sigma_m: float(),
+                elevation_weighting: boolean(),
+                min_elevation_sin: float()
               },
               code_rms_m: float(),
               phase_rms_m: float(),
@@ -195,7 +198,9 @@ defmodule Orbis.GNSS.RTK do
               required(:measurement_covariance) => %{
                 model: :double_difference,
                 code_sigma_m: float(),
-                phase_sigma_m: float()
+                phase_sigma_m: float(),
+                elevation_weighting: boolean(),
+                min_elevation_sin: float()
               },
               required(:ambiguity_search) => %{
                 order: [String.t()],
@@ -313,6 +318,10 @@ defmodule Orbis.GNSS.RTK do
       `{:error, {:cycle_slip_detected, receiver, sat, epoch, [:lli]}}`
       (default); `:drop_satellite` removes that satellite from the arc;
       `:split_arc` starts a new ambiguity arc at the slipped epoch.
+    * `:elevation_weighting` - when `true`, scales each undifferenced
+      measurement sigma by `1 / max(sin(elevation), #{@min_elevation_sin})`
+      before propagating the double-difference covariance. Default `false`
+      preserves the constant-sigma, transcendental-free solve path.
     * `:max_iterations`, `:position_tolerance_m`,
       `:ambiguity_tolerance_m`.
 
@@ -804,13 +813,13 @@ defmodule Orbis.GNSS.RTK do
 
   defp baseline_weights(opts) do
     with {:ok, code_sigma_m} <- measurement_sigma(opts, :code_sigma_m, @default_code_sigma_m),
-         {:ok, phase_sigma_m} <- measurement_sigma(opts, :phase_sigma_m, @default_phase_sigma_m) do
+         {:ok, phase_sigma_m} <- measurement_sigma(opts, :phase_sigma_m, @default_phase_sigma_m),
+         {:ok, elevation_weighting?} <- elevation_weighting(opts) do
       {:ok,
        %{
          code_sigma_m: code_sigma_m,
          phase_sigma_m: phase_sigma_m,
-         code_dd_weight: 1.0 / (2.0 * code_sigma_m),
-         phase_dd_weight: 1.0 / (2.0 * phase_sigma_m)
+         elevation_weighting?: elevation_weighting?
        }}
     end
   end
@@ -821,6 +830,13 @@ defmodule Orbis.GNSS.RTK do
     if is_number(sigma) and sigma > 0.0,
       do: {:ok, sigma / 1.0},
       else: {:error, {:invalid_sigma, key}}
+  end
+
+  defp elevation_weighting(opts) do
+    case Keyword.get(opts, :elevation_weighting, false) do
+      value when is_boolean(value) -> {:ok, value}
+      _other -> {:error, {:invalid_option, :elevation_weighting}}
+    end
   end
 
   defp initial_baseline(opts) do
@@ -1043,6 +1059,8 @@ defmodule Orbis.GNSS.RTK do
       ambiguity = Map.fetch!(state.ambiguities, ambiguity_id)
       h_base = design_baseline_row(deriv, nil, ambiguity_ids)
       h_phase = design_baseline_row(deriv, ambiguity_id, ambiguity_ids)
+      code_variance = row_variance(weights, :code, base, sat_pos, ref_pos)
+      phase_variance = row_variance(weights, :phase, base, sat_pos, ref_pos)
 
       code_row = %{
         kind: :code,
@@ -1052,8 +1070,9 @@ defmodule Orbis.GNSS.RTK do
         ambiguity_id: ambiguity_id,
         h: h_base,
         y: obs_dd.code_m - geom_dd,
-        sigma_m: weights.code_sigma_m,
-        weight: weights.code_dd_weight
+        sd_variance_m2: code_variance.sd_variance_m2,
+        ref_sd_variance_m2: code_variance.ref_sd_variance_m2,
+        weight: code_variance.weight
       }
 
       phase_row = %{
@@ -1064,8 +1083,9 @@ defmodule Orbis.GNSS.RTK do
         ambiguity_id: ambiguity_id,
         h: h_phase,
         y: obs_dd.phase_m - (geom_dd + ambiguity),
-        sigma_m: weights.phase_sigma_m,
-        weight: weights.phase_dd_weight
+        sd_variance_m2: phase_variance.sd_variance_m2,
+        ref_sd_variance_m2: phase_variance.ref_sd_variance_m2,
+        weight: phase_variance.weight
       }
 
       {:ok, [phase_row, code_row | acc]}
@@ -1121,6 +1141,38 @@ defmodule Orbis.GNSS.RTK do
     sat_deriv = range_derivative(rover, sat_pos)
     ref_deriv = range_derivative(rover, ref_pos)
     {sat_sd - ref_sd, sub3(sat_deriv, ref_deriv)}
+  end
+
+  defp row_variance(weights, kind, base, sat_pos, ref_pos) do
+    sigma =
+      case kind do
+        :code -> weights.code_sigma_m
+        :phase -> weights.phase_sigma_m
+      end
+
+    sat_sd_variance =
+      single_difference_variance(sigma, weights.elevation_weighting?, base, sat_pos)
+
+    ref_sd_variance =
+      single_difference_variance(sigma, weights.elevation_weighting?, base, ref_pos)
+
+    dd_variance = sat_sd_variance + ref_sd_variance
+
+    %{
+      sd_variance_m2: sat_sd_variance,
+      ref_sd_variance_m2: ref_sd_variance,
+      weight: 1.0 / :math.sqrt(dd_variance)
+    }
+  end
+
+  defp single_difference_variance(sigma_m, false, _base, _sat_pos) do
+    2.0 * sigma_m * sigma_m
+  end
+
+  defp single_difference_variance(sigma_m, true, base, sat_pos) do
+    sin_el = elevation_sin(base, sat_pos) |> max(@min_elevation_sin)
+    scaled_sigma = sigma_m / sin_el
+    2.0 * scaled_sigma * scaled_sigma
   end
 
   defp design_baseline_row({dx, dy, dz}, ambiguity_id, ambiguity_ids) do
@@ -1222,7 +1274,9 @@ defmodule Orbis.GNSS.RTK do
            measurement_covariance: %{
              model: :double_difference,
              code_sigma_m: weights.code_sigma_m,
-             phase_sigma_m: weights.phase_sigma_m
+             phase_sigma_m: weights.phase_sigma_m,
+             elevation_weighting: weights.elevation_weighting?,
+             min_elevation_sin: @min_elevation_sin
            },
            code_rms_m: rms(code_residuals),
            phase_rms_m: rms(phase_residuals),
@@ -1412,6 +1466,8 @@ defmodule Orbis.GNSS.RTK do
       h = tuple3_to_list(deriv)
       ambiguity_id = obs_dd.ambiguity_id
       fixed = Map.fetch!(fixed_m, ambiguity_id)
+      code_variance = row_variance(weights, :code, base, sat_pos, ref_pos)
+      phase_variance = row_variance(weights, :phase, base, sat_pos, ref_pos)
 
       code_row = %{
         kind: :code,
@@ -1421,8 +1477,9 @@ defmodule Orbis.GNSS.RTK do
         ambiguity_id: ambiguity_id,
         h: h,
         y: obs_dd.code_m - geom_dd,
-        sigma_m: weights.code_sigma_m,
-        weight: weights.code_dd_weight
+        sd_variance_m2: code_variance.sd_variance_m2,
+        ref_sd_variance_m2: code_variance.ref_sd_variance_m2,
+        weight: code_variance.weight
       }
 
       phase_row = %{
@@ -1433,8 +1490,9 @@ defmodule Orbis.GNSS.RTK do
         ambiguity_id: ambiguity_id,
         h: h,
         y: obs_dd.phase_m - (geom_dd + fixed),
-        sigma_m: weights.phase_sigma_m,
-        weight: weights.phase_dd_weight
+        sd_variance_m2: phase_variance.sd_variance_m2,
+        ref_sd_variance_m2: phase_variance.ref_sd_variance_m2,
+        weight: phase_variance.weight
       }
 
       {:ok, [phase_row, code_row | acc]}
@@ -1511,7 +1569,9 @@ defmodule Orbis.GNSS.RTK do
              measurement_covariance: %{
                model: :double_difference,
                code_sigma_m: weights.code_sigma_m,
-               phase_sigma_m: weights.phase_sigma_m
+               phase_sigma_m: weights.phase_sigma_m,
+               elevation_weighting: weights.elevation_weighting?,
+               min_elevation_sin: @min_elevation_sin
              }
            })
        }}
@@ -1554,28 +1614,39 @@ defmodule Orbis.GNSS.RTK do
     |> Enum.sort_by(fn {{epoch_idx, kind}, _rows} -> {epoch_idx, kind} end)
     |> Enum.map(fn {_key, block_rows} ->
       rows = Enum.sort_by(block_rows, & &1.sat)
-      sigma_m = rows |> hd() |> Map.fetch!(:sigma_m)
 
       %{
         rows: rows,
-        inverse_covariance: double_difference_inverse_covariance(length(rows), sigma_m)
+        inverse_covariance: double_difference_inverse_covariance(rows)
       }
     end)
   end
 
-  # For one epoch and one measurement kind, DD_i = SD_i - SD_ref. With
-  # independent receiver observations of sigma^2 at each station, each single
-  # difference has variance 2*sigma^2. Therefore the double-difference
-  # covariance is v*(I + J), where v = 2*sigma^2: diagonal 4*sigma^2 and
-  # off-diagonal 2*sigma^2 because every DD shares the same reference SD.
-  defp double_difference_inverse_covariance(m, sigma_m) do
-    sd_variance = 2.0 * sigma_m * sigma_m
-    diagonal_scale = 1.0 / sd_variance * (1.0 - 1.0 / (m + 1.0))
-    off_diagonal = -1.0 / (sd_variance * (m + 1.0))
+  # For one epoch and one measurement kind, DD_i = SD_i - SD_ref. Independent
+  # receiver observations give each satellite single-difference variance
+  # `row.sd_variance_m2`; all DD rows in the block share the same reference
+  # single difference with variance `row.ref_sd_variance_m2`. With constant
+  # sigmas this is the familiar v*(I + J) covariance; with elevation weighting,
+  # the diagonal terms become satellite-specific but the reference covariance
+  # remains shared by every row.
+  defp double_difference_inverse_covariance(rows) do
+    covariance = double_difference_covariance(rows)
+    {:ok, inverse} = invert_matrix(covariance)
+    inverse
+  end
 
-    for i <- 0..(m - 1) do
-      for j <- 0..(m - 1), do: if(i == j, do: diagonal_scale, else: off_diagonal)
-    end
+  defp double_difference_covariance(rows) do
+    ref_variance = rows |> hd() |> Map.fetch!(:ref_sd_variance_m2)
+
+    rows
+    |> Enum.with_index()
+    |> Enum.map(fn {row, i} ->
+      rows
+      |> Enum.with_index()
+      |> Enum.map(fn {_other, j} ->
+        if i == j, do: row.sd_variance_m2 + ref_variance, else: ref_variance
+      end)
+    end)
   end
 
   defp baseline_ambiguity_covariance(rows, n, start, n_ambiguities) do
@@ -1764,6 +1835,15 @@ defmodule Orbis.GNSS.RTK do
       end)
 
     Enum.sum(scores) / length(scores)
+  end
+
+  defp elevation_sin(base, sat_pos) do
+    {:ok, up} = local_up(base)
+
+    case unit3(sub3(sat_pos, base)) do
+      {:ok, los} -> dot3(los, up)
+      :zero -> -1.0
+    end
   end
 
   defp local_up(base) do

@@ -35,6 +35,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   handled with `on_cycle_slip: :error | :drop_satellite | :split_arc`. Split
   arcs reset the affected double-difference ambiguity while residuals keep the
   physical satellite id.
+- `Orbis.GNSS.RTK.solve_float_baseline_epochs/3` and
+  `solve_fixed_baseline_epochs/3` now accept `elevation_weighting: true`, which
+  scales each undifferenced measurement sigma by
+  `1 / max(sin(elevation), 0.05)` before propagating the correlated
+  double-difference covariance.
 - `Orbis.GNSS.PrecisePositioning.solve_widelane_fixed_epochs/3` now supports
   `on_cycle_slip: :split_arc`, which resets a satellite's carrier ambiguity at
   detected cycle slips and keeps any post-slip fragments long enough for

@@ -180,7 +180,9 @@ defmodule Orbis.GNSS.RTKTest do
       assert sol.metadata.measurement_covariance == %{
                model: :double_difference,
                code_sigma_m: 1.0,
-               phase_sigma_m: 0.02
+               phase_sigma_m: 0.02,
+               elevation_weighting: false,
+               min_elevation_sin: 0.05
              }
 
       assert sol.metadata.ambiguity_float.order == sol.used_sats
@@ -228,6 +230,38 @@ defmodule Orbis.GNSS.RTKTest do
       assert sol.used_sats == ["G01", "G02", "G04"]
       assert sol.metadata.dropped_sats == ["G05"]
       assert position_error(sol.baseline_m, @truth_baseline) < 1.0e-4
+    end
+
+    test "can use elevation-dependent stochastic weighting" do
+      epochs =
+        @sat_positions
+        |> Enum.with_index()
+        |> Enum.map(fn {positions, idx} ->
+          synthetic_baseline_epoch(@base, @truth_baseline, positions,
+            epoch: idx,
+            ambiguities_m: @ambiguities
+          )
+        end)
+
+      assert {:ok, unweighted} =
+               RTK.solve_float_baseline_epochs(@base, epochs,
+                 reference_satellite_id: "G01",
+                 initial_baseline_m: {-40.0, 35.0, 12.0}
+               )
+
+      assert {:ok, weighted} =
+               RTK.solve_float_baseline_epochs(@base, epochs,
+                 reference_satellite_id: "G01",
+                 elevation_weighting: true,
+                 initial_baseline_m: {-40.0, 35.0, 12.0}
+               )
+
+      assert weighted.metadata.measurement_covariance.elevation_weighting
+
+      refute unweighted.metadata.ambiguity_float.covariance_m ==
+               weighted.metadata.ambiguity_float.covariance_m
+
+      assert position_error(weighted.baseline_m, @truth_baseline) < 1.0e-5
     end
 
     test "defaults to an error on LLI cycle slips" do
@@ -346,6 +380,9 @@ defmodule Orbis.GNSS.RTKTest do
 
       assert RTK.solve_float_baseline_epochs(@base, [epoch], on_cycle_slip: :bad) ==
                {:error, {:invalid_option, :on_cycle_slip}}
+
+      assert RTK.solve_float_baseline_epochs(@base, [epoch], elevation_weighting: :bad) ==
+               {:error, {:invalid_option, :elevation_weighting}}
     end
   end
 
