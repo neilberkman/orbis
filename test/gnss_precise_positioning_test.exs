@@ -21,7 +21,11 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
   @epoch_clocks_m [12.5, -8.25, 4.0]
   @met %{pressure_hpa: 1013.25, temperature_k: 288.15, relative_humidity: 0.5}
   @c 299_792_458.0
-  @l1_wavelength_m @c / 1_575_420_000.0
+  @f_l1 1_575_420_000.0
+  @f_l2 1_227_600_000.0
+  @l1_wavelength_m @c / @f_l1
+  @l2_wavelength_m @c / @f_l2
+  @narrow_lane_wavelength_m @c / (@f_l1 + @f_l2)
   @residual_ztd_m 0.18
 
   setup_all do
@@ -75,7 +79,8 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
          troposphere: true,
          residual_ztd_m: @residual_ztd_m
        ),
-     fixed_epoch_observations: synth_fixed_epoch_observations(multi_sats)}
+     fixed_epoch_observations: synth_fixed_epoch_observations(multi_sats),
+     dual_frequency_epoch_observations: synth_dual_frequency_epoch_observations(multi_sats)}
   end
 
   describe "solve_float/4" do
@@ -381,6 +386,110 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
     end
   end
 
+  describe "solve_widelane_fixed_epochs/3" do
+    test "fixes wide-lane then narrow-lane integers from raw dual-frequency observations", ctx do
+      assert {:ok, %FixedSolution{} = sol} =
+               PrecisePositioning.solve_widelane_fixed_epochs(
+                 ctx.sp3,
+                 ctx.dual_frequency_epoch_observations,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 wide_lane_tolerance_cycles: 0.01
+               )
+
+      assert position_error(sol.position, @truth) < 1.0e-3
+      assert sol.metadata.integer_status == :fixed
+      assert sol.metadata.integer_method == :widelane_narrowlane_lambda
+      assert sol.metadata.wide_lane_fixed
+      assert sol.metadata.integer_ratio > 1.0e6
+
+      for {sat, n1} <- true_fixed_cycles(ctx.multi_sats) do
+        nw = true_wide_lane_cycles(ctx.multi_sats)[sat]
+        assert sol.wide_lane_ambiguities_cycles[sat] == nw
+        assert sol.fixed_ambiguities_cycles[sat] == n1
+
+        expected_if_ambiguity_m = narrow_lane_offset_m(nw) + n1 * @narrow_lane_wavelength_m
+        assert abs(sol.fixed_ambiguities_m[sat] - expected_if_ambiguity_m) < 1.0e-9
+      end
+
+      for residual <- sol.residuals_m do
+        assert abs(residual.code_m) < 1.0e-4
+        assert abs(residual.phase_m) < 1.0e-4
+      end
+    end
+
+    test "rejects a wide-lane average that is not close to an integer", ctx do
+      [{bad_sat, _predictions} | _] = ctx.multi_sats
+
+      biased =
+        Enum.map(ctx.dual_frequency_epoch_observations, fn epoch_row ->
+          observations =
+            Enum.map(epoch_row.observations, fn
+              %{satellite_id: ^bad_sat} = obs -> %{obs | p1_m: obs.p1_m + 1.0}
+              obs -> obs
+            end)
+
+          %{epoch_row | observations: observations}
+        end)
+
+      assert {:error, {:wide_lane_not_integer, ^bad_sat, _mean, _fixed}} =
+               PrecisePositioning.solve_widelane_fixed_epochs(ctx.sp3, biased,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 wide_lane_tolerance_cycles: 0.01
+               )
+    end
+
+    test "rejects a malformed wide-lane frequency pair with a tagged error", ctx do
+      [{bad_sat, _predictions} | _] = ctx.multi_sats
+
+      malformed =
+        Enum.map(ctx.dual_frequency_epoch_observations, fn epoch_row ->
+          observations =
+            Enum.map(epoch_row.observations, fn
+              %{satellite_id: ^bad_sat} = obs -> %{obs | f2_hz: obs.f1_hz}
+              obs -> obs
+            end)
+
+          %{epoch_row | observations: observations}
+        end)
+
+      assert {:error, {:wide_lane_failed, ^bad_sat, :equal_frequencies}} =
+               PrecisePositioning.solve_widelane_fixed_epochs(ctx.sp3, malformed,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 gf_threshold_m: 1.0e12
+               )
+    end
+
+    test "rejects a detected cycle slip before fixing integers", ctx do
+      [{bad_sat, _predictions} | _] = ctx.multi_sats
+      slip_epoch = @epoch2
+
+      slipped =
+        Enum.map(ctx.dual_frequency_epoch_observations, fn epoch_row ->
+          observations =
+            Enum.map(epoch_row.observations, fn
+              %{satellite_id: ^bad_sat} = obs ->
+                if NaiveDateTime.compare(epoch_row.epoch, slip_epoch) in [:eq, :gt] do
+                  %{obs | phi1_cyc: obs.phi1_cyc + 8.0}
+                else
+                  obs
+                end
+
+              obs ->
+                obs
+            end)
+
+          %{epoch_row | observations: observations}
+        end)
+
+      assert {:error, {:cycle_slip_detected, ^bad_sat, ^slip_epoch, reasons}} =
+               PrecisePositioning.solve_widelane_fixed_epochs(ctx.sp3, slipped,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0}
+               )
+
+      assert :geometry_free in reasons or :melbourne_wubbena in reasons
+    end
+  end
+
   describe "solve_float/4 errors" do
     test "empty and too-few observation sets are tagged", ctx do
       assert {:error, :no_observations} = PrecisePositioning.solve_float(ctx.sp3, [], @epoch)
@@ -521,6 +630,43 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
     end)
   end
 
+  defp synth_dual_frequency_epoch_observations(multi_sats) do
+    @epochs
+    |> Enum.zip(@epoch_clocks_m)
+    |> Enum.with_index()
+    |> Enum.map(fn {{epoch, clock_m}, epoch_idx} ->
+      observations =
+        Enum.map(multi_sats, fn {sat, predictions} ->
+          {_epoch, obs} =
+            Enum.find(predictions, fn {prediction_epoch, _obs} -> prediction_epoch == epoch end)
+
+          sat_idx = Enum.find_index(multi_sats, fn {candidate, _} -> candidate == sat end)
+          base = obs.geometric_range_m - @c * obs.sat_clock_s + clock_m
+
+          # First-order ionosphere: code delay is positive, carrier phase advance
+          # is negative, and the second band scales as 1/f^2.
+          iono1_m = 2.0 + 0.05 * epoch_idx + 0.02 * sat_idx
+          iono2_m = iono1_m * :math.pow(@f_l1 / @f_l2, 2)
+          n1 = fixed_ambiguity_cycles(sat_idx)
+          n2 = n1 - wide_lane_cycles(sat_idx)
+
+          %{
+            satellite_id: sat,
+            p1_m: base + iono1_m,
+            p2_m: base + iono2_m,
+            phi1_cyc: (base - iono1_m + n1 * @l1_wavelength_m) / @l1_wavelength_m,
+            phi2_cyc: (base - iono2_m + n2 * @l2_wavelength_m) / @l2_wavelength_m,
+            f1_hz: @f_l1,
+            f2_hz: @f_l2,
+            lli1: 0,
+            lli2: 0
+          }
+        end)
+
+      %{epoch: epoch, observations: observations}
+    end)
+  end
+
   defp synthetic_tropo_m(prediction, epoch, opts) do
     if Keyword.get(opts, :troposphere, false) do
       {x, y, z} = @truth
@@ -564,11 +710,23 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
 
   defp ambiguity_m(idx), do: 15_000.0 + idx * 17.25
   defp fixed_ambiguity_cycles(idx), do: 80_000 + idx * 37
+  defp wide_lane_cycles(idx), do: 12 + idx * 3
+
+  defp narrow_lane_offset_m(wide_lane_cycles) do
+    {:ok, gamma} = Orbis.GNSS.IonosphereFree.gamma(@f_l1, @f_l2)
+    (gamma - 1.0) * @l2_wavelength_m * wide_lane_cycles
+  end
 
   defp true_fixed_cycles(sats) do
     sats
     |> Enum.with_index()
     |> Map.new(fn {{sat, _obs}, idx} -> {sat, fixed_ambiguity_cycles(idx)} end)
+  end
+
+  defp true_wide_lane_cycles(sats) do
+    sats
+    |> Enum.with_index()
+    |> Map.new(fn {{sat, _obs}, idx} -> {sat, wide_lane_cycles(idx)} end)
   end
 
   defp position_error(%{x_m: x, y_m: y, z_m: z}, {tx, ty, tz}) do

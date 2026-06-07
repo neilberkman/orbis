@@ -30,6 +30,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   with the selected ambiguities held fixed. The fixed solution reports the
   integer method, ratio-test status, weighted scores, and evaluated candidate
   count.
+- `Orbis.GNSS.PrecisePositioning.solve_widelane_fixed_epochs/3`, a
+  dual-frequency convenience layer that fixes Melbourne-Wubbena wide-lane
+  integers first, then uses LAMBDA on the remaining narrow-lane integer while
+  returning both ambiguity sets.
 - `Orbis.GNSS.PrecisePositioning` can now apply an opt-in a-priori
   Saastamoinen/Niell tropospheric slant delay to ionosphere-free code and phase
   observations (`troposphere: true` with surface meteorology options), including

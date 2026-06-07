@@ -27,9 +27,10 @@ defmodule Orbis.GNSS.PrecisePositioning do
   `solve_fixed_epochs/3` starts from the same multi-epoch float model, searches
   integer ambiguity candidates on an explicit caller-supplied wavelength grid,
   then re-solves position and per-epoch clocks with those ambiguities held
-  fixed. It is intentionally explicit about wavelengths because an
-  ionosphere-free carrier phase in metres has no universal integer grid unless
-  the caller supplies the effective combination wavelength.
+  fixed. `solve_widelane_fixed_epochs/3` is the dual-frequency convenience path:
+  it fixes the Melbourne-Wubbena wide-lane integer first, subtracts that known
+  contribution from the ionosphere-free phase ambiguity, then uses LAMBDA on the
+  remaining narrow-lane integer.
 
   ## Observation shape
 
@@ -45,7 +46,9 @@ defmodule Orbis.GNSS.PrecisePositioning do
   """
 
   alias Orbis.Coordinates
+  alias Orbis.GNSS.CarrierPhase
   alias Orbis.GNSS.Core.Constants
+  alias Orbis.GNSS.IonosphereFree
   alias Orbis.GNSS.Observables
   alias Orbis.GNSS.Positioning
   alias Orbis.GNSS.SP3
@@ -185,6 +188,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
       :epoch_clocks,
       :fixed_ambiguities_cycles,
       :fixed_ambiguities_m,
+      :wide_lane_ambiguities_cycles,
       :ztd_residual_m,
       :float_solution,
       :residuals_m,
@@ -197,6 +201,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
       :epoch_clocks,
       :fixed_ambiguities_cycles,
       :fixed_ambiguities_m,
+      :wide_lane_ambiguities_cycles,
       :ztd_residual_m,
       :float_solution,
       :residuals_m,
@@ -225,6 +230,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
             epoch_clocks: [epoch_clock()],
             fixed_ambiguities_cycles: %{String.t() => integer()},
             fixed_ambiguities_m: %{String.t() => float()},
+            wide_lane_ambiguities_cycles: %{String.t() => integer()} | nil,
             ztd_residual_m: float() | nil,
             float_solution: MultiEpochSolution.t(),
             residuals_m: [residual()],
@@ -240,7 +246,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
               phase_rms_m: float(),
               weighted_rms_m: float(),
               integer_status: :fixed | :not_fixed,
-              integer_method: :lambda,
+              integer_method: :lambda | :widelane_narrowlane_lambda,
               integer_ratio: float() | :infinity,
               integer_best_score: float(),
               integer_second_best_score: float() | nil,
@@ -256,6 +262,19 @@ defmodule Orbis.GNSS.PrecisePositioning do
           %{satellite_id: String.t(), code_m: number(), phase_m: number()}
           | {String.t(), number(), number()}
 
+  @typedoc "Raw dual-frequency code/phase observation for wide-lane/narrow-lane fixing."
+  @type dual_frequency_observation :: %{
+          required(:satellite_id) => String.t(),
+          required(:p1_m) => number(),
+          required(:p2_m) => number(),
+          required(:phi1_cyc) => number(),
+          required(:phi2_cyc) => number(),
+          required(:f1_hz) => number(),
+          required(:f2_hz) => number(),
+          optional(:lli1) => integer() | nil,
+          optional(:lli2) => integer() | nil
+        }
+
   @typedoc "A receiver ECEF position in metres."
   @type receiver ::
           {number(), number(), number()} | %{x_m: number(), y_m: number(), z_m: number()}
@@ -264,6 +283,11 @@ defmodule Orbis.GNSS.PrecisePositioning do
   @type epoch_observations ::
           %{epoch: NaiveDateTime.t(), observations: [observation()]}
           | {NaiveDateTime.t(), [observation()]}
+
+  @typedoc "A set of raw dual-frequency observations for one epoch."
+  @type dual_frequency_epoch_observations ::
+          %{epoch: NaiveDateTime.t(), observations: [dual_frequency_observation()]}
+          | {NaiveDateTime.t(), [dual_frequency_observation()]}
 
   @doc """
   Solve a float-ambiguity carrier-phase position for one SP3-backed epoch.
@@ -401,6 +425,10 @@ defmodule Orbis.GNSS.PrecisePositioning do
     * `:integer_candidate_limit` - maximum candidates to evaluate before
       returning `{:error, {:too_many_integer_candidates, count, limit}}`
       (default `50_000`).
+    * `:ambiguity_offset_m` - optional scalar or `%{"G05" => offset_m, ...}` map
+      subtracted from each float ambiguity before converting to cycles and added
+      back after fixing (default `0.0`). This is mainly for affine carrier-phase
+      combinations such as wide-lane/narrow-lane fixing.
 
   The fixed solution is returned even when the ratio test is not met; in that
   case `metadata.integer_status` is `:not_fixed` so callers can reject it.
@@ -419,17 +447,19 @@ defmodule Orbis.GNSS.PrecisePositioning do
          {:ok, integer_opts} <- integer_options(opts),
          {:ok, float_sol} <- solve_float_epochs(sp3, epochs, opts),
          {:ok, wavelengths} <- ambiguity_wavelengths(float_sol.used_sats, opts),
+         {:ok, offsets} <- ambiguity_offsets(float_sol.used_sats, opts),
          {:ok, fixed_cycles, fixed_meta} <-
            search_integer_ambiguities(
              sp3,
              epochs,
              float_sol,
              wavelengths,
+             offsets,
              weights,
              tropo,
              integer_opts
            ),
-         fixed_m = fixed_ambiguities_m(fixed_cycles, wavelengths),
+         fixed_m = fixed_ambiguities_m(fixed_cycles, wavelengths, offsets),
          state = fixed_state_from_float(float_sol),
          {:ok, fixed_state, iterations, converged, status} <-
            iterate_fixed_multi(sp3, epochs, fixed_m, state, weights, tropo, solve_opts, 1) do
@@ -452,6 +482,77 @@ defmodule Orbis.GNSS.PrecisePositioning do
   end
 
   def solve_fixed_epochs(%SP3{}, _epoch_observations, _opts), do: {:error, :no_epochs}
+
+  @doc """
+  Solve a static multi-epoch position from raw dual-frequency observations by
+  fixing wide-lane then narrow-lane ambiguities.
+
+  This is the real-data convenience layer above `solve_fixed_epochs/3`. Each
+  observation must carry both code and carrier phase on two bands:
+
+      %{
+        satellite_id: "G05",
+        p1_m: 24_000_000.0,
+        p2_m: 24_000_004.0,
+        phi1_cyc: 123_456_789.0,
+        phi2_cyc: 96_123_456.0,
+        f1_hz: 1_575_420_000.0,
+        f2_hz: 1_227_600_000.0,
+        lli1: 0,
+        lli2: 0
+      }
+
+  For each satellite the function first estimates the Melbourne-Wubbena
+  wide-lane integer `Nw = N1 - N2` over the arc. It then forms ionosphere-free
+  code/phase observations and fixes the remaining band-1 narrow-lane integer
+  with LAMBDA using `lambda_NL = c / (f1 + f2)`. The returned
+  `fixed_ambiguities_cycles` are those band-1 narrow-lane integers; the
+  wide-lane integers are exposed as `wide_lane_ambiguities_cycles`.
+
+  ## Options
+
+  Accepts the same solve and integer-search options as `solve_fixed_epochs/3`,
+  plus:
+
+    * `:wide_lane_min_epochs` - minimum usable Melbourne-Wubbena epochs per
+      satellite (default `2`).
+    * `:wide_lane_tolerance_cycles` - maximum absolute distance between the
+      averaged wide-lane float value and the nearest integer (default `0.5`
+      cycles).
+
+  Cycle slips are detected with `Orbis.GNSS.CarrierPhase.detect_cycle_slips/2`;
+  pass `:gf_threshold_m` / `:mw_threshold_cycles` to tune that detector.
+  """
+  @spec solve_widelane_fixed_epochs(SP3.t(), [dual_frequency_epoch_observations()], keyword()) ::
+          {:ok, FixedSolution.t()} | {:error, term()}
+  def solve_widelane_fixed_epochs(source, dual_epoch_observations, opts \\ [])
+
+  def solve_widelane_fixed_epochs(%SP3{} = sp3, dual_epoch_observations, opts)
+      when is_list(dual_epoch_observations) do
+    with {:ok, dual_epochs} <- normalize_dual_epoch_observations(dual_epoch_observations),
+         {:ok, wide_lane_cycles} <- wide_lane_ambiguities(dual_epochs, opts),
+         {:ok, if_epochs, wavelengths, offsets} <-
+           ionosphere_free_narrow_lane_epochs(dual_epochs, wide_lane_cycles),
+         fixed_opts =
+           opts
+           |> Keyword.put(:ambiguity_wavelength_m, wavelengths)
+           |> Keyword.put(:ambiguity_offset_m, offsets),
+         {:ok, %FixedSolution{} = sol} <- solve_fixed_epochs(sp3, if_epochs, fixed_opts) do
+      {:ok,
+       %{
+         sol
+         | wide_lane_ambiguities_cycles: wide_lane_cycles,
+           metadata:
+             Map.merge(sol.metadata, %{
+               integer_method: :widelane_narrowlane_lambda,
+               wide_lane_fixed: true
+             })
+       }}
+    end
+  end
+
+  def solve_widelane_fixed_epochs(%SP3{}, _dual_epoch_observations, _opts),
+    do: {:error, :no_epochs}
 
   # --- input normalization -------------------------------------------------
 
@@ -539,6 +640,104 @@ defmodule Orbis.GNSS.PrecisePositioning do
   defp ensure_epoch_enough(_epoch, obs) when length(obs) >= 4, do: :ok
 
   defp ensure_epoch_enough(epoch, obs),
+    do: {:error, {:too_few_epoch_observations, epoch, length(obs), 4}}
+
+  defp normalize_dual_epoch_observations([]), do: {:error, :no_epochs}
+
+  defp normalize_dual_epoch_observations(epoch_observations) do
+    epoch_observations
+    |> Enum.reduce_while({:ok, [], MapSet.new()}, fn entry, {:ok, acc, seen} ->
+      case normalize_dual_epoch_entry(entry) do
+        {:ok, epoch, observations} ->
+          if MapSet.member?(seen, epoch) do
+            {:halt, {:error, {:duplicate_epoch, epoch}}}
+          else
+            with {:ok, obs} <- normalize_dual_observations(observations),
+                 :ok <- ensure_dual_epoch_enough(epoch, obs) do
+              {:cont, {:ok, [%{epoch: epoch, observations: obs} | acc], MapSet.put(seen, epoch)}}
+            else
+              {:error, _} = err -> {:halt, err}
+            end
+          end
+
+        {:error, _} = err ->
+          {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, acc, _seen} ->
+        {:ok, Enum.sort_by(acc, &NaiveDateTime.to_iso8601(&1.epoch))}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp normalize_dual_epoch_entry(%{epoch: %NaiveDateTime{} = epoch, observations: observations})
+       when is_list(observations), do: {:ok, epoch, observations}
+
+  defp normalize_dual_epoch_entry({%NaiveDateTime{} = epoch, observations})
+       when is_list(observations), do: {:ok, epoch, observations}
+
+  defp normalize_dual_epoch_entry(entry), do: {:error, {:invalid_epoch_observations, entry}}
+
+  defp normalize_dual_observations(observations) do
+    observations
+    |> Enum.reduce_while({:ok, [], MapSet.new()}, fn entry, {:ok, acc, seen} ->
+      case normalize_dual_one(entry) do
+        {:ok, %{satellite_id: sat} = obs} ->
+          if MapSet.member?(seen, sat) do
+            {:halt, {:error, {:duplicate_observation, sat}}}
+          else
+            {:cont, {:ok, [obs | acc], MapSet.put(seen, sat)}}
+          end
+
+        {:error, _} = err ->
+          {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, acc, _seen} ->
+        {:ok, acc |> Enum.reverse() |> Enum.sort_by(& &1.satellite_id)}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp normalize_dual_one(
+         %{
+           satellite_id: sat,
+           p1_m: p1,
+           p2_m: p2,
+           phi1_cyc: phi1,
+           phi2_cyc: phi2,
+           f1_hz: f1,
+           f2_hz: f2
+         } = obs
+       )
+       when is_binary(sat) and is_number(p1) and is_number(p2) and is_number(phi1) and
+              is_number(phi2) and is_number(f1) and is_number(f2) and f1 > 0.0 and f2 > 0.0 do
+    {:ok,
+     %{
+       satellite_id: sat,
+       p1_m: p1 / 1.0,
+       p2_m: p2 / 1.0,
+       phi1_cyc: phi1 / 1.0,
+       phi2_cyc: phi2 / 1.0,
+       f1_hz: f1 / 1.0,
+       f2_hz: f2 / 1.0,
+       lli1: Map.get(obs, :lli1),
+       lli2: Map.get(obs, :lli2),
+       raw: obs
+     }}
+  end
+
+  defp normalize_dual_one(entry), do: {:error, {:invalid_dual_frequency_observation, entry}}
+
+  defp ensure_dual_epoch_enough(_epoch, obs) when length(obs) >= 4, do: :ok
+
+  defp ensure_dual_epoch_enough(epoch, obs),
     do: {:error, {:too_few_epoch_observations, epoch, length(obs), 4}}
 
   defp ensure_multi_enough(epochs, _tropo) when length(epochs) < 2,
@@ -710,6 +909,236 @@ defmodule Orbis.GNSS.PrecisePositioning do
 
       :error ->
         {:error, :ambiguity_wavelength_required}
+    end
+  end
+
+  defp ambiguity_offsets(sat_ids, opts) do
+    case Keyword.fetch(opts, :ambiguity_offset_m) do
+      {:ok, offset} when is_number(offset) ->
+        {:ok, Map.new(sat_ids, &{&1, offset / 1.0})}
+
+      {:ok, offset_by_sat} when is_map(offset_by_sat) ->
+        sat_ids
+        |> Enum.reduce_while({:ok, %{}}, fn sat, {:ok, acc} ->
+          case Map.fetch(offset_by_sat, sat) do
+            {:ok, value} when is_number(value) ->
+              {:cont, {:ok, Map.put(acc, sat, value / 1.0)}}
+
+            _ ->
+              {:halt, {:error, {:invalid_ambiguity_offset, sat}}}
+          end
+        end)
+
+      {:ok, _other} ->
+        {:error, {:invalid_option, :ambiguity_offset_m}}
+
+      :error ->
+        {:ok, Map.new(sat_ids, &{&1, 0.0})}
+    end
+  end
+
+  defp wide_lane_ambiguities(epochs, opts) do
+    with {:ok, wl_opts} <- wide_lane_options(opts) do
+      arcs =
+        epochs
+        |> Enum.flat_map(fn epoch_row ->
+          Enum.map(epoch_row.observations, &{&1.satellite_id, epoch_row.epoch, &1})
+        end)
+        |> Enum.group_by(fn {sat, _epoch, _obs} -> sat end)
+
+      arcs
+      |> Enum.sort_by(fn {sat, _arc} -> sat end)
+      |> Enum.reduce_while({:ok, %{}}, fn {sat, arc}, {:ok, acc} ->
+        arc = Enum.sort_by(arc, fn {_sat, epoch, _obs} -> NaiveDateTime.to_iso8601(epoch) end)
+
+        with :ok <- ensure_wide_lane_continuity(sat, arc, opts),
+             {:ok, fixed} <- estimate_wide_lane_integer(sat, arc, wl_opts) do
+          {:cont, {:ok, Map.put(acc, sat, fixed)}}
+        else
+          {:error, _} = err -> {:halt, err}
+        end
+      end)
+    end
+  end
+
+  defp wide_lane_options(opts) do
+    min_epochs = Keyword.get(opts, :wide_lane_min_epochs, 2)
+    tolerance = Keyword.get(opts, :wide_lane_tolerance_cycles, 0.5)
+
+    cond do
+      not is_integer(min_epochs) or min_epochs < 1 ->
+        {:error, {:invalid_option, :wide_lane_min_epochs}}
+
+      not is_number(tolerance) or tolerance < 0.0 ->
+        {:error, {:invalid_option, :wide_lane_tolerance_cycles}}
+
+      true ->
+        {:ok, %{min_epochs: min_epochs, tolerance_cycles: tolerance / 1.0}}
+    end
+  end
+
+  defp ensure_wide_lane_continuity(sat, arc, opts) do
+    carrier_arc =
+      Enum.map(arc, fn {_sat, epoch, obs} ->
+        %{
+          epoch: epoch,
+          phi1: obs.phi1_cyc,
+          phi2: obs.phi2_cyc,
+          p1: obs.p1_m,
+          p2: obs.p2_m,
+          f1: obs.f1_hz,
+          f2: obs.f2_hz,
+          lli1: obs.lli1,
+          lli2: obs.lli2
+        }
+      end)
+
+    case Enum.find(CarrierPhase.detect_cycle_slips(carrier_arc, opts), & &1.slip) do
+      nil -> :ok
+      slip -> {:error, {:cycle_slip_detected, sat, slip.epoch, slip.reasons}}
+    end
+  end
+
+  defp estimate_wide_lane_integer(sat, arc, opts) do
+    arc
+    |> Enum.reduce_while({:ok, []}, fn {_sat, _epoch, obs}, {:ok, acc} ->
+      case wide_lane_cycles(obs) do
+        {:ok, value} -> {:cont, {:ok, [value | acc]}}
+        {:error, reason} -> {:halt, {:error, {:wide_lane_failed, sat, reason}}}
+      end
+    end)
+    |> case do
+      {:ok, cycles} ->
+        if length(cycles) < opts.min_epochs do
+          {:error, {:too_few_wide_lane_epochs, sat, length(cycles), opts.min_epochs}}
+        else
+          mean = Enum.sum(cycles) / length(cycles)
+          fixed = round(mean)
+
+          if abs(mean - fixed) <= opts.tolerance_cycles do
+            {:ok, fixed}
+          else
+            {:error, {:wide_lane_not_integer, sat, mean, fixed}}
+          end
+        end
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp wide_lane_cycles(obs) do
+    with {:ok, mw_m} <-
+           CarrierPhase.melbourne_wubbena(
+             obs.phi1_cyc,
+             obs.phi2_cyc,
+             obs.p1_m,
+             obs.p2_m,
+             obs.f1_hz,
+             obs.f2_hz
+           ),
+         {:ok, lambda_wl} <- CarrierPhase.wide_lane_wavelength(obs.f1_hz, obs.f2_hz) do
+      {:ok, mw_m / lambda_wl}
+    end
+  end
+
+  defp ionosphere_free_narrow_lane_epochs(dual_epochs, wide_lane_cycles) do
+    with {:ok, params} <- narrow_lane_params(dual_epochs, wide_lane_cycles),
+         {:ok, if_epochs} <- ionosphere_free_epochs(dual_epochs) do
+      wavelengths = Map.new(params, fn {sat, p} -> {sat, p.wavelength_m} end)
+      offsets = Map.new(params, fn {sat, p} -> {sat, p.offset_m} end)
+      {:ok, if_epochs, wavelengths, offsets}
+    end
+  end
+
+  defp narrow_lane_params(dual_epochs, wide_lane_cycles) do
+    dual_epochs
+    |> Enum.flat_map(& &1.observations)
+    |> Enum.reduce_while({:ok, %{}}, fn obs, {:ok, acc} ->
+      sat = obs.satellite_id
+
+      with {:ok, wide_lane} <- fetch_wide_lane(wide_lane_cycles, sat),
+           {:ok, params} <- narrow_lane_param(obs.f1_hz, obs.f2_hz, wide_lane),
+           :ok <- ensure_consistent_narrow_lane_params(sat, params, Map.get(acc, sat)) do
+        {:cont, {:ok, Map.put_new(acc, sat, params)}}
+      else
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
+
+  defp fetch_wide_lane(wide_lane_cycles, sat) do
+    case Map.fetch(wide_lane_cycles, sat) do
+      {:ok, wide_lane} -> {:ok, wide_lane}
+      :error -> {:error, {:missing_wide_lane_ambiguity, sat}}
+    end
+  end
+
+  defp narrow_lane_param(f1, f2, wide_lane_cycles) do
+    with {:ok, gamma} <- IonosphereFree.gamma(f1, f2) do
+      c = Constants.speed_of_light_m_s()
+      beta = gamma - 1.0
+      lambda2 = c / f2
+
+      {:ok,
+       %{
+         wavelength_m: c / (f1 + f2),
+         offset_m: beta * lambda2 * wide_lane_cycles,
+         f1_hz: f1,
+         f2_hz: f2
+       }}
+    end
+  end
+
+  defp ensure_consistent_narrow_lane_params(_sat, _params, nil), do: :ok
+
+  defp ensure_consistent_narrow_lane_params(sat, params, prev) do
+    if same_frequency?(params.f1_hz, prev.f1_hz) and same_frequency?(params.f2_hz, prev.f2_hz) do
+      :ok
+    else
+      {:error, {:inconsistent_frequencies, sat}}
+    end
+  end
+
+  defp same_frequency?(a, b), do: abs(a - b) <= 1.0e-6
+
+  defp ionosphere_free_epochs(dual_epochs) do
+    dual_epochs
+    |> Enum.reduce_while({:ok, []}, fn epoch_row, {:ok, acc} ->
+      case ionosphere_free_observations(epoch_row.observations) do
+        {:ok, observations} ->
+          {:cont, {:ok, [%{epoch: epoch_row.epoch, observations: observations} | acc]}}
+
+        {:error, _} = err ->
+          {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, rows} -> {:ok, Enum.reverse(rows)}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp ionosphere_free_observations(observations) do
+    observations
+    |> Enum.reduce_while({:ok, []}, fn obs, {:ok, acc} ->
+      with {:ok, code_m} <- IonosphereFree.iono_free(obs.p1_m, obs.p2_m, obs.f1_hz, obs.f2_hz),
+           {:ok, phase_m} <-
+             IonosphereFree.iono_free_phase_cycles(
+               obs.phi1_cyc,
+               obs.phi2_cyc,
+               obs.f1_hz,
+               obs.f2_hz
+             ) do
+        {:cont,
+         {:ok, [%{satellite_id: obs.satellite_id, code_m: code_m, phase_m: phase_m} | acc]}}
+      else
+        {:error, reason} -> {:halt, {:error, {:ionosphere_free_failed, obs.satellite_id, reason}}}
+      end
+    end)
+    |> case do
+      {:ok, obs} -> {:ok, Enum.reverse(obs)}
+      {:error, _} = err -> err
     end
   end
 
@@ -1282,7 +1711,16 @@ defmodule Orbis.GNSS.PrecisePositioning do
 
   # --- integer ambiguity fixing -------------------------------------------
 
-  defp search_integer_ambiguities(sp3, epochs, float_sol, wavelengths, weights, tropo, opts) do
+  defp search_integer_ambiguities(
+         sp3,
+         epochs,
+         float_sol,
+         wavelengths,
+         offsets,
+         weights,
+         tropo,
+         opts
+       ) do
     sat_ids = float_sol.used_sats
 
     case ambiguity_covariance_cycles(sp3, epochs, sat_ids, float_sol, wavelengths, weights, tropo) do
@@ -1295,7 +1733,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
               {:ok, q_decorrelated, z_transform} ->
                 with {:ok, candidates, evaluated} <-
                        lambda_sphere_search(
-                         float_ambiguities_cycles(float_sol, wavelengths),
+                         float_ambiguities_cycles(float_sol, wavelengths, offsets),
                          symmetrize_matrix(q_inv),
                          q_decorrelated,
                          z_transform,
@@ -1350,8 +1788,10 @@ defmodule Orbis.GNSS.PrecisePositioning do
     end
   end
 
-  defp fixed_ambiguities_m(fixed_cycles, wavelengths) do
-    Map.new(fixed_cycles, fn {sat, cycles} -> {sat, cycles * Map.fetch!(wavelengths, sat)} end)
+  defp fixed_ambiguities_m(fixed_cycles, wavelengths, offsets) do
+    Map.new(fixed_cycles, fn {sat, cycles} ->
+      {sat, Map.fetch!(offsets, sat) + cycles * Map.fetch!(wavelengths, sat)}
+    end)
   end
 
   defp fixed_state_from_float(float_sol) do
@@ -1362,9 +1802,11 @@ defmodule Orbis.GNSS.PrecisePositioning do
     }
   end
 
-  defp float_ambiguities_cycles(float_sol, wavelengths) do
+  defp float_ambiguities_cycles(float_sol, wavelengths, offsets) do
     Map.new(float_sol.used_sats, fn sat ->
-      {sat, Map.fetch!(float_sol.ambiguities_m, sat) / Map.fetch!(wavelengths, sat)}
+      {sat,
+       (Map.fetch!(float_sol.ambiguities_m, sat) - Map.fetch!(offsets, sat)) /
+         Map.fetch!(wavelengths, sat)}
     end)
   end
 
@@ -2098,6 +2540,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
            end),
          fixed_ambiguities_cycles: fixed_cycles,
          fixed_ambiguities_m: fixed_m,
+         wide_lane_ambiguities_cycles: nil,
          ztd_residual_m: solution_ztd_residual_m(state, tropo),
          float_solution: float_sol,
          residuals_m: residual_rows,
