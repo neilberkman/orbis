@@ -488,6 +488,53 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
 
       assert :geometry_free in reasons or :melbourne_wubbena in reasons
     end
+
+    test "can drop a slipped satellite arc before fixing integers", ctx do
+      [{bad_sat, _predictions} | _] = ctx.multi_sats
+      slip_epoch = @epoch2
+
+      slipped =
+        Enum.map(ctx.dual_frequency_epoch_observations, fn epoch_row ->
+          observations =
+            Enum.map(epoch_row.observations, fn
+              %{satellite_id: ^bad_sat} = obs ->
+                if NaiveDateTime.compare(epoch_row.epoch, slip_epoch) in [:eq, :gt] do
+                  %{obs | phi1_cyc: obs.phi1_cyc + 8.0}
+                else
+                  obs
+                end
+
+              obs ->
+                obs
+            end)
+
+          %{epoch_row | observations: observations}
+        end)
+
+      assert {:ok, %FixedSolution{} = sol} =
+               PrecisePositioning.solve_widelane_fixed_epochs(ctx.sp3, slipped,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 on_cycle_slip: :drop_satellite,
+                 wide_lane_tolerance_cycles: 0.01
+               )
+
+      assert position_error(sol.position, @truth) < 1.0e-3
+      refute bad_sat in sol.used_sats
+      refute Map.has_key?(sol.wide_lane_ambiguities_cycles, bad_sat)
+      refute Map.has_key?(sol.fixed_ambiguities_cycles, bad_sat)
+      assert sol.metadata.dropped_cycle_slip_sats == [bad_sat]
+      assert sol.metadata.integer_status == :fixed
+    end
+
+    test "rejects an unknown cycle-slip policy", ctx do
+      assert {:error, {:invalid_option, :on_cycle_slip}} =
+               PrecisePositioning.solve_widelane_fixed_epochs(
+                 ctx.sp3,
+                 ctx.dual_frequency_epoch_observations,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 on_cycle_slip: :split_arc
+               )
+    end
   end
 
   describe "solve_float/4 errors" do

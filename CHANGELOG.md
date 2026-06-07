@@ -42,6 +42,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `solve_fixed_epochs/3` can now estimate one residual zenith troposphere delay
   over a static arc (`estimate_ztd: true`, with `troposphere: true`), reporting
   `ztd_residual_m` and `metadata.ztd_estimated`.
+- `Orbis.GNSS.PrecisePositioning.solve_widelane_fixed_epochs/3` accepts
+  `on_cycle_slip: :drop_satellite` to remove slipped satellite arcs before the
+  wide-lane / narrow-lane solve. The default remains `:error`; dropped satellites
+  are reported in `metadata.dropped_cycle_slip_sats`.
 
 ### Changed
 

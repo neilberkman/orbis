@@ -66,6 +66,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
   @default_integer_search_radius_cycles 1
   @default_integer_ratio_threshold 3.0
   @default_integer_candidate_limit 50_000
+  @default_cycle_slip_policy :error
   @pivot_epsilon 1.0e-12
 
   defmodule Solution do
@@ -521,6 +522,11 @@ defmodule Orbis.GNSS.PrecisePositioning do
     * `:wide_lane_tolerance_cycles` - maximum absolute distance between the
       averaged wide-lane float value and the nearest integer (default `0.5`
       cycles).
+    * `:on_cycle_slip` - what to do when a satellite arc has a detected cycle
+      slip: `:error` returns `{:error, {:cycle_slip_detected, sat, epoch,
+      reasons}}` (default); `:drop_satellite` removes that satellite from the
+      wide-lane and narrow-lane solve and records it in
+      `metadata.dropped_cycle_slip_sats`.
 
   Cycle slips are detected with `Orbis.GNSS.CarrierPhase.detect_cycle_slips/2`;
   pass `:gf_threshold_m` / `:mw_threshold_cycles` to tune that detector.
@@ -532,9 +538,10 @@ defmodule Orbis.GNSS.PrecisePositioning do
   def solve_widelane_fixed_epochs(%SP3{} = sp3, dual_epoch_observations, opts)
       when is_list(dual_epoch_observations) do
     with {:ok, dual_epochs} <- normalize_dual_epoch_observations(dual_epoch_observations),
-         {:ok, wide_lane_cycles} <- wide_lane_ambiguities(dual_epochs, opts),
+         {:ok, wide_lane_cycles, dropped_sats} <- wide_lane_ambiguities(dual_epochs, opts),
+         filtered_dual_epochs = filter_dual_epochs_by_wide_lanes(dual_epochs, wide_lane_cycles),
          {:ok, if_epochs, wavelengths, offsets} <-
-           ionosphere_free_narrow_lane_epochs(dual_epochs, wide_lane_cycles),
+           ionosphere_free_narrow_lane_epochs(filtered_dual_epochs, wide_lane_cycles),
          fixed_opts =
            opts
            |> Keyword.put(:ambiguity_wavelength_m, wavelengths)
@@ -547,7 +554,8 @@ defmodule Orbis.GNSS.PrecisePositioning do
            metadata:
              Map.merge(sol.metadata, %{
                integer_method: :widelane_narrowlane_lambda,
-               wide_lane_fixed: true
+               wide_lane_fixed: true,
+               dropped_cycle_slip_sats: dropped_sats
              })
        }}
     end
@@ -940,7 +948,8 @@ defmodule Orbis.GNSS.PrecisePositioning do
   end
 
   defp wide_lane_ambiguities(epochs, opts) do
-    with {:ok, wl_opts} <- wide_lane_options(opts) do
+    with {:ok, wl_opts} <- wide_lane_options(opts),
+         {:ok, slip_policy} <- cycle_slip_policy(opts) do
       arcs =
         epochs
         |> Enum.flat_map(fn epoch_row ->
@@ -950,16 +959,27 @@ defmodule Orbis.GNSS.PrecisePositioning do
 
       arcs
       |> Enum.sort_by(fn {sat, _arc} -> sat end)
-      |> Enum.reduce_while({:ok, %{}}, fn {sat, arc}, {:ok, acc} ->
+      |> Enum.reduce_while({:ok, %{}, []}, fn {sat, arc}, {:ok, acc, dropped} ->
         arc = Enum.sort_by(arc, fn {_sat, epoch, _obs} -> NaiveDateTime.to_iso8601(epoch) end)
 
-        with :ok <- ensure_wide_lane_continuity(sat, arc, opts),
-             {:ok, fixed} <- estimate_wide_lane_integer(sat, arc, wl_opts) do
-          {:cont, {:ok, Map.put(acc, sat, fixed)}}
-        else
-          {:error, _} = err -> {:halt, err}
+        case ensure_wide_lane_continuity(sat, arc, opts, slip_policy) do
+          :ok ->
+            case estimate_wide_lane_integer(sat, arc, wl_opts) do
+              {:ok, fixed} -> {:cont, {:ok, Map.put(acc, sat, fixed), dropped}}
+              {:error, _} = err -> {:halt, err}
+            end
+
+          {:drop, _slip} ->
+            {:cont, {:ok, acc, [sat | dropped]}}
+
+          {:error, _} = err ->
+            {:halt, err}
         end
       end)
+      |> case do
+        {:ok, cycles, dropped} -> {:ok, cycles, Enum.reverse(dropped)}
+        {:error, _} = err -> err
+      end
     end
   end
 
@@ -979,7 +999,15 @@ defmodule Orbis.GNSS.PrecisePositioning do
     end
   end
 
-  defp ensure_wide_lane_continuity(sat, arc, opts) do
+  defp cycle_slip_policy(opts) do
+    case Keyword.get(opts, :on_cycle_slip, @default_cycle_slip_policy) do
+      :error -> {:ok, :error}
+      :drop_satellite -> {:ok, :drop_satellite}
+      _other -> {:error, {:invalid_option, :on_cycle_slip}}
+    end
+  end
+
+  defp ensure_wide_lane_continuity(sat, arc, opts, slip_policy) do
     carrier_arc =
       Enum.map(arc, fn {_sat, epoch, obs} ->
         %{
@@ -997,6 +1025,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
 
     case Enum.find(CarrierPhase.detect_cycle_slips(carrier_arc, opts), & &1.slip) do
       nil -> :ok
+      slip when slip_policy == :drop_satellite -> {:drop, slip}
       slip -> {:error, {:cycle_slip_detected, sat, slip.epoch, slip.reasons}}
     end
   end
@@ -1042,6 +1071,19 @@ defmodule Orbis.GNSS.PrecisePositioning do
          {:ok, lambda_wl} <- CarrierPhase.wide_lane_wavelength(obs.f1_hz, obs.f2_hz) do
       {:ok, mw_m / lambda_wl}
     end
+  end
+
+  defp filter_dual_epochs_by_wide_lanes(dual_epochs, wide_lane_cycles) do
+    keep = MapSet.new(Map.keys(wide_lane_cycles))
+
+    dual_epochs
+    |> Enum.map(fn epoch_row ->
+      observations =
+        Enum.filter(epoch_row.observations, &MapSet.member?(keep, &1.satellite_id))
+
+      %{epoch_row | observations: observations}
+    end)
+    |> Enum.reject(&(&1.observations == []))
   end
 
   defp ionosphere_free_narrow_lane_epochs(dual_epochs, wide_lane_cycles) do

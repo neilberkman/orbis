@@ -4,6 +4,25 @@ Orbis validates against established reference implementations at every
 layer. Here is exactly what is tested, to what precision, and against
 what oracle.
 
+## Oracle Fixtures vs Live Oracle Runs
+
+The normal test suite does **not** import Python packages at runtime. It checks
+Orbis against committed oracle fixtures: JSON / hex-float vectors generated from
+pinned reference environments (Skyfield, scipy, numpy, gnssanalysis, georinex,
+Astropy, sgp4, and Vallado-derived recipes, depending on the surface under
+test). This makes CI deterministic and prevents package-index, BLAS, ephemeris
+download, or platform-libm changes from moving the release gate.
+
+The fixture files record their generator provenance and package versions. A
+future live-oracle audit should regenerate those fixtures from the pinned Python
+environment and fail on any `git diff`; that is a separate release-audit task,
+not what `mix test` does today.
+
+The `:skyfield_parity` test tag is historical. It specifically enables the
+Skyfield-tagged coordinate/ephemeris parity tests; running
+`mix test --include skyfield_parity --exclude spk_file` also reruns the regular
+committed-fixture oracle tests because they are part of the normal suite.
+
 ## Coordinate Transforms vs Skyfield
 
 The rotation stages of the TEME→GCRS→ITRS pipeline produce **IEEE 754
@@ -34,7 +53,9 @@ numpy's vectorized behavior.
 All four rows above are tagged `:skyfield_parity`, and CI runs
 `mix test --include skyfield_parity --exclude spk_file`
 (see `.github/workflows/ci.yml`), so all four are exercised on every
-push and pull request.
+push and pull request. This tag name should not be read as "all Orbis oracle
+tests use Skyfield"; most GNSS and application-level oracle fixtures are
+generated from scipy/numpy/gnssanalysis/georinex/Astropy recipes instead.
 
 ## SGP4 Propagation: < 1 mm vs Skyfield
 
