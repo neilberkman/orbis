@@ -32,7 +32,7 @@ defmodule Orbis.MixProject do
       {:rustler, "~> 0.37", optional: true},
       {:rustler_precompiled, "~> 0.9"},
       {:astrodynamics, "~> 0.6.0"},
-      {:req, "~> 0.5", optional: true},
+      {:req, "~> 0.5"},
       {:jason, "~> 1.4"},
       {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       {:quokka, "~> 2.12", only: [:dev, :test], runtime: false}

@@ -132,9 +132,9 @@ defmodule Orbis.GNSS.DataTest do
                Data.fetch(product, offline: true, cache_dir: cache_dir, sha256: sha)
 
       # Online: the poisoned entry is discarded and a fresh download is
-      # attempted. We disable Req so the re-download stops at :req_not_available
-      # rather than hitting the network — proving fetch did NOT terminate on the
-      # stale checksum_mismatch.
+      # attempted. We disable HTTPS so the re-download stops at
+      # :req_not_available rather than hitting the network — proving fetch did
+      # NOT terminate on the stale checksum_mismatch.
       Application.put_env(:orbis, :gnss_data_req_available, false)
       on_exit(fn -> Application.delete_env(:orbis, :gnss_data_req_available) end)
 
@@ -289,8 +289,8 @@ defmodule Orbis.GNSS.DataTest do
                Data.fetch(product, offline: true, cache_dir: cache_dir)
 
       # Online: the poisoned entry is discarded and a fresh download attempted.
-      # Req disabled so it stops at :req_not_available — proving fetch did NOT
-      # serve the corrupt cached bytes.
+      # HTTPS disabled so it stops at :req_not_available — proving fetch did
+      # NOT serve the corrupt cached bytes.
       Application.put_env(:orbis, :gnss_data_req_available, false)
       on_exit(fn -> Application.delete_env(:orbis, :gnss_data_req_available) end)
 
@@ -308,7 +308,7 @@ defmodule Orbis.GNSS.DataTest do
       assert {:ok, ^path} = Data.fetch(product, offline: true, cache_dir: cache_dir)
 
       # Online: treated as a miss and re-downloaded rather than silently trusted
-      # (Req disabled -> stops at :req_not_available).
+      # (HTTPS disabled -> stops at :req_not_available).
       Application.put_env(:orbis, :gnss_data_req_available, false)
       on_exit(fn -> Application.delete_env(:orbis, :gnss_data_req_available) end)
 
@@ -317,15 +317,15 @@ defmodule Orbis.GNSS.DataTest do
     end
   end
 
-  describe "req availability" do
-    test "fetch surfaces :req_not_available for an HTTPS center when Req is disabled",
+  describe "HTTPS availability" do
+    test "fetch surfaces :req_not_available for an HTTPS center when HTTPS is disabled",
          %{cache_dir: cache_dir} do
       Application.put_env(:orbis, :gnss_data_req_available, false)
       on_exit(fn -> Application.delete_env(:orbis, :gnss_data_req_available) end)
 
       product = Data.mgex_sp3(:gfz, ~D[2020-06-24], sample: "15M")
 
-      # offline:false + cache miss + Req disabled -> :req_not_available.
+      # offline:false + cache miss + HTTPS disabled -> :req_not_available.
       assert {:error, :req_not_available} =
                Data.fetch(product,
                  cache_dir: cache_dir,

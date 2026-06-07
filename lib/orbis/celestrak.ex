@@ -22,8 +22,9 @@ defmodule Orbis.CelesTrak do
   limiting — callers should cache results and avoid polling more than once
   per hour for the same data.
 
-  Live fetches require the optional `Req` dependency. If it is not available,
-  fetch functions return `{:error, :req_not_available}`.
+  Live fetches use `Req`. Tests and applications that need to disable live HTTP
+  calls can set `config :orbis, celestrak_req_available: false`; fetch functions
+  then return `{:error, :req_not_available}` without touching the network.
   """
 
   @base_url "https://celestrak.org/NORAD/elements/gp.php"

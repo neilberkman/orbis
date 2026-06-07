@@ -184,7 +184,6 @@ defmodule Orbis.GNSS.Constellation do
           | {:error, {:bad_celestrak_record, term(), map()}}
           | {:error, {:bad_navcen_html, term()}}
           | {:error, {:navcen_fetch_failed, term()}}
-          | {:error, :req_not_available}
           | {:error, term()}
 
   @doc """

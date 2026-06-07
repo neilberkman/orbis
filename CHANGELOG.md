@@ -51,6 +51,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- `Req` is now a required dependency. Network-backed features (`CelesTrak`,
+  `Orbis.GNSS.Data`, NAVCEN constellation status) are first-class Orbis
+  capabilities, and making the HTTP client required keeps consumer compiles
+  warning-free.
 - The LAMBDA integer search now shrinks its live search bound to the current
   second-best candidate, so `solve_fixed_epochs/3` keeps the same integer
   decision and ratio-test semantics while visiting far fewer complete

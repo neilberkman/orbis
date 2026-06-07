@@ -53,7 +53,7 @@ defmodule Orbis.GNSS.Data do
        discarded and re-downloaded; offline, a corrupt hit is terminal and an
        unverifiable one is returned as the best available.
     3. Otherwise (and only when not `offline:`) download the `.gz` over HTTPS
-       (`Req`) or FTP (`:ftp`) to memory, decompress with a gzip-bomb cap,
+       (`Req`, a required dependency) or FTP (`:ftp`) to memory, decompress with a gzip-bomb cap,
        verify any known checksum, and **atomically** commit the decompressed
        file into the cache (temp file + rename) together with its required
        `.provenance.json` sidecar (the commit fails if the sidecar cannot be
@@ -98,7 +98,7 @@ defmodule Orbis.GNSS.Data do
     * `{:error, {:checksum_mismatch, expected, got}}` — digest verification failed
     * `{:error, {:unsupported_product, detail}}` — unknown center/content/sample,
       or a host outside the catalog
-    * `{:error, :req_not_available}` — HTTPS needed but `Req` is not loaded
+    * `{:error, :req_not_available}` — HTTPS downloads are disabled by config
     * `{:error, {:http_status, code}}` — non-2xx HTTP response
     * `{:error, {:redirect_not_allowed, code}}` — a 3xx redirect was refused
       (redirects are not followed, to keep the SSRF allow-list intact)

@@ -1,6 +1,6 @@
 defmodule Orbis.GNSS.ConstellationTest do
-  # Not async: the live-fetch error test toggles app env to simulate the optional
-  # CelesTrak Req dependency being absent.
+  # Not async: the live-fetch error test toggles app env to disable CelesTrak
+  # HTTP calls.
   use ExUnit.Case, async: false
 
   alias Orbis.GNSS.Constellation

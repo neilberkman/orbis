@@ -43,12 +43,14 @@ defmodule Orbis.GNSS.Data.Download do
   end
 
   @doc """
-  Whether `Req` is loaded and usable for HTTPS at runtime.
+  Whether HTTPS downloads are enabled. `Req` is a required dependency; the app
+  config hook is used by offline tests that need to prove fetch behavior without
+  touching the network.
   """
   @spec req_available?() :: boolean()
   def req_available? do
     case Application.get_env(:orbis, :gnss_data_req_available) do
-      nil -> Code.ensure_loaded?(Req) and function_exported?(Req, :get, 2)
+      nil -> true
       override -> override
     end
   end
