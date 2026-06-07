@@ -25,6 +25,27 @@ the full constellation, which the SP3 reader tolerates); no values were altered.
   identical copy lives in the `astrodynamics-gnss` crate fixtures for the same
   gate at the Rust layer.
 
+## `GBM0MGXRAP_20201770000_01D_05M_ORB_60epoch.sp3`
+
+GFZ rapid MGEX precise orbit + clock product, 2020 day-of-year 177
+(2020-06-25), 5-minute grid, GPS time. This is the SP3 companion to
+`ESBC00DNK_R_20201770000_01D_30S_MO_60epoch.rnx` for the offline real
+multi-epoch precise-positioning / troposphere regression.
+
+- **Upstream source:** `GBM0MGXRAP_20201770000_01D_05M_ORB.SP3.gz` from the GFZ
+  MGEX rapid products for GPS week 2111.
+- **Trim:** decompressed the full SP3, kept the verbatim header plus the first 12
+  epochs (00:00 through 00:55 GPST), updated the SP3 epoch count on the first
+  line to `12`, and appended `EOF`. The retained window covers the first
+  60 observation epochs at 30 s cadence with interpolation margin.
+- **sha256:**
+  - upstream `.SP3.gz`:
+    `51971877df4b4bb6c43bb13ff5c850752100d38048526d6bf39ecd98b54aaf27`
+  - upstream decompressed `.SP3`:
+    `1922019f82ec071c7ca8813aeda4c6398322b986dee14414d629a5cac97fd10b`
+  - committed 60-epoch `.sp3`:
+    `b0356e550f5cca232304f45a7c4abe25afe77a5ea8e35700ab418c8ab4c3b88e`
+
 ## `degenerate_coincident_5sat.sp3`
 
 Hand-authored rank-deficient fixture (five GPS satellites at one ECEF point) for
