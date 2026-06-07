@@ -22,6 +22,7 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
   @met %{pressure_hpa: 1013.25, temperature_k: 288.15, relative_humidity: 0.5}
   @c 299_792_458.0
   @l1_wavelength_m @c / 1_575_420_000.0
+  @residual_ztd_m 0.18
 
   setup_all do
     sp3 = SP3.load!(@sp3_path)
@@ -69,6 +70,11 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
      multi_sats: multi_sats,
      epoch_observations: synth_epoch_observations(multi_sats),
      tropo_epoch_observations: synth_epoch_observations(multi_sats, troposphere: true),
+     ztd_epoch_observations:
+       synth_epoch_observations(multi_sats,
+         troposphere: true,
+         residual_ztd_m: @residual_ztd_m
+       ),
      fixed_epoch_observations: synth_fixed_epoch_observations(multi_sats)}
   end
 
@@ -213,6 +219,25 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
       assert sol.metadata.phase_rms_m < 1.0e-4
     end
 
+    test "multi-epoch arcs estimate a residual zenith troposphere delay", ctx do
+      assert {:ok, sol} =
+               PrecisePositioning.solve_float_epochs(ctx.sp3, ctx.ztd_epoch_observations,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 troposphere: true,
+                 estimate_ztd: true,
+                 pressure_hpa: @met.pressure_hpa,
+                 temperature_k: @met.temperature_k,
+                 relative_humidity: @met.relative_humidity
+               )
+
+      assert position_error(sol.position, @truth) < 1.0e-3
+      assert abs(sol.ztd_residual_m - @residual_ztd_m) < 1.0e-4
+      assert sol.metadata.troposphere_applied
+      assert sol.metadata.ztd_estimated
+      assert sol.metadata.code_rms_m < 1.0e-4
+      assert sol.metadata.phase_rms_m < 1.0e-4
+    end
+
     test "can seed a multi-epoch arc from code-only SPP solutions", ctx do
       assert {:ok, sol} =
                PrecisePositioning.solve_float_epochs(ctx.sp3, ctx.epoch_observations,
@@ -238,6 +263,20 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
                PrecisePositioning.solve_float_epochs(ctx.sp3, ctx.epoch_observations,
                  initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
                  ambiguity_tolerance_m: -1.0
+               )
+
+      assert {:error, {:invalid_option, :estimate_ztd}} =
+               PrecisePositioning.solve_float_epochs(ctx.sp3, ctx.epoch_observations,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 estimate_ztd: true
+               )
+
+      assert {:error, {:invalid_option, :ztd_tolerance_m}} =
+               PrecisePositioning.solve_float_epochs(ctx.sp3, ctx.epoch_observations,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 troposphere: true,
+                 estimate_ztd: true,
+                 ztd_tolerance_m: -1.0
                )
     end
   end
@@ -288,6 +327,33 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
 
       assert position_error(sol.position, @truth) < 1.0e-3
       assert sol.metadata.troposphere_applied
+      assert sol.metadata.integer_status == :fixed
+      assert sol.metadata.code_rms_m < 1.0e-4
+      assert sol.metadata.phase_rms_m < 1.0e-4
+    end
+
+    test "fixed-ambiguity arcs estimate a residual zenith troposphere delay", ctx do
+      fixed_tropo =
+        synth_fixed_epoch_observations(ctx.multi_sats,
+          troposphere: true,
+          residual_ztd_m: @residual_ztd_m
+        )
+
+      assert {:ok, %FixedSolution{} = sol} =
+               PrecisePositioning.solve_fixed_epochs(ctx.sp3, fixed_tropo,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 ambiguity_wavelength_m: @l1_wavelength_m,
+                 troposphere: true,
+                 estimate_ztd: true,
+                 pressure_hpa: @met.pressure_hpa,
+                 temperature_k: @met.temperature_k,
+                 relative_humidity: @met.relative_humidity
+               )
+
+      assert position_error(sol.position, @truth) < 1.0e-3
+      assert abs(sol.ztd_residual_m - @residual_ztd_m) < 1.0e-4
+      assert sol.metadata.troposphere_applied
+      assert sol.metadata.ztd_estimated
       assert sol.metadata.integer_status == :fixed
       assert sol.metadata.code_rms_m < 1.0e-4
       assert sol.metadata.phase_rms_m < 1.0e-4
@@ -364,6 +430,13 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
                PrecisePositioning.solve_float(ctx.sp3, ctx.observations, @epoch,
                  initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
                  troposphere: :yes
+               )
+
+      assert {:error, {:invalid_option, :estimate_ztd}} =
+               PrecisePositioning.solve_float(ctx.sp3, ctx.observations, @epoch,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 troposphere: true,
+                 estimate_ztd: true
                )
 
       assert {:error, {:invalid_option, :pressure_hpa}} =
@@ -452,20 +525,34 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
     if Keyword.get(opts, :troposphere, false) do
       {x, y, z} = @truth
       geo = Coordinates.to_geodetic({x / 1000.0, y / 1000.0, z / 1000.0})
+      height_m = geo.altitude_km * 1000.0
 
       {:ok, delay_m} =
         Troposphere.slant_delay(
           prediction.elevation_deg,
           geo.latitude,
           geo.longitude,
-          geo.altitude_km * 1000.0,
+          height_m,
           @met,
           epoch
         )
 
-      delay_m
+      delay_m + synthetic_residual_ztd_m(prediction, geo.latitude, height_m, epoch, opts)
     else
       0.0
+    end
+  end
+
+  defp synthetic_residual_ztd_m(prediction, latitude_deg, height_m, epoch, opts) do
+    case Keyword.get(opts, :residual_ztd_m, 0.0) do
+      residual_ztd_m when is_number(residual_ztd_m) ->
+        {:ok, %{wet: wet_mapping}} =
+          Troposphere.mapping(prediction.elevation_deg, latitude_deg, height_m, epoch)
+
+        residual_ztd_m * wet_mapping
+
+      _other ->
+        0.0
     end
   end
 

@@ -35,6 +35,13 @@ defmodule Orbis.GNSS.PreciseRealArcTest do
                Keyword.put(opts, :troposphere, true)
              )
 
+    assert {:ok, ztd_estimated} =
+             PrecisePositioning.solve_float_epochs(
+               sp3,
+               epoch_observations,
+               Keyword.merge(opts, troposphere: true, estimate_ztd: true)
+             )
+
     uncorrected_error_m = position_error(uncorrected.position, truth)
     corrected_error_m = position_error(corrected.position, truth)
 
@@ -42,6 +49,10 @@ defmodule Orbis.GNSS.PreciseRealArcTest do
     assert corrected.metadata.n_epochs == 60
     assert corrected.metadata.n_observations == 660
     assert corrected.metadata.troposphere_applied
+    assert ztd_estimated.metadata.troposphere_applied
+    assert ztd_estimated.metadata.ztd_estimated
+    assert ztd_estimated.ztd_residual_m > 0.0
+    assert ztd_estimated.ztd_residual_m < 1.0
 
     # This is a real ESBC00DNK arc, not a synthetic zero-troposphere fixture. The
     # a-priori Saastamoinen/Niell slant correction should remove the dominant
@@ -49,6 +60,8 @@ defmodule Orbis.GNSS.PreciseRealArcTest do
     assert uncorrected_error_m > 25.0
     assert corrected_error_m < 5.0
     assert uncorrected_error_m - corrected_error_m > 20.0
+    assert ztd_estimated.metadata.weighted_rms_m < corrected.metadata.weighted_rms_m
+    assert ztd_estimated.metadata.phase_rms_m < corrected.metadata.phase_rms_m
   end
 
   defp real_gps_iono_free_arc(obs, count) do

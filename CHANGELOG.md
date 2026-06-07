@@ -34,6 +34,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Saastamoinen/Niell tropospheric slant delay to ionosphere-free code and phase
   observations (`troposphere: true` with surface meteorology options), including
   the float, multi-epoch, and fixed-ambiguity solve paths.
+- `Orbis.GNSS.PrecisePositioning.solve_float_epochs/3` and
+  `solve_fixed_epochs/3` can now estimate one residual zenith troposphere delay
+  over a static arc (`estimate_ztd: true`, with `troposphere: true`), reporting
+  `ztd_residual_m` and `metadata.ztd_estimated`.
 
 ### Changed
 
