@@ -66,7 +66,7 @@ defmodule Orbis.GNSS.PreciseRealArcTest do
   end
 
   @tag timeout: 180_000
-  test "real noisy narrow-lane fixing reports an empty candidate set distinctly" do
+  test "real noisy narrow-lane fixing returns a not-fixed fallback candidate set" do
     sp3 = SP3.load!(@sp3_path)
     obs = Observations.load!(@obs_path)
     {x0, y0, z0} = Observations.approx_position(obs)
@@ -78,13 +78,18 @@ defmodule Orbis.GNSS.PreciseRealArcTest do
     {:ok, f1} = IonosphereFree.frequency("G", :l1)
     {:ok, f2} = IonosphereFree.frequency("G", :l2)
 
-    assert {:error, {:no_integer_candidates, 0}} =
+    assert {:ok, fixed} =
              PrecisePositioning.solve_fixed_epochs(sp3, epoch_observations,
                initial_guess: {x0 + 100.0, y0 - 100.0, z0 + 100.0, 0.0},
                max_iterations: 8,
                troposphere: true,
                ambiguity_wavelength_m: 299_792_458.0 / (f1 + f2)
              )
+
+    assert fixed.metadata.integer_status == :not_fixed
+    assert fixed.metadata.integer_ratio < 3.0
+    assert fixed.metadata.integer_candidates == 23
+    assert position_error(fixed.position, {x0, y0, z0}) < 6.0
   end
 
   @tag timeout: 180_000
@@ -101,7 +106,7 @@ defmodule Orbis.GNSS.PreciseRealArcTest do
                troposphere: true
              )
 
-    assert {:error, {:no_integer_candidates, 0}} =
+    assert {:ok, fixed} =
              PrecisePositioning.solve_widelane_fixed_epochs(sp3, dual_epoch_observations,
                initial_guess: {x0 + 100.0, y0 - 100.0, z0 + 100.0, 0.0},
                max_iterations: 5,
@@ -110,6 +115,12 @@ defmodule Orbis.GNSS.PreciseRealArcTest do
                wide_lane_tolerance_cycles: 2.0,
                integer_candidate_limit: 5_000
              )
+
+    assert fixed.metadata.integer_status == :not_fixed
+    assert fixed.metadata.integer_ratio < 3.0
+    assert fixed.metadata.integer_candidates == 25
+    assert length(fixed.metadata.split_cycle_slip_arcs) == 2
+    assert position_error(fixed.position, {x0, y0, z0}) < 9.0
   end
 
   defp real_gps_iono_free_arc(obs, count, opts \\ []) do

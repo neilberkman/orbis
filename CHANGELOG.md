@@ -15,6 +15,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `metadata.split_cycle_slip_arcs` and use suffixed ambiguity ids such as
   `"G21#2"` in `used_sats` and the ambiguity maps.
 
+### Changed
+
+- `Orbis.GNSS.PrecisePositioning.solve_fixed_epochs/3` now falls back to a
+  covariance-scored original-space candidate set when the decorrelated LAMBDA
+  sphere search evaluates zero integer candidates. Real noisy arcs now return a
+  `FixedSolution` with `metadata.integer_status == :not_fixed` instead of a
+  terminal `{:no_integer_candidates, 0}` whenever the fallback produces a
+  ratio-test-failing candidate set.
+
 ## [0.10.0] - 2026-06-07
 
 ### Added

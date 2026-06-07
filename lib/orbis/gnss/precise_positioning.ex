@@ -428,9 +428,11 @@ defmodule Orbis.GNSS.PrecisePositioning do
       ratio for `metadata.integer_status == :fixed` (default `3.0`).
     * `:integer_candidate_limit` - maximum candidates to evaluate before
       returning `{:error, {:too_many_integer_candidates, count, limit}}`
-      (default `50_000`). If the sphere search finds no integer point inside
-      the search bound, the function returns `{:error, {:no_integer_candidates,
-      count}}`.
+      (default `50_000`). If the decorrelated sphere search finds no integer
+      point inside the search bound, Orbis scores a small original-space
+      fallback set (the rounded vector plus one-coordinate neighbors) with the
+      same ambiguity covariance; if that fallback also has no candidate, the
+      function returns `{:error, {:no_integer_candidates, count}}`.
     * `:ambiguity_offset_m` - optional scalar or `%{"G05" => offset_m, ...}` map
       subtracted from each float ambiguity before converting to cycles and added
       back after fixing (default `0.0`). This is mainly for affine carrier-phase
@@ -2094,7 +2096,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
           err
 
         {:ok, [], evaluated, _bound} ->
-          {:error, {:no_integer_candidates, evaluated}}
+          lambda_original_space_fallback(float_cycles_by_sat, q_inv, opts, evaluated)
 
         {:ok, candidates, evaluated, _bound} ->
           sorted =
@@ -2114,6 +2116,64 @@ defmodule Orbis.GNSS.PrecisePositioning do
           {:ok, sorted, evaluated}
       end
     end
+  end
+
+  defp lambda_original_space_fallback(float_cycles_by_sat, q_inv, opts, evaluated) do
+    sat_ids = float_cycles_by_sat |> Map.keys() |> Enum.sort()
+    float_cycles = Enum.map(sat_ids, &Map.fetch!(float_cycles_by_sat, &1))
+
+    float_cycles
+    |> original_space_seed_candidates(opts.radius_cycles)
+    |> Enum.reduce_while({:ok, [], evaluated, MapSet.new()}, fn fixed_cycles,
+                                                                {:ok, candidates, count, seen} ->
+      key = List.to_tuple(fixed_cycles)
+
+      cond do
+        MapSet.member?(seen, key) ->
+          {:cont, {:ok, candidates, count, seen}}
+
+        count + 1 > opts.candidate_limit ->
+          {:halt, {:error, {:too_many_integer_candidates, count + 1, opts.candidate_limit}}}
+
+        true ->
+          score = quadratic_integer_score(float_cycles, fixed_cycles, q_inv)
+          candidate = {score, Map.new(Enum.zip(sat_ids, fixed_cycles))}
+          {:cont, {:ok, [candidate | candidates], count + 1, MapSet.put(seen, key)}}
+      end
+    end)
+    |> case do
+      {:ok, [], count, _seen} ->
+        {:error, {:no_integer_candidates, count}}
+
+      {:ok, candidates, count, _seen} ->
+        sorted =
+          Enum.sort_by(candidates, fn {score, fixed_cycles} ->
+            {score, Enum.map(sat_ids, &Map.fetch!(fixed_cycles, &1))}
+          end)
+
+        {:ok, sorted, count}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp original_space_seed_candidates(float_cycles, radius) do
+    n = length(float_cycles)
+    rounded = Enum.map(float_cycles, &round/1)
+
+    alternatives =
+      if radius == 0 do
+        []
+      else
+        for idx <- 0..(n - 1),
+            step <- 1..radius,
+            sign <- [-1, 1] do
+          List.update_at(rounded, idx, &(&1 + sign * step))
+        end
+      end
+
+    [rounded | alternatives]
   end
 
   defp lambda_decorrelate(q_cycles) do
