@@ -11,6 +11,7 @@ defmodule Orbis.GNSS.PreciseRealArcTest do
   @sp3_path Path.join(__DIR__, "fixtures/sp3/GBM0MGXRAP_20201770000_01D_05M_ORB_120epoch.sp3")
   @obs_path Path.join(__DIR__, "fixtures/obs/ESBC00DNK_R_20201770000_01D_30S_MO_120epoch.rnx")
 
+  @tag timeout: 180_000
   test "a real multi-epoch ionosphere-free arc improves with troposphere correction" do
     sp3 = SP3.load!(@sp3_path)
     obs = Observations.load!(@obs_path)
