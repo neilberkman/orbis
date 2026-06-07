@@ -29,6 +29,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   estimation. It starts from the float RTK baseline, fixes double-difference
   carrier ambiguities with the same correlated covariance used by the float
   solve, and re-solves the baseline with those integers held fixed.
+- `Orbis.GNSS.RTK.solve_fixed_baseline_epochs/3` now accepts
+  `ambiguity_offset_m`, so fixed RTK ambiguities can be modeled as
+  `offset + integer * wavelength`. This is the hook needed for
+  wide-lane-fixed / narrow-lane dual-frequency RTK workflows.
 - `Orbis.GNSS.RTK.solve_float_baseline_epochs/3` and
   `solve_fixed_baseline_epochs/3` now understand carrier-phase arc identities:
   map observations may carry `:ambiguity_id`, and LLI loss-of-lock can be

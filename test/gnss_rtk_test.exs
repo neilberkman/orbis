@@ -483,6 +483,46 @@ defmodule Orbis.GNSS.RTKTest do
       assert position_error(sol.baseline_m, @truth_baseline) < 1.0e-5
     end
 
+    test "fixed solve supports per-ambiguity metre offsets" do
+      offsets_m = %{"G02" => 0.35, "G03" => -0.22, "G04" => 0.12, "G05" => -0.41}
+
+      ambiguities_m =
+        Map.new(@fixed_cycles, fn
+          {"G01", _cycles} -> {"G01", 0.0}
+          {sat, cycles} -> {sat, Map.fetch!(offsets_m, sat) + cycles * @l1_wavelength_m}
+        end)
+
+      epochs =
+        @sat_positions
+        |> Enum.with_index()
+        |> Enum.map(fn {positions, idx} ->
+          synthetic_baseline_epoch(@base, @truth_baseline, positions,
+            epoch: idx,
+            ambiguities_m: ambiguities_m
+          )
+        end)
+
+      assert {:ok, sol} =
+               RTK.solve_fixed_baseline_epochs(@base, epochs,
+                 reference_satellite_id: "G01",
+                 ambiguity_wavelength_m: @l1_wavelength_m,
+                 ambiguity_offset_m: offsets_m,
+                 initial_baseline_m: {-40.0, 35.0, 12.0}
+               )
+
+      assert sol.metadata.integer_status == :fixed
+      assert sol.metadata.ambiguity_offsets_m == offsets_m
+      assert position_error(sol.baseline_m, @truth_baseline) < 1.0e-5
+
+      for sat <- sol.used_sats do
+        expected_cycles = Map.fetch!(@fixed_cycles, sat)
+        expected_m = Map.fetch!(offsets_m, sat) + expected_cycles * @l1_wavelength_m
+
+        assert Map.fetch!(sol.fixed_ambiguities_cycles, sat) == expected_cycles
+        assert abs(Map.fetch!(sol.fixed_ambiguities_m, sat) - expected_m) < 1.0e-12
+      end
+    end
+
     test "bad fixed-baseline inputs are tagged" do
       epoch = synthetic_baseline_epoch(@base, @truth_baseline, hd(@sat_positions))
 
@@ -500,6 +540,18 @@ defmodule Orbis.GNSS.RTKTest do
                ambiguity_wavelength_m: @l1_wavelength_m,
                integer_ratio_threshold: -1.0
              ) == {:error, {:invalid_option, :integer_ratio_threshold}}
+
+      assert RTK.solve_fixed_baseline_epochs(@base, [epoch],
+               reference_satellite_id: "G01",
+               ambiguity_wavelength_m: @l1_wavelength_m,
+               ambiguity_offset_m: %{"G02" => 0.25}
+             ) == {:error, {:invalid_ambiguity_offset, "G03"}}
+
+      assert RTK.solve_fixed_baseline_epochs(@base, [epoch],
+               reference_satellite_id: "G01",
+               ambiguity_wavelength_m: @l1_wavelength_m,
+               ambiguity_offset_m: :bad
+             ) == {:error, {:invalid_option, :ambiguity_offset_m}}
     end
   end
 

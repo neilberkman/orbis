@@ -208,6 +208,7 @@ defmodule Orbis.GNSS.RTK do
                 covariance_cycles: [[float()]],
                 covariance_inverse_cycles: [[float()]]
               },
+              required(:ambiguity_offsets_m) => %{String.t() => float()},
               optional(:physical_sats) => [String.t()],
               optional(:ambiguity_satellites) => %{String.t() => String.t()},
               optional(:dropped_cycle_slip_sats) => [String.t()],
@@ -392,6 +393,11 @@ defmodule Orbis.GNSS.RTK do
 
     * `:ambiguity_wavelength_m` - either a positive scalar wavelength in metres
       for every non-reference satellite, or a map `%{"G05" => wavelength_m, ...}`.
+    * `:ambiguity_offset_m` - optional fixed ambiguity offset in metres, either
+      a scalar or a map keyed by ambiguity id / physical satellite id. The fixed
+      carrier ambiguity model is `offset_m + integer * wavelength_m`. Defaults
+      to zero and is useful for dual-frequency wide-lane/narrow-lane workflows
+      where the wide-lane integer contributes a known ionosphere-free offset.
 
   Integer search options mirror `Orbis.GNSS.PrecisePositioning`:
 
@@ -415,10 +421,16 @@ defmodule Orbis.GNSS.RTK do
              Map.fetch!(float_sol.metadata, :ambiguity_satellites),
              opts
            ),
+         {:ok, offsets} <-
+           ambiguity_offsets(
+             float_sol.used_sats,
+             Map.fetch!(float_sol.metadata, :ambiguity_satellites),
+             opts
+           ),
          {:ok, integer_opts} <- integer_options(opts),
          {:ok, fixed_cycles, fixed_meta} <-
-           search_baseline_ambiguities(float_sol, wavelengths, integer_opts),
-         fixed_m = fixed_ambiguities_m(fixed_cycles, wavelengths),
+           search_baseline_ambiguities(float_sol, wavelengths, offsets, integer_opts),
+         fixed_m = fixed_ambiguities_m(fixed_cycles, wavelengths, offsets),
          {:ok, base} <- Types.normalize_ecef(base_position, :invalid_base_position),
          {:ok, normalized_epochs} <- normalize_epochs(epochs),
          {:ok, normalized_epochs, _slip_meta} <-
@@ -913,10 +925,44 @@ defmodule Orbis.GNSS.RTK do
     end
   end
 
+  defp ambiguity_offsets(ambiguity_ids, ambiguity_satellites, opts) do
+    case Keyword.fetch(opts, :ambiguity_offset_m) do
+      {:ok, offset} when is_number(offset) ->
+        {:ok, Map.new(ambiguity_ids, &{&1, offset / 1.0})}
+
+      {:ok, offsets} when is_map(offsets) ->
+        ambiguity_ids
+        |> Enum.reduce_while({:ok, %{}}, fn sat, {:ok, acc} ->
+          physical_sat = Map.fetch!(ambiguity_satellites, sat)
+
+          case ambiguity_value(offsets, sat, physical_sat) do
+            {:ok, offset} when is_number(offset) ->
+              {:cont, {:ok, Map.put(acc, sat, offset / 1.0)}}
+
+            _other ->
+              {:halt, {:error, {:invalid_ambiguity_offset, sat}}}
+          end
+        end)
+
+      {:ok, _other} ->
+        {:error, {:invalid_option, :ambiguity_offset_m}}
+
+      :error ->
+        {:ok, Map.new(ambiguity_ids, &{&1, 0.0})}
+    end
+  end
+
   defp ambiguity_wavelength(wavelengths, ambiguity_id, physical_sat) do
-    case Map.fetch(wavelengths, ambiguity_id) do
+    case ambiguity_value(wavelengths, ambiguity_id, physical_sat) do
       {:ok, _wavelength} = ok -> ok
-      :error -> Map.fetch(wavelengths, physical_sat)
+      :error -> :error
+    end
+  end
+
+  defp ambiguity_value(values, ambiguity_id, physical_sat) do
+    case Map.fetch(values, ambiguity_id) do
+      {:ok, _value} = ok -> ok
+      :error -> Map.fetch(values, physical_sat)
     end
   end
 
@@ -1291,7 +1337,7 @@ defmodule Orbis.GNSS.RTK do
     end
   end
 
-  defp search_baseline_ambiguities(float_sol, wavelengths, integer_opts) do
+  defp search_baseline_ambiguities(float_sol, wavelengths, offsets, integer_opts) do
     covariance_cycles =
       covariance_m_to_cycles(
         float_sol.metadata.ambiguity_float.covariance_m,
@@ -1301,10 +1347,15 @@ defmodule Orbis.GNSS.RTK do
 
     float_cycles =
       Map.new(float_sol.used_sats, fn sat ->
-        {sat, Map.fetch!(float_sol.ambiguities_m, sat) / Map.fetch!(wavelengths, sat)}
+        ambiguity_m = Map.fetch!(float_sol.ambiguities_m, sat)
+        offset_m = Map.fetch!(offsets, sat)
+        {sat, (ambiguity_m - offset_m) / Map.fetch!(wavelengths, sat)}
       end)
 
-    IntegerLeastSquares.search(float_cycles, covariance_cycles, integer_opts)
+    with {:ok, fixed_cycles, meta} <-
+           IntegerLeastSquares.search(float_cycles, covariance_cycles, integer_opts) do
+      {:ok, fixed_cycles, Map.put(meta, :ambiguity_offsets_m, offsets)}
+    end
   end
 
   defp covariance_m_to_cycles(covariance_m, sat_ids, wavelengths) do
@@ -1320,9 +1371,9 @@ defmodule Orbis.GNSS.RTK do
     end
   end
 
-  defp fixed_ambiguities_m(fixed_cycles, wavelengths) do
+  defp fixed_ambiguities_m(fixed_cycles, wavelengths, offsets) do
     Map.new(fixed_cycles, fn {sat, cycles} ->
-      {sat, cycles * Map.fetch!(wavelengths, sat)}
+      {sat, Map.fetch!(offsets, sat) + cycles * Map.fetch!(wavelengths, sat)}
     end)
   end
 
