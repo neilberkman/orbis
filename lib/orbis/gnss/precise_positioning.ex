@@ -2431,30 +2431,23 @@ defmodule Orbis.GNSS.PrecisePositioning do
   end
 
   defp ldl_row(a, rows, diagonal, i, n) do
-    prefix =
+    l_values =
       if i == 0 do
-        {:ok, []}
+        []
       else
-        0..(i - 1)
-        |> Enum.reduce_while({:ok, []}, fn j, {:ok, acc} ->
+        Enum.reduce(0..(i - 1), [], fn j, acc ->
           sum = (a |> Enum.at(i) |> Enum.at(j)) - ldl_cross_sum(rows, diagonal, acc, j)
           d_j = Enum.at(diagonal, j)
-          {:cont, {:ok, acc ++ [sum / d_j]}}
+          acc ++ [sum / d_j]
         end)
       end
 
-    case prefix do
-      {:ok, l_values} ->
-        d_i = (a |> Enum.at(i) |> Enum.at(i)) - ldl_diag_sum(l_values, diagonal)
+    d_i = (a |> Enum.at(i) |> Enum.at(i)) - ldl_diag_sum(l_values, diagonal)
 
-        if not is_number(d_i) or d_i <= 0.0 do
-          {:error, :singular_geometry}
-        else
-          {:ok, l_values ++ [1.0] ++ List.duplicate(0.0, n - i - 1), d_i}
-        end
-
-      {:error, _} = err ->
-        err
+    if not is_number(d_i) or d_i <= 0.0 do
+      {:error, :singular_geometry}
+    else
+      {:ok, l_values ++ [1.0] ++ List.duplicate(0.0, n - i - 1), d_i}
     end
   end
 
