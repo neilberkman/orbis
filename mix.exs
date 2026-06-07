@@ -1,7 +1,7 @@
 defmodule Orbis.MixProject do
   use Mix.Project
 
-  @version "0.9.2"
+  @version "0.10.0"
   @source_url "https://github.com/neilberkman/orbis"
 
   def project do
@@ -108,6 +108,7 @@ defmodule Orbis.MixProject do
           Orbis.GNSS.QC,
           Orbis.GNSS.DGNSS,
           Orbis.GNSS.SolutionReport,
+          Orbis.GNSS.CarrierPhase,
           Orbis.GNSS.IonosphereFree,
           Orbis.GNSS.Ionosphere,
           Orbis.GNSS.Troposphere,

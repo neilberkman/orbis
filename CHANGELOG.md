@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-06-07
+
 ### Added
 
 - `Orbis.GNSS.IonosphereFree.iono_free_phase/4` and

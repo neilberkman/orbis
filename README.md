@@ -40,7 +40,7 @@ SGP4/SDP4, coordinate transforms, GNSS positioning, orbit determination, and the
 
 ```elixir
 def deps do
-  [{:orbis, "~> 0.9.2"}]
+  [{:orbis, "~> 0.10.0"}]
 end
 ```
 
