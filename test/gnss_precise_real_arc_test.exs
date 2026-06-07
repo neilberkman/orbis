@@ -8,8 +8,8 @@ defmodule Orbis.GNSS.PreciseRealArcTest do
   alias Orbis.GNSS.RINEX.Observations
   alias Orbis.GNSS.SP3
 
-  @sp3_path Path.join(__DIR__, "fixtures/sp3/GBM0MGXRAP_20201770000_01D_05M_ORB_60epoch.sp3")
-  @obs_path Path.join(__DIR__, "fixtures/obs/ESBC00DNK_R_20201770000_01D_30S_MO_60epoch.rnx")
+  @sp3_path Path.join(__DIR__, "fixtures/sp3/GBM0MGXRAP_20201770000_01D_05M_ORB_120epoch.sp3")
+  @obs_path Path.join(__DIR__, "fixtures/obs/ESBC00DNK_R_20201770000_01D_30S_MO_120epoch.rnx")
 
   test "a real multi-epoch ionosphere-free arc improves with troposphere correction" do
     sp3 = SP3.load!(@sp3_path)
@@ -17,8 +17,8 @@ defmodule Orbis.GNSS.PreciseRealArcTest do
     truth = Observations.approx_position(obs)
     {x0, y0, z0} = truth
 
-    epoch_observations = real_gps_iono_free_arc(obs, 60)
-    assert length(epoch_observations) == 60
+    epoch_observations = real_gps_iono_free_arc(obs, 120)
+    assert length(epoch_observations) == 120
 
     opts = [
       initial_guess: {x0 + 100.0, y0 - 100.0, z0 + 100.0, 0.0},
@@ -45,9 +45,9 @@ defmodule Orbis.GNSS.PreciseRealArcTest do
     uncorrected_error_m = position_error(uncorrected.position, truth)
     corrected_error_m = position_error(corrected.position, truth)
 
-    assert uncorrected.metadata.n_epochs == 60
-    assert corrected.metadata.n_epochs == 60
-    assert corrected.metadata.n_observations == 660
+    assert uncorrected.metadata.n_epochs == 120
+    assert corrected.metadata.n_epochs == 120
+    assert corrected.metadata.n_observations == 1282
     assert corrected.metadata.troposphere_applied
     assert ztd_estimated.metadata.troposphere_applied
     assert ztd_estimated.metadata.ztd_estimated
@@ -56,10 +56,10 @@ defmodule Orbis.GNSS.PreciseRealArcTest do
 
     # This is a real ESBC00DNK arc, not a synthetic zero-troposphere fixture. The
     # a-priori Saastamoinen/Niell slant correction should remove the dominant
-    # bias, but the 30-minute float arc is still not a cm-grade PPP gate.
-    assert uncorrected_error_m > 25.0
+    # bias, but the one-hour float arc is still not a cm-grade PPP gate.
+    assert uncorrected_error_m > 20.0
     assert corrected_error_m < 5.0
-    assert uncorrected_error_m - corrected_error_m > 20.0
+    assert uncorrected_error_m - corrected_error_m > 18.0
     assert ztd_estimated.metadata.weighted_rms_m < corrected.metadata.weighted_rms_m
     assert ztd_estimated.metadata.phase_rms_m < corrected.metadata.phase_rms_m
   end

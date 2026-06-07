@@ -37,7 +37,7 @@ the network by default.
 - **Header APPROX POSITION XYZ (ECEF m):** `3582105.2910  532589.7313  5232754.8054`
   — the surveyed receiver position the SPP test recovers to metre level.
 
-## ESBC00DNK_R_20201770000_01D_30S_MO_60epoch.rnx
+## ESBC00DNK_R_20201770000_01D_30S_MO_120epoch.rnx
 
 - **Station / day:** ESBC00DNK (Esbjerg, Denmark), 2020 day-of-year 177
   (2020-06-25), 30 s sampling, MIXED observation, RINEX 3.05.
@@ -51,7 +51,7 @@ the network by default.
   (`https://github.com/nav-solutions/data`).
 - **Decode / trim:** decompressed the upstream `.crx.gz`, decoded the `.crx`
   with `Orbis.GNSS.RINEX.Observations.decode_crinex/1`, kept the verbatim
-  header plus the first 60 epochs (00:00:00 through 00:29:30 GPST), and updated
+  header plus the first 120 epochs (00:00:00 through 00:59:30 GPST), and updated
   `TIME OF LAST OBS` to the last retained epoch. The committed fixture is plain
   `.rnx`; it is not re-compressed because the real-arc gate only needs the RINEX
   observation parser, not the CRINEX round-trip path.
@@ -62,8 +62,8 @@ the network by default.
     `28f6470df726adf2daa497af0802b02fd64f17ececd0259bc6672ae3b4f2a531`
   - Orbis-decoded full `.rnx`:
     `09f3f8fe46880c458964cc8a115999244587b947ff39a367245bbaa67a0df77a`
-  - committed 60-epoch `.rnx`:
-    `34c31782f000a04f8a04263ab685e2a35c2d028669051ab94b01894913520fc7`
+  - committed 120-epoch `.rnx`:
+    `8ed476c011802032040beaf7a3fb774f06bb180a93f856eb7ae2396366496c45`
 - **Header APPROX POSITION XYZ (ECEF m):** `3582105.2910  532589.7313  5232754.8054`.
 
 ## algo0010_2015001_v1_trim.crx / .rnx
