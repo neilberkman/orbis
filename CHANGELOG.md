@@ -20,6 +20,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   code-and-carrier double differences, the RTK measurement primitive that
   cancels receiver clocks and common short-baseline satellite errors before
   baseline estimation.
+- `Orbis.GNSS.RTK.solve_float_baseline_epochs/3` for static float RTK baseline
+  estimation from supplied satellite ECEF positions and multi-epoch
+  code/carrier double differences, holding one float ambiguity per
+  non-reference satellite across the arc.
 - `Orbis.GNSS.PrecisePositioning.solve_widelane_fixed_epochs/3` now supports
   `on_cycle_slip: :split_arc`, which resets a satellite's carrier ambiguity at
   detected cycle slips and keeps any post-slip fragments long enough for
