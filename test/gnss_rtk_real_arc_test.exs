@@ -77,9 +77,11 @@ defmodule Orbis.GNSS.RTKRealArcTest do
 
     fixed_antenna_error_m = position_error(fixed.baseline_m, antenna_baseline)
 
-    # Real L1 phase on this one-hour arc is not separable enough for an integer
-    # fix; the important behavior is that LAMBDA refuses the unsafe fix instead
-    # of reporting centimetre confidence from noisy data.
+    # The limiting term is the code-pinned integer level on a short
+    # single-frequency arc, not the carrier-phase scatter. The best integer
+    # candidate is worse than the float baseline, so LAMBDA must refuse the
+    # unsafe fix instead of reporting false centimetre confidence.
+    assert fixed_antenna_error_m > float_antenna_error_m
     assert fixed_antenna_error_m < 0.2
   end
 
