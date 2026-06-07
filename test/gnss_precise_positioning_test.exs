@@ -300,7 +300,7 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
       assert sol.metadata.integer_status == :fixed
       assert sol.metadata.integer_method == :lambda
       assert sol.metadata.integer_ratio > 1.0e6
-      assert sol.metadata.integer_candidates == 2
+      assert sol.metadata.integer_candidates == 7
 
       for {clock, expected} <- Enum.zip(sol.epoch_clocks, @epoch_clocks_m) do
         assert abs(clock.rx_clock_m - expected) < 1.0e-4

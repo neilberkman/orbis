@@ -66,13 +66,13 @@ defmodule Orbis.GNSS.PreciseRealArcTest do
   end
 
   @tag timeout: 180_000
-  test "real noisy narrow-lane fixing returns a not-fixed fallback candidate set" do
+  test "real noisy narrow-lane fixing returns a not-fixed candidate set" do
     sp3 = SP3.load!(@sp3_path)
     obs = Observations.load!(@obs_path)
     {x0, y0, z0} = Observations.approx_position(obs)
 
     # G21 has a detected slip on this arc; exclude it so this test exercises the
-    # narrow-lane LAMBDA empty-candidate path rather than the slip hard-abort.
+    # noisy narrow-lane LAMBDA path rather than the slip hard-abort.
     epoch_observations = real_gps_iono_free_arc(obs, 120, exclude: ["G21"])
 
     {:ok, f1} = IonosphereFree.frequency("G", :l1)
@@ -118,7 +118,7 @@ defmodule Orbis.GNSS.PreciseRealArcTest do
 
     assert fixed.metadata.integer_status == :not_fixed
     assert fixed.metadata.integer_ratio < 3.0
-    assert fixed.metadata.integer_candidates == 25
+    assert fixed.metadata.integer_candidates == 5
     assert length(fixed.metadata.split_cycle_slip_arcs) == 2
     assert position_error(fixed.position, {x0, y0, z0}) < 9.0
   end

@@ -429,10 +429,8 @@ defmodule Orbis.GNSS.PrecisePositioning do
     * `:integer_candidate_limit` - maximum candidates to evaluate before
       returning `{:error, {:too_many_integer_candidates, count, limit}}`
       (default `50_000`). If the decorrelated sphere search finds no integer
-      point inside the search bound, Orbis scores a small original-space
-      fallback set (the rounded vector plus one-coordinate neighbors) with the
-      same ambiguity covariance; if that fallback also has no candidate, the
-      function returns `{:error, {:no_integer_candidates, count}}`.
+      point inside the search bound, the function returns
+      `{:error, {:no_integer_candidates, count}}`.
     * `:ambiguity_offset_m` - optional scalar or `%{"G05" => offset_m, ...}` map
       subtracted from each float ambiguity before converting to cycles and added
       back after fixing (default `0.0`). This is mainly for affine carrier-phase
@@ -2084,7 +2082,8 @@ defmodule Orbis.GNSS.PrecisePositioning do
              lower,
              diagonal,
              decorrelated_float_cycles,
-             length(float_cycles) - 1,
+             0,
+             [],
              empty_solution(length(float_cycles)),
              0.0,
              bound,
@@ -2096,7 +2095,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
           err
 
         {:ok, [], evaluated, _bound} ->
-          lambda_original_space_fallback(float_cycles_by_sat, q_inv, opts, evaluated)
+          {:error, {:no_integer_candidates, evaluated}}
 
         {:ok, candidates, evaluated, _bound} ->
           sorted =
@@ -2116,64 +2115,6 @@ defmodule Orbis.GNSS.PrecisePositioning do
           {:ok, sorted, evaluated}
       end
     end
-  end
-
-  defp lambda_original_space_fallback(float_cycles_by_sat, q_inv, opts, evaluated) do
-    sat_ids = float_cycles_by_sat |> Map.keys() |> Enum.sort()
-    float_cycles = Enum.map(sat_ids, &Map.fetch!(float_cycles_by_sat, &1))
-
-    float_cycles
-    |> original_space_seed_candidates(opts.radius_cycles)
-    |> Enum.reduce_while({:ok, [], evaluated, MapSet.new()}, fn fixed_cycles,
-                                                                {:ok, candidates, count, seen} ->
-      key = List.to_tuple(fixed_cycles)
-
-      cond do
-        MapSet.member?(seen, key) ->
-          {:cont, {:ok, candidates, count, seen}}
-
-        count + 1 > opts.candidate_limit ->
-          {:halt, {:error, {:too_many_integer_candidates, count + 1, opts.candidate_limit}}}
-
-        true ->
-          score = quadratic_integer_score(float_cycles, fixed_cycles, q_inv)
-          candidate = {score, Map.new(Enum.zip(sat_ids, fixed_cycles))}
-          {:cont, {:ok, [candidate | candidates], count + 1, MapSet.put(seen, key)}}
-      end
-    end)
-    |> case do
-      {:ok, [], count, _seen} ->
-        {:error, {:no_integer_candidates, count}}
-
-      {:ok, candidates, count, _seen} ->
-        sorted =
-          Enum.sort_by(candidates, fn {score, fixed_cycles} ->
-            {score, Enum.map(sat_ids, &Map.fetch!(fixed_cycles, &1))}
-          end)
-
-        {:ok, sorted, count}
-
-      {:error, _} = err ->
-        err
-    end
-  end
-
-  defp original_space_seed_candidates(float_cycles, radius) do
-    n = length(float_cycles)
-    rounded = Enum.map(float_cycles, &round/1)
-
-    alternatives =
-      if radius == 0 do
-        []
-      else
-        for idx <- 0..(n - 1),
-            step <- 1..radius,
-            sign <- [-1, 1] do
-          List.update_at(rounded, idx, &(&1 + sign * step))
-        end
-      end
-
-    [rounded | alternatives]
   end
 
   defp lambda_decorrelate(q_cycles) do
@@ -2306,6 +2247,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
          _diagonal,
          _float_cycles,
          k,
+         _y_prefix,
          z,
          dist,
          bound,
@@ -2313,7 +2255,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
          evaluated,
          limit
        )
-       when k < 0 do
+       when k == length(z) do
     evaluated = evaluated + 1
 
     if evaluated > limit do
@@ -2330,6 +2272,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
          diagonal,
          float_cycles,
          k,
+         y_prefix,
          z,
          dist,
          bound,
@@ -2338,7 +2281,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
          limit
        ) do
     dk = Enum.at(diagonal, k)
-    center = Enum.at(float_cycles, k) + lambda_conditional_offset(lower, float_cycles, z, k)
+    center = Enum.at(float_cycles, k) + lambda_forward_offset(lower, y_prefix, k)
     remaining = bound - dist
 
     if remaining < 0.0 do
@@ -2359,12 +2302,14 @@ defmodule Orbis.GNSS.PrecisePositioning do
           {:cont, {:ok, acc_candidates, acc_evaluated, acc_bound}}
         else
           next_z = List.replace_at(z, k, value)
+          next_y_prefix = y_prefix ++ [value - center]
 
           case lambda_recurse(
                  lower,
                  diagonal,
                  float_cycles,
-                 k - 1,
+                 k + 1,
+                 next_y_prefix,
                  next_z,
                  next_dist,
                  acc_bound,
@@ -2394,16 +2339,16 @@ defmodule Orbis.GNSS.PrecisePositioning do
 
   defp lambda_live_bound(_candidates, bound), do: bound
 
-  defp lambda_conditional_offset(lower, float_cycles, z, k) do
-    n = length(z)
+  defp lambda_forward_offset(_lower, [], _k), do: 0.0
 
-    if k == n - 1 do
-      0.0
-    else
-      Enum.reduce((k + 1)..(n - 1), 0.0, fn j, acc ->
-        acc + (lower |> Enum.at(j) |> Enum.at(k)) * (Enum.at(float_cycles, j) - Enum.at(z, j))
-      end)
-    end
+  defp lambda_forward_offset(lower, y_prefix, k) do
+    row = Enum.at(lower, k)
+
+    y_prefix
+    |> Enum.with_index()
+    |> Enum.reduce(0.0, fn {y_j, j}, acc ->
+      acc + Enum.at(row, j) * y_j
+    end)
   end
 
   defp integers_near(center, low, high) do

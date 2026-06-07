@@ -17,12 +17,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- `Orbis.GNSS.PrecisePositioning.solve_fixed_epochs/3` now falls back to a
-  covariance-scored original-space candidate set when the decorrelated LAMBDA
-  sphere search evaluates zero integer candidates. Real noisy arcs now return a
-  `FixedSolution` with `metadata.integer_status == :not_fixed` instead of a
-  terminal `{:no_integer_candidates, 0}` whenever the fallback produces a
-  ratio-test-failing candidate set.
+- `Orbis.GNSS.PrecisePositioning.solve_fixed_epochs/3` now uses an
+  LDL-consistent forward recursion for the decorrelated LAMBDA sphere search.
+  This fixes the zero-candidate search miss on noisy real arcs without an
+  original-space fallback: those arcs now return a `FixedSolution` with
+  `metadata.integer_status == :not_fixed` when candidates exist but fail the
+  ratio test.
 
 ## [0.10.0] - 2026-06-07
 
