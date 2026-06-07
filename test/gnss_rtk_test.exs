@@ -5,7 +5,12 @@ defmodule Orbis.GNSS.RTKTest do
 
   @base {1_110_000.0, -4_840_000.0, 3_980_000.0}
   @truth_baseline {12.5, -4.25, 2.75}
+  @c 299_792_458.0
+  @f_l1 1_575_420_000.0
+  @f_l2 1_227_600_000.0
   @l1_wavelength_m 299_792_458.0 / 1_575_420_000.0
+  @l2_wavelength_m @c / @f_l2
+  @narrow_lane_wavelength_m @c / (@f_l1 + @f_l2)
   @sat_positions [
     %{
       "G01" => {21_000_000.0, 14_000_000.0, 20_000_000.0},
@@ -31,6 +36,7 @@ defmodule Orbis.GNSS.RTKTest do
   ]
   @ambiguities %{"G01" => 0.0, "G02" => 0.42, "G03" => -0.73, "G04" => 1.12, "G05" => -0.38}
   @fixed_cycles %{"G01" => 0, "G02" => 5, "G03" => -7, "G04" => 12, "G05" => -4}
+  @wide_lane_cycles %{"G01" => 0, "G02" => 3, "G03" => -5, "G04" => 8, "G05" => -2}
 
   describe "double_differences/3" do
     test "receiver clocks and common satellite errors cancel" do
@@ -555,6 +561,124 @@ defmodule Orbis.GNSS.RTKTest do
     end
   end
 
+  describe "solve_widelane_fixed_baseline_epochs/3" do
+    test "fixes wide-lane then narrow-lane DD ambiguities" do
+      epochs =
+        @sat_positions
+        |> Enum.with_index()
+        |> Enum.map(fn {positions, idx} ->
+          synthetic_dual_baseline_epoch(@base, @truth_baseline, positions,
+            epoch: idx,
+            base_clock_m: 70.0 - idx,
+            rover_clock_m: -31.0 + 2.0 * idx,
+            n1_cycles: @fixed_cycles,
+            wide_lane_cycles: @wide_lane_cycles
+          )
+        end)
+
+      assert {:ok, sol} =
+               RTK.solve_widelane_fixed_baseline_epochs(@base, epochs,
+                 reference_satellite_id: "G01",
+                 initial_baseline_m: {-40.0, 35.0, 12.0},
+                 wide_lane_tolerance_cycles: 0.01
+               )
+
+      assert sol.metadata.integer_status == :fixed
+      assert sol.metadata.integer_method == :widelane_narrowlane_lambda
+      assert sol.metadata.wide_lane_fixed
+      assert sol.wide_lane_ambiguities_cycles == Map.delete(@wide_lane_cycles, "G01")
+      assert sol.metadata.wide_lane_ambiguities_cycles == sol.wide_lane_ambiguities_cycles
+      assert sol.metadata.ambiguity_offsets_m == expected_narrow_lane_offsets(@wide_lane_cycles)
+      assert position_error(sol.baseline_m, @truth_baseline) < 1.0e-5
+
+      for sat <- sol.used_sats do
+        assert Map.fetch!(sol.fixed_ambiguities_cycles, sat) == Map.fetch!(@fixed_cycles, sat)
+
+        expected_m =
+          narrow_lane_offset_m(Map.fetch!(@wide_lane_cycles, sat)) +
+            Map.fetch!(@fixed_cycles, sat) * @narrow_lane_wavelength_m
+
+        assert abs(Map.fetch!(sol.fixed_ambiguities_m, sat) - expected_m) < 1.0e-9
+      end
+    end
+
+    test "can split dual-frequency ambiguity arcs at cycle slips" do
+      epochs =
+        @sat_positions
+        |> Enum.with_index()
+        |> Enum.map(fn {positions, idx} ->
+          {n1_cycles, wide_lane_cycles} =
+            if idx == 0 do
+              {@fixed_cycles, @wide_lane_cycles}
+            else
+              {
+                Map.put(@fixed_cycles, "G02", 9),
+                Map.put(@wide_lane_cycles, "G02", 6)
+              }
+            end
+
+          epoch =
+            synthetic_dual_baseline_epoch(@base, @truth_baseline, positions,
+              epoch: idx,
+              n1_cycles: n1_cycles,
+              wide_lane_cycles: wide_lane_cycles
+            )
+
+          if idx == 1, do: mark_dual_rover_lli(epoch, "G02", 1), else: epoch
+        end)
+
+      assert {:ok, sol} =
+               RTK.solve_widelane_fixed_baseline_epochs(@base, epochs,
+                 reference_satellite_id: "G01",
+                 on_cycle_slip: :split_arc,
+                 wide_lane_min_epochs: 1,
+                 wide_lane_tolerance_cycles: 0.01,
+                 initial_baseline_m: {-40.0, 35.0, 12.0}
+               )
+
+      g02_ids = Enum.filter(sol.used_sats, &String.contains?(&1, "G02"))
+      assert length(g02_ids) == 2
+      assert sol.metadata.integer_status == :fixed
+      assert length(sol.metadata.split_cycle_slip_arcs) == 2
+
+      assert g02_ids
+             |> Enum.map(&Map.fetch!(sol.fixed_ambiguities_cycles, &1))
+             |> Enum.sort() == [5, 9]
+
+      assert g02_ids
+             |> Enum.map(&Map.fetch!(sol.wide_lane_ambiguities_cycles, &1))
+             |> Enum.sort() == [3, 6]
+
+      assert position_error(sol.baseline_m, @truth_baseline) < 1.0e-5
+    end
+
+    test "bad dual-frequency inputs are tagged" do
+      epoch =
+        synthetic_dual_baseline_epoch(@base, @truth_baseline, hd(@sat_positions),
+          n1_cycles: @fixed_cycles,
+          wide_lane_cycles: @wide_lane_cycles
+        )
+
+      assert RTK.solve_widelane_fixed_baseline_epochs(@base, []) == {:error, :no_epochs}
+
+      malformed =
+        update_in(epoch.base_observations, fn observations ->
+          Enum.map(observations, fn
+            %{satellite_id: "G02"} = obs -> %{obs | f2_hz: @f_l1}
+            obs -> obs
+          end)
+        end)
+
+      assert {:error, {:wide_lane_failed, "G02", :equal_frequencies}} =
+               RTK.solve_widelane_fixed_baseline_epochs(@base, [malformed],
+                 reference_satellite_id: "G01"
+               )
+
+      assert RTK.solve_widelane_fixed_baseline_epochs(@base, [epoch], wide_lane_min_epochs: 0) ==
+               {:error, {:invalid_option, :wide_lane_min_epochs}}
+    end
+  end
+
   defp synth_observations(sats, ranges, clock_m, errors, phase_ambiguities) do
     Enum.map(sats, fn sat ->
       code = Map.fetch!(ranges, sat) + clock_m + Map.fetch!(errors, sat)
@@ -647,6 +771,94 @@ defmodule Orbis.GNSS.RTKTest do
       rover_observations: rover_obs,
       satellite_positions_m: satellite_positions_m
     }
+  end
+
+  defp synthetic_dual_baseline_epoch(base, baseline, satellite_positions_m, opts) do
+    base_clock_m = Keyword.get(opts, :base_clock_m, 0.0)
+    rover_clock_m = Keyword.get(opts, :rover_clock_m, 0.0)
+    n1_cycles = Keyword.fetch!(opts, :n1_cycles)
+    wide_lane_cycles = Keyword.fetch!(opts, :wide_lane_cycles)
+    epoch_idx = Keyword.get(opts, :epoch, 0)
+    epoch = Keyword.get(opts, :epoch)
+    rover = add3(base, baseline)
+
+    {base_obs, rover_obs} =
+      satellite_positions_m
+      |> Enum.sort_by(fn {sat, _pos} -> sat end)
+      |> Enum.with_index()
+      |> Enum.map(fn {{sat, sat_pos}, sat_idx} ->
+        base_range = norm(sub3(sat_pos, base))
+        rover_range = norm(sub3(sat_pos, rover))
+        common = 0.4 + 0.03 * sat_idx
+        iono1_m = 1.7 + 0.04 * epoch_idx + 0.02 * sat_idx
+        iono2_m = iono1_m * :math.pow(@f_l1 / @f_l2, 2)
+
+        n1 = Map.fetch!(n1_cycles, sat)
+        n2 = n1 - Map.fetch!(wide_lane_cycles, sat)
+
+        {
+          dual_observation(sat, base_range, base_clock_m, common, iono1_m, iono2_m, 0, 0),
+          dual_observation(
+            sat,
+            rover_range,
+            rover_clock_m,
+            common,
+            iono1_m,
+            iono2_m,
+            n1,
+            n2
+          )
+        }
+      end)
+      |> Enum.unzip()
+
+    %{
+      epoch: epoch,
+      base_observations: base_obs,
+      rover_observations: rover_obs,
+      satellite_positions_m: satellite_positions_m
+    }
+  end
+
+  defp dual_observation(sat, range_m, clock_m, common_m, iono1_m, iono2_m, n1, n2) do
+    p1 = range_m + clock_m + common_m + iono1_m
+    p2 = range_m + clock_m + common_m + iono2_m
+    l1 = range_m + clock_m + common_m - iono1_m + n1 * @l1_wavelength_m
+    l2 = range_m + clock_m + common_m - iono2_m + n2 * @l2_wavelength_m
+
+    %{
+      satellite_id: sat,
+      p1_m: p1,
+      p2_m: p2,
+      phi1_cyc: l1 / @l1_wavelength_m,
+      phi2_cyc: l2 / @l2_wavelength_m,
+      f1_hz: @f_l1,
+      f2_hz: @f_l2,
+      lli1: 0,
+      lli2: 0
+    }
+  end
+
+  defp mark_dual_rover_lli(epoch, sat, lli) do
+    %{epoch | rover_observations: mark_dual_observation_lli(epoch.rover_observations, sat, lli)}
+  end
+
+  defp mark_dual_observation_lli(observations, sat, lli) do
+    Enum.map(observations, fn
+      %{satellite_id: ^sat} = obs -> %{obs | lli1: lli}
+      obs -> obs
+    end)
+  end
+
+  defp expected_narrow_lane_offsets(wide_lane_cycles) do
+    wide_lane_cycles
+    |> Map.delete("G01")
+    |> Map.new(fn {sat, wide_lane} -> {sat, narrow_lane_offset_m(wide_lane)} end)
+  end
+
+  defp narrow_lane_offset_m(wide_lane_cycles) do
+    {:ok, gamma} = Orbis.GNSS.IonosphereFree.gamma(@f_l1, @f_l2)
+    (gamma - 1.0) * @l2_wavelength_m * wide_lane_cycles
   end
 
   defp add3({ax, ay, az}, {bx, by, bz}), do: {ax + bx, ay + by, az + bz}

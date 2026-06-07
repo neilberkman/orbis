@@ -55,8 +55,9 @@ defmodule Orbis.GNSS.RTK do
       transpose: 1
     ]
 
+  alias Orbis.GNSS.{CarrierPhase, IonosphereFree}
+  alias Orbis.GNSS.Core.{Constants, Types}
   alias Orbis.GNSS.Core.IntegerLeastSquares
-  alias Orbis.GNSS.Core.Types
 
   @default_max_iterations 8
   @default_position_tolerance_m 1.0e-4
@@ -153,6 +154,7 @@ defmodule Orbis.GNSS.RTK do
       :used_sats,
       :fixed_ambiguities_cycles,
       :fixed_ambiguities_m,
+      :wide_lane_ambiguities_cycles,
       :float_solution,
       :residuals_m,
       :metadata
@@ -164,6 +166,7 @@ defmodule Orbis.GNSS.RTK do
       :used_sats,
       :fixed_ambiguities_cycles,
       :fixed_ambiguities_m,
+      :wide_lane_ambiguities_cycles,
       :float_solution,
       :residuals_m,
       :metadata
@@ -178,6 +181,7 @@ defmodule Orbis.GNSS.RTK do
             used_sats: [String.t()],
             fixed_ambiguities_cycles: %{String.t() => integer()},
             fixed_ambiguities_m: %{String.t() => float()},
+            wide_lane_ambiguities_cycles: %{String.t() => integer()} | nil,
             float_solution: FloatBaselineSolution.t(),
             residuals_m: [FloatBaselineSolution.residual()],
             metadata: %{
@@ -185,7 +189,7 @@ defmodule Orbis.GNSS.RTK do
               required(:converged) => boolean(),
               required(:status) => :state_tolerance | :max_iterations,
               required(:integer_status) => :fixed | :not_fixed,
-              required(:integer_method) => :lambda,
+              required(:integer_method) => :lambda | :widelane_narrowlane_lambda,
               required(:integer_ratio) => float() | :infinity,
               required(:integer_best_score) => float(),
               required(:integer_second_best_score) => float() | nil,
@@ -209,6 +213,8 @@ defmodule Orbis.GNSS.RTK do
                 covariance_inverse_cycles: [[float()]]
               },
               required(:ambiguity_offsets_m) => %{String.t() => float()},
+              optional(:wide_lane_fixed) => boolean(),
+              optional(:wide_lane_ambiguities_cycles) => %{String.t() => integer()},
               optional(:physical_sats) => [String.t()],
               optional(:ambiguity_satellites) => %{String.t() => String.t()},
               optional(:dropped_cycle_slip_sats) => [String.t()],
@@ -252,6 +258,35 @@ defmodule Orbis.GNSS.RTK do
   @type baseline_epoch :: %{
           required(:base_observations) => [observation()],
           required(:rover_observations) => [observation()],
+          required(:satellite_positions_m) => satellite_positions(),
+          optional(:epoch) => term()
+        }
+
+  @typedoc """
+  Raw dual-frequency code/carrier observation for wide-lane/narrow-lane RTK.
+
+  `p1_m` / `p2_m` are code pseudoranges in metres, `phi1_cyc` / `phi2_cyc` are
+  carrier phases in cycles, and `f1_hz` / `f2_hz` are the corresponding carrier
+  frequencies. `:ambiguity_id` is normally omitted; the wide-lane solver sets it
+  internally when `:on_cycle_slip` is `:split_arc`.
+  """
+  @type dual_frequency_observation :: %{
+          required(:satellite_id) => String.t(),
+          required(:p1_m) => number(),
+          required(:p2_m) => number(),
+          required(:phi1_cyc) => number(),
+          required(:phi2_cyc) => number(),
+          required(:f1_hz) => number(),
+          required(:f2_hz) => number(),
+          optional(:ambiguity_id) => String.t(),
+          optional(:lli1) => integer() | nil,
+          optional(:lli2) => integer() | nil
+        }
+
+  @typedoc "One RTK epoch carrying raw dual-frequency base/rover observations."
+  @type dual_frequency_baseline_epoch :: %{
+          required(:base_observations) => [dual_frequency_observation()],
+          required(:rover_observations) => [dual_frequency_observation()],
           required(:satellite_positions_m) => satellite_positions(),
           optional(:epoch) => term()
         }
@@ -462,6 +497,98 @@ defmodule Orbis.GNSS.RTK do
   def solve_fixed_baseline_epochs(_base_position, _epochs, _opts), do: {:error, :invalid_epochs}
 
   @doc """
+  Solve a static RTK baseline from raw dual-frequency observations by fixing
+  wide-lane then narrow-lane double-difference ambiguities.
+
+  This is the dual-frequency convenience layer above
+  `solve_fixed_baseline_epochs/3`. Each base and rover observation must carry
+  two code and phase measurements:
+
+      %{
+        satellite_id: "G05",
+        p1_m: 20_200_000.0,
+        p2_m: 20_200_004.0,
+        phi1_cyc: 106_000_000.0,
+        phi2_cyc: 82_000_000.0,
+        f1_hz: 1_575_420_000.0,
+        f2_hz: 1_227_600_000.0,
+        lli1: 0,
+        lli2: 0
+      }
+
+  For every non-reference double-difference arc the function estimates the
+  Melbourne-Wubbena wide-lane integer first. It then forms ionosphere-free code
+  and phase double differences and fixes the remaining narrow-lane integer with
+  LAMBDA. The returned `fixed_ambiguities_cycles` are the narrow-lane integers;
+  `wide_lane_ambiguities_cycles` reports the fixed wide-lane integers.
+
+  Options are the same as `solve_fixed_baseline_epochs/3`, except
+  `:ambiguity_wavelength_m` and `:ambiguity_offset_m` are derived internally.
+  Additional wide-lane options:
+
+    * `:wide_lane_min_epochs` - minimum Melbourne-Wubbena epochs per
+      double-difference arc (default `2`).
+    * `:wide_lane_tolerance_cycles` - maximum absolute distance between the
+      averaged wide-lane float value and the nearest integer (default `0.5`
+      cycles).
+    * `:on_cycle_slip` - `:error` (default), `:drop_satellite`, or `:split_arc`.
+      Split arcs get fresh ambiguity ids and are fixed independently.
+
+  Returns `{:ok, %FixedBaselineSolution{}}` or a tagged error.
+  """
+  @spec solve_widelane_fixed_baseline_epochs(
+          ecef_input(),
+          [dual_frequency_baseline_epoch()],
+          keyword()
+        ) :: {:ok, FixedBaselineSolution.t()} | {:error, term()}
+  def solve_widelane_fixed_baseline_epochs(base_position, dual_epochs, opts \\ [])
+
+  def solve_widelane_fixed_baseline_epochs(base_position, dual_epochs, opts)
+      when is_list(dual_epochs) do
+    with {:ok, base} <- Types.normalize_ecef(base_position, :invalid_base_position),
+         :ok <- ensure_nonempty_epochs(dual_epochs),
+         {:ok, normalized_dual_epochs} <- normalize_dual_baseline_epochs(dual_epochs),
+         {:ok, prepared_dual_epochs, slip_meta} <-
+           prepare_dual_baseline_cycle_slips(normalized_dual_epochs, opts),
+         {:ok, common_sats, _dropped_sats} <- common_epoch_sats(prepared_dual_epochs),
+         :ok <- ensure_baseline_satellites(common_sats),
+         {:ok, reference_sat} <-
+           baseline_reference_satellite(common_sats, opts, base, prepared_dual_epochs),
+         {:ok, wide_lane_cycles} <-
+           estimate_dual_baseline_wide_lanes(prepared_dual_epochs, reference_sat, opts),
+         {:ok, if_epochs, wavelengths, offsets} <-
+           ionosphere_free_baseline_epochs(
+             prepared_dual_epochs,
+             reference_sat,
+             wide_lane_cycles
+           ),
+         fixed_opts =
+           opts
+           |> Keyword.put(:reference_satellite_id, reference_sat)
+           |> Keyword.put(:ambiguity_wavelength_m, wavelengths)
+           |> Keyword.put(:ambiguity_offset_m, offsets),
+         {:ok, %FixedBaselineSolution{} = sol} <-
+           solve_fixed_baseline_epochs(base_position, if_epochs, fixed_opts) do
+      {:ok,
+       %{
+         sol
+         | wide_lane_ambiguities_cycles: wide_lane_cycles,
+           metadata:
+             Map.merge(sol.metadata, %{
+               integer_method: :widelane_narrowlane_lambda,
+               wide_lane_fixed: true,
+               wide_lane_ambiguities_cycles: wide_lane_cycles,
+               dropped_cycle_slip_sats: slip_meta.dropped_sats,
+               split_cycle_slip_arcs: slip_meta.split_arcs
+             })
+       }}
+    end
+  end
+
+  def solve_widelane_fixed_baseline_epochs(_base_position, _dual_epochs, _opts),
+    do: {:error, :invalid_epochs}
+
+  @doc """
   Build code and carrier-phase double differences from base and rover observations.
 
   Observations can be maps with `:satellite_id`, `:code_m`, and `:phase_m`, or
@@ -566,6 +693,649 @@ defmodule Orbis.GNSS.RTK do
   end
 
   defp normalize_epoch(_epoch, idx), do: {:error, {:invalid_epoch_observations, idx}}
+
+  defp normalize_dual_baseline_epochs(epochs) do
+    epochs
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, fn {epoch, idx}, {:ok, acc} ->
+      case normalize_dual_baseline_epoch(epoch, idx) do
+        {:ok, normalized} -> {:cont, {:ok, [normalized | acc]}}
+        {:error, _reason} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
+      {:error, _reason} = err -> err
+    end
+  end
+
+  defp normalize_dual_baseline_epoch(
+         %{
+           base_observations: base_observations,
+           rover_observations: rover_observations,
+           satellite_positions_m: satellite_positions
+         } = epoch,
+         idx
+       )
+       when is_list(base_observations) and is_list(rover_observations) and
+              is_map(satellite_positions) do
+    with {:ok, base} <-
+           normalize_dual_observations(base_observations, :invalid_base_observations),
+         {:ok, rover} <-
+           normalize_dual_observations(rover_observations, :invalid_rover_observations),
+         {:ok, positions} <- normalize_satellite_positions(satellite_positions) do
+      {:ok,
+       %{
+         idx: idx,
+         epoch: Map.get(epoch, :epoch, idx),
+         base: base,
+         rover: rover,
+         positions: positions
+       }}
+    end
+  end
+
+  defp normalize_dual_baseline_epoch(_epoch, idx),
+    do: {:error, {:invalid_epoch_observations, idx}}
+
+  defp normalize_dual_observations(observations, error_tag) do
+    observations
+    |> Enum.reduce_while({:ok, %{}}, fn observation, {:ok, acc} ->
+      case normalize_dual_observation(observation) do
+        {:ok, %{satellite_id: sat} = obs} ->
+          if Map.has_key?(acc, sat) do
+            {:halt, {:error, {:duplicate_observation, sat}}}
+          else
+            {:cont, {:ok, Map.put(acc, sat, obs)}}
+          end
+
+        {:error, _} ->
+          {:halt, {:error, {error_tag, observation}}}
+      end
+    end)
+  end
+
+  defp normalize_dual_observation(
+         %{
+           satellite_id: sat,
+           p1_m: p1,
+           p2_m: p2,
+           phi1_cyc: phi1,
+           phi2_cyc: phi2,
+           f1_hz: f1,
+           f2_hz: f2
+         } = obs
+       )
+       when is_binary(sat) and is_number(p1) and is_number(p2) and is_number(phi1) and
+              is_number(phi2) and is_number(f1) and is_number(f2) and f1 > 0.0 and f2 > 0.0 do
+    with {:ok, ambiguity_id} <- normalize_observation_ambiguity_id(obs, sat),
+         {:ok, lli1} <- normalize_dual_lli(obs, :lli1),
+         {:ok, lli2} <- normalize_dual_lli(obs, :lli2) do
+      {:ok,
+       %{
+         satellite_id: sat,
+         ambiguity_id: ambiguity_id,
+         p1_m: p1 / 1.0,
+         p2_m: p2 / 1.0,
+         phi1_cyc: phi1 / 1.0,
+         phi2_cyc: phi2 / 1.0,
+         f1_hz: f1 / 1.0,
+         f2_hz: f2 / 1.0,
+         lli1: lli1,
+         lli2: lli2
+       }}
+    end
+  end
+
+  defp normalize_dual_observation(_observation), do: {:error, :invalid_observation}
+
+  defp normalize_dual_lli(obs, key) do
+    case Map.get(obs, key) do
+      nil -> {:ok, nil}
+      value when is_integer(value) -> {:ok, value}
+      _other -> {:error, :invalid_observation}
+    end
+  end
+
+  defp prepare_dual_baseline_cycle_slips(epochs, opts) do
+    with {:ok, policy} <- rtk_cycle_slip_policy(opts) do
+      slips = dual_cycle_slip_events(epochs, opts)
+
+      case {policy, slips} do
+        {_policy, []} ->
+          {:ok, epochs, empty_cycle_slip_meta()}
+
+        {:error, [slip | _]} ->
+          {:error,
+           {:cycle_slip_detected, slip.receiver, slip.satellite_id, slip.epoch, slip.reasons}}
+
+        {:drop_satellite, slips} ->
+          dropped = slips |> Enum.map(& &1.satellite_id) |> Enum.uniq() |> Enum.sort()
+
+          {:ok, drop_dual_cycle_slip_sats(epochs, dropped),
+           %{dropped_sats: dropped, split_arcs: []}}
+
+        {:split_arc, slips} ->
+          split_epochs = split_dual_cycle_slip_arcs(epochs, slips)
+
+          {:ok, split_epochs,
+           %{dropped_sats: [], split_arcs: dual_cycle_slip_split_metadata(split_epochs, slips)}}
+      end
+    end
+  end
+
+  defp dual_cycle_slip_events(epochs, opts) do
+    dual_cycle_slip_events_for_receiver(:base, epochs, opts) ++
+      dual_cycle_slip_events_for_receiver(:rover, epochs, opts)
+  end
+
+  defp dual_cycle_slip_events_for_receiver(receiver, epochs, opts) do
+    epochs
+    |> Enum.flat_map(fn epoch ->
+      epoch
+      |> dual_receiver_observations(receiver)
+      |> Enum.map(fn {sat, obs} -> {sat, epoch.epoch, obs} end)
+    end)
+    |> Enum.group_by(fn {sat, _epoch, _obs} -> sat end)
+    |> Enum.sort_by(fn {sat, _arc} -> sat end)
+    |> Enum.flat_map(fn {sat, arc} ->
+      arc =
+        Enum.sort_by(arc, fn {_sat, epoch, _obs} -> inspect(epoch) end)
+
+      arc
+      |> dual_carrier_phase_arc()
+      |> CarrierPhase.detect_cycle_slips(opts)
+      |> Enum.filter(& &1.slip)
+      |> Enum.map(fn slip ->
+        %{
+          receiver: receiver,
+          satellite_id: sat,
+          epoch: slip.epoch,
+          reasons: slip.reasons
+        }
+      end)
+    end)
+  end
+
+  defp dual_carrier_phase_arc(arc) do
+    Enum.map(arc, fn {_sat, epoch, obs} ->
+      %{
+        epoch: epoch,
+        phi1: obs.phi1_cyc,
+        phi2: obs.phi2_cyc,
+        p1: obs.p1_m,
+        p2: obs.p2_m,
+        f1: obs.f1_hz,
+        f2: obs.f2_hz,
+        lli1: obs.lli1,
+        lli2: obs.lli2
+      }
+    end)
+  end
+
+  defp drop_dual_cycle_slip_sats(epochs, dropped) do
+    dropped = MapSet.new(dropped)
+
+    Enum.map(epochs, fn epoch ->
+      %{
+        epoch
+        | base: Map.drop(epoch.base, MapSet.to_list(dropped)),
+          rover: Map.drop(epoch.rover, MapSet.to_list(dropped)),
+          positions: Map.drop(epoch.positions, MapSet.to_list(dropped))
+      }
+    end)
+  end
+
+  defp split_dual_cycle_slip_arcs(epochs, slips) do
+    split_sides = MapSet.new(slips, &{&1.receiver, &1.satellite_id})
+    slip_epochs = MapSet.new(slips, &{&1.receiver, &1.satellite_id, &1.epoch})
+
+    {split_epochs, _segments} =
+      Enum.map_reduce(epochs, %{}, fn epoch, segments ->
+        {base, segments} =
+          split_dual_receiver_cycle_slip_arcs(
+            :base,
+            epoch.epoch,
+            epoch.base,
+            split_sides,
+            slip_epochs,
+            segments
+          )
+
+        {rover, segments} =
+          split_dual_receiver_cycle_slip_arcs(
+            :rover,
+            epoch.epoch,
+            epoch.rover,
+            split_sides,
+            slip_epochs,
+            segments
+          )
+
+        {%{epoch | base: base, rover: rover}, segments}
+      end)
+
+    split_epochs
+  end
+
+  defp split_dual_receiver_cycle_slip_arcs(
+         receiver,
+         epoch,
+         observations,
+         split_sides,
+         slip_epochs,
+         segments
+       ) do
+    observations
+    |> Enum.sort_by(fn {sat, _obs} -> sat end)
+    |> Enum.reduce({%{}, segments}, fn {sat, obs}, {acc, segments} ->
+      key = {receiver, sat}
+
+      if MapSet.member?(split_sides, key) do
+        current_segment = Map.get(segments, key, 1)
+
+        segment =
+          if MapSet.member?(slip_epochs, {receiver, sat, epoch}),
+            do: current_segment + 1,
+            else: current_segment
+
+        ambiguity_id = split_side_ambiguity_id(sat, receiver, segment)
+        obs = %{obs | ambiguity_id: ambiguity_id}
+
+        {Map.put(acc, sat, obs), Map.put(segments, key, segment)}
+      else
+        {Map.put(acc, sat, obs), segments}
+      end
+    end)
+  end
+
+  defp dual_cycle_slip_split_metadata(epochs, slips) do
+    split_sides = MapSet.new(slips, &{&1.receiver, &1.satellite_id})
+
+    epochs
+    |> Enum.flat_map(fn epoch ->
+      dual_split_metadata_entries(:base, epoch.epoch, epoch.base, split_sides) ++
+        dual_split_metadata_entries(:rover, epoch.epoch, epoch.rover, split_sides)
+    end)
+    |> Enum.group_by(fn entry -> {entry.receiver, entry.satellite_id, entry.ambiguity_id} end)
+    |> Enum.map(fn {{receiver, sat, ambiguity_id}, entries} ->
+      sorted = Enum.sort_by(entries, &inspect(&1.epoch))
+
+      %{
+        receiver: receiver,
+        satellite_id: sat,
+        ambiguity_id: ambiguity_id,
+        start_epoch: hd(sorted).epoch,
+        end_epoch: List.last(sorted).epoch,
+        n_epochs: length(sorted)
+      }
+    end)
+    |> Enum.sort_by(&{&1.satellite_id, &1.receiver, &1.ambiguity_id})
+  end
+
+  defp dual_split_metadata_entries(receiver, epoch, observations, split_sides) do
+    observations
+    |> Enum.sort_by(fn {sat, _obs} -> sat end)
+    |> Enum.flat_map(fn {sat, obs} ->
+      if MapSet.member?(split_sides, {receiver, sat}) do
+        [
+          %{
+            receiver: receiver,
+            satellite_id: sat,
+            ambiguity_id: obs.ambiguity_id,
+            epoch: epoch
+          }
+        ]
+      else
+        []
+      end
+    end)
+  end
+
+  defp estimate_dual_baseline_wide_lanes(epochs, reference_sat, opts) do
+    with {:ok, wl_opts} <- dual_wide_lane_options(opts),
+         {:ok, samples} <- dual_wide_lane_samples(epochs, reference_sat) do
+      samples
+      |> Enum.group_by(& &1.ambiguity_id)
+      |> Enum.sort_by(fn {ambiguity_id, _samples} -> ambiguity_id end)
+      |> Enum.reduce_while({:ok, %{}}, fn {ambiguity_id, grouped}, {:ok, acc} ->
+        cycles = Enum.map(grouped, & &1.cycles)
+
+        case estimate_dual_wide_lane_integer(ambiguity_id, cycles, wl_opts) do
+          {:ok, fixed} -> {:cont, {:ok, Map.put(acc, ambiguity_id, fixed)}}
+          {:error, _} = err -> {:halt, err}
+        end
+      end)
+    end
+  end
+
+  defp dual_wide_lane_options(opts) do
+    min_epochs = Keyword.get(opts, :wide_lane_min_epochs, 2)
+    tolerance = Keyword.get(opts, :wide_lane_tolerance_cycles, 0.5)
+
+    cond do
+      not is_integer(min_epochs) or min_epochs < 1 ->
+        {:error, {:invalid_option, :wide_lane_min_epochs}}
+
+      not is_number(tolerance) or tolerance < 0.0 ->
+        {:error, {:invalid_option, :wide_lane_tolerance_cycles}}
+
+      true ->
+        {:ok, %{min_epochs: min_epochs, tolerance_cycles: tolerance / 1.0}}
+    end
+  end
+
+  defp dual_wide_lane_samples(epochs, reference_sat) do
+    epochs
+    |> Enum.reduce_while({:ok, []}, fn epoch, {:ok, acc} ->
+      common = dual_epoch_common_sats(epoch)
+
+      if reference_sat in common do
+        ref_sd = dual_single_difference(epoch, reference_sat)
+
+        common
+        |> Enum.reject(&(&1 == reference_sat))
+        |> Enum.reduce_while({:ok, acc}, fn sat, {:ok, samples} ->
+          case dual_wide_lane_double_difference(epoch, sat, ref_sd) do
+            {:ok, sample} -> {:cont, {:ok, [sample | samples]}}
+            {:error, _} = err -> {:halt, err}
+          end
+        end)
+        |> case do
+          {:ok, samples} -> {:cont, {:ok, samples}}
+          {:error, _} = err -> {:halt, err}
+        end
+      else
+        {:halt, {:error, {:reference_satellite_missing, reference_sat}}}
+      end
+    end)
+    |> case do
+      {:ok, samples} -> {:ok, Enum.reverse(samples)}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp dual_epoch_common_sats(epoch) do
+    epoch.base
+    |> Map.keys()
+    |> MapSet.new()
+    |> MapSet.intersection(epoch.rover |> Map.keys() |> MapSet.new())
+    |> MapSet.intersection(epoch.positions |> Map.keys() |> MapSet.new())
+    |> MapSet.to_list()
+    |> Enum.sort()
+  end
+
+  defp dual_single_difference(epoch, sat) do
+    base_obs = Map.fetch!(epoch.base, sat)
+    rover_obs = Map.fetch!(epoch.rover, sat)
+
+    %{
+      satellite_id: sat,
+      ambiguity_id: single_difference_ambiguity_id(sat, base_obs, rover_obs),
+      wide_lane_cycles:
+        dual_observation_wide_lane_cycles(rover_obs) - dual_observation_wide_lane_cycles(base_obs)
+    }
+  end
+
+  defp dual_wide_lane_double_difference(epoch, sat, ref_sd) do
+    sd = dual_single_difference(epoch, sat)
+
+    {:ok,
+     %{
+       satellite_id: sat,
+       reference_satellite_id: ref_sd.satellite_id,
+       ambiguity_id: double_difference_ambiguity_id(sat, sd.ambiguity_id, ref_sd),
+       cycles: sd.wide_lane_cycles - ref_sd.wide_lane_cycles
+     }}
+  rescue
+    MatchError -> {:error, {:wide_lane_failed, sat, :equal_frequencies}}
+    ArithmeticError -> {:error, {:wide_lane_failed, sat, :equal_frequencies}}
+  end
+
+  defp dual_observation_wide_lane_cycles(obs) do
+    {:ok, mw_m} =
+      CarrierPhase.melbourne_wubbena(
+        obs.phi1_cyc,
+        obs.phi2_cyc,
+        obs.p1_m,
+        obs.p2_m,
+        obs.f1_hz,
+        obs.f2_hz
+      )
+
+    {:ok, lambda_wl} = CarrierPhase.wide_lane_wavelength(obs.f1_hz, obs.f2_hz)
+    mw_m / lambda_wl
+  end
+
+  defp estimate_dual_wide_lane_integer(ambiguity_id, cycles, opts) do
+    if length(cycles) < opts.min_epochs do
+      {:error, {:too_few_wide_lane_epochs, ambiguity_id, length(cycles), opts.min_epochs}}
+    else
+      mean = Enum.sum(cycles) / length(cycles)
+      fixed = round(mean)
+
+      if abs(mean - fixed) <= opts.tolerance_cycles do
+        {:ok, fixed}
+      else
+        {:error, {:wide_lane_not_integer, ambiguity_id, mean, fixed}}
+      end
+    end
+  end
+
+  defp ionosphere_free_baseline_epochs(dual_epochs, reference_sat, wide_lane_cycles) do
+    with {:ok, params} <- dual_narrow_lane_params(dual_epochs, reference_sat, wide_lane_cycles),
+         {:ok, if_epochs} <-
+           dual_ionosphere_free_baseline_epochs(dual_epochs, reference_sat, wide_lane_cycles) do
+      wavelengths = Map.new(params, fn {id, p} -> {id, p.wavelength_m} end)
+      offsets = Map.new(params, fn {id, p} -> {id, p.offset_m} end)
+      {:ok, if_epochs, wavelengths, offsets}
+    end
+  end
+
+  defp dual_narrow_lane_params(dual_epochs, reference_sat, wide_lane_cycles) do
+    dual_epochs
+    |> Enum.reduce_while({:ok, %{}}, fn epoch, {:ok, acc} ->
+      ref_sd = dual_single_difference(epoch, reference_sat)
+
+      epoch
+      |> dual_epoch_common_sats()
+      |> Enum.reject(&(&1 == reference_sat))
+      |> Enum.reduce_while({:ok, acc}, fn sat, {:ok, params_acc} ->
+        with {:ok, sample} <- dual_wide_lane_double_difference(epoch, sat, ref_sd),
+             {:ok, wide_lane} <- fetch_dual_wide_lane(wide_lane_cycles, sample.ambiguity_id),
+             {:ok, params} <-
+               dual_narrow_lane_param_from_epoch(
+                 epoch,
+                 sat,
+                 reference_sat,
+                 sample.ambiguity_id,
+                 wide_lane
+               ),
+             :ok <-
+               ensure_consistent_dual_narrow_lane_params(
+                 sample.ambiguity_id,
+                 params,
+                 Map.get(params_acc, sample.ambiguity_id)
+               ) do
+          {:cont, {:ok, Map.put_new(params_acc, sample.ambiguity_id, params)}}
+        else
+          {:error, {:missing_wide_lane_ambiguity, _id}} ->
+            {:cont, {:ok, params_acc}}
+
+          {:error, _} = err ->
+            {:halt, err}
+        end
+      end)
+      |> case do
+        {:ok, params_acc} -> {:cont, {:ok, params_acc}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
+
+  defp fetch_dual_wide_lane(wide_lane_cycles, ambiguity_id) do
+    case Map.fetch(wide_lane_cycles, ambiguity_id) do
+      {:ok, wide_lane} -> {:ok, wide_lane}
+      :error -> {:error, {:missing_wide_lane_ambiguity, ambiguity_id}}
+    end
+  end
+
+  defp dual_narrow_lane_param_from_epoch(
+         epoch,
+         sat,
+         reference_sat,
+         ambiguity_id,
+         wide_lane_cycles
+       ) do
+    sat_base = Map.fetch!(epoch.base, sat)
+    sat_rover = Map.fetch!(epoch.rover, sat)
+    ref_base = Map.fetch!(epoch.base, reference_sat)
+    ref_rover = Map.fetch!(epoch.rover, reference_sat)
+
+    with :ok <-
+           ensure_same_dual_frequencies(ambiguity_id, [sat_base, sat_rover, ref_base, ref_rover]) do
+      dual_narrow_lane_param(sat_base.f1_hz, sat_base.f2_hz, wide_lane_cycles)
+    end
+  end
+
+  defp ensure_same_dual_frequencies(ambiguity_id, [first | rest]) do
+    if Enum.all?(
+         rest,
+         &(same_frequency?(&1.f1_hz, first.f1_hz) and same_frequency?(&1.f2_hz, first.f2_hz))
+       ) do
+      :ok
+    else
+      {:error, {:inconsistent_frequencies, ambiguity_id}}
+    end
+  end
+
+  defp dual_narrow_lane_param(f1, f2, wide_lane_cycles) do
+    with {:ok, gamma} <- IonosphereFree.gamma(f1, f2) do
+      c = Constants.speed_of_light_m_s()
+      beta = gamma - 1.0
+      lambda2 = c / f2
+
+      {:ok,
+       %{
+         wavelength_m: c / (f1 + f2),
+         offset_m: beta * lambda2 * wide_lane_cycles,
+         f1_hz: f1,
+         f2_hz: f2
+       }}
+    end
+  end
+
+  defp ensure_consistent_dual_narrow_lane_params(_id, _params, nil), do: :ok
+
+  defp ensure_consistent_dual_narrow_lane_params(ambiguity_id, params, prev) do
+    if same_frequency?(params.f1_hz, prev.f1_hz) and same_frequency?(params.f2_hz, prev.f2_hz) do
+      :ok
+    else
+      {:error, {:inconsistent_frequencies, ambiguity_id}}
+    end
+  end
+
+  defp dual_ionosphere_free_baseline_epochs(dual_epochs, reference_sat, wide_lane_cycles) do
+    dual_epochs
+    |> Enum.reduce_while({:ok, []}, fn epoch, {:ok, acc} ->
+      keep_sats = dual_ionosphere_free_keep_sats(epoch, reference_sat, wide_lane_cycles)
+
+      if length(keep_sats) < 2 do
+        {:cont, {:ok, acc}}
+      else
+        with {:ok, base_obs} <- dual_ionosphere_free_observations(epoch.base, keep_sats),
+             {:ok, rover_obs} <- dual_ionosphere_free_observations(epoch.rover, keep_sats) do
+          {:cont,
+           {:ok,
+            [
+              %{
+                epoch: epoch.epoch,
+                base_observations: base_obs,
+                rover_observations: rover_obs,
+                satellite_positions_m: Map.take(epoch.positions, keep_sats)
+              }
+              | acc
+            ]}}
+        else
+          {:error, _} = err -> {:halt, err}
+        end
+      end
+    end)
+    |> case do
+      {:ok, []} -> {:error, :no_epochs}
+      {:ok, rows} -> {:ok, Enum.reverse(rows)}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp dual_ionosphere_free_keep_sats(epoch, reference_sat, wide_lane_cycles) do
+    common = dual_epoch_common_sats(epoch)
+
+    if reference_sat in common do
+      ref_sd = dual_single_difference(epoch, reference_sat)
+
+      kept_nonrefs =
+        common
+        |> Enum.reject(&(&1 == reference_sat))
+        |> Enum.filter(fn sat ->
+          case dual_wide_lane_double_difference(epoch, sat, ref_sd) do
+            {:ok, sample} -> Map.has_key?(wide_lane_cycles, sample.ambiguity_id)
+            {:error, _} -> false
+          end
+        end)
+
+      if kept_nonrefs == [], do: [], else: [reference_sat | kept_nonrefs]
+    else
+      []
+    end
+  end
+
+  defp dual_ionosphere_free_observations(observations, keep_sats) do
+    keep = MapSet.new(keep_sats)
+
+    observations
+    |> Enum.sort_by(fn {sat, _obs} -> sat end)
+    |> Enum.reduce_while({:ok, []}, fn {sat, obs}, {:ok, acc} ->
+      if MapSet.member?(keep, sat) do
+        case dual_ionosphere_free_observation(obs) do
+          {:ok, converted} -> {:cont, {:ok, [converted | acc]}}
+          {:error, _} = err -> {:halt, err}
+        end
+      else
+        {:cont, {:ok, acc}}
+      end
+    end)
+    |> case do
+      {:ok, obs} -> {:ok, Enum.reverse(obs)}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp dual_ionosphere_free_observation(obs) do
+    with {:ok, code_m} <- IonosphereFree.iono_free(obs.p1_m, obs.p2_m, obs.f1_hz, obs.f2_hz),
+         {:ok, phase_m} <-
+           IonosphereFree.iono_free_phase_cycles(
+             obs.phi1_cyc,
+             obs.phi2_cyc,
+             obs.f1_hz,
+             obs.f2_hz
+           ) do
+      {:ok,
+       %{
+         satellite_id: obs.satellite_id,
+         ambiguity_id: obs.ambiguity_id,
+         code_m: code_m,
+         phase_m: phase_m
+       }}
+    else
+      {:error, reason} -> {:error, {:ionosphere_free_failed, obs.satellite_id, reason}}
+    end
+  end
+
+  defp dual_receiver_observations(epoch, :base), do: epoch.base
+  defp dual_receiver_observations(epoch, :rover), do: epoch.rover
+
+  defp same_frequency?(a, b), do: abs(a - b) <= 1.0e-6
 
   defp normalize_satellite_positions(positions) do
     positions
@@ -1601,6 +2371,7 @@ defmodule Orbis.GNSS.RTK do
          used_sats: ambiguity_ids,
          fixed_ambiguities_cycles: fixed_cycles,
          fixed_ambiguities_m: fixed_m,
+         wide_lane_ambiguities_cycles: Map.get(fixed_meta, :wide_lane_ambiguities_cycles),
          float_solution: float_sol,
          residuals_m: residuals,
          metadata:

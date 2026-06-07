@@ -19,6 +19,7 @@ defmodule Orbis.GNSS.RTKRealArcTest do
 
   @c_m_s 299_792_458.0
   @gps_l1_hz 1_575_420_000.0
+  @gps_l2_hz 1_227_600_000.0
   @gps_l1_wavelength_m @c_m_s / @gps_l1_hz
 
   @wtzr_marker {4_075_580.3111, 931_854.0543, 4_801_568.2808}
@@ -83,6 +84,29 @@ defmodule Orbis.GNSS.RTKRealArcTest do
     # unsafe fix instead of reporting false centimetre confidence.
     assert fixed_antenna_error_m > float_antenna_error_m
     assert fixed_antenna_error_m < 0.2
+
+    dual_epochs = real_gps_l1_l2_rtk_epochs(sp3, base_obs, rover_obs, 120)
+    assert length(dual_epochs) == 120
+
+    assert {:ok, wide_lane_fixed} =
+             RTK.solve_widelane_fixed_baseline_epochs(base_arp, dual_epochs,
+               initial_baseline_m: {0.0, 0.0, 0.0},
+               max_iterations: 10,
+               on_cycle_slip: :drop_satellite,
+               elevation_weighting: true,
+               code_sigma_m: 2.0,
+               phase_sigma_m: 0.01,
+               integer_candidate_limit: 200_000
+             )
+
+    assert wide_lane_fixed.wide_lane_ambiguities_cycles != nil
+    assert wide_lane_fixed.metadata.integer_method == :widelane_narrowlane_lambda
+    assert wide_lane_fixed.metadata.integer_status == :not_fixed
+    assert wide_lane_fixed.metadata.integer_ratio < 3.0
+
+    wide_lane_antenna_error_m = position_error(wide_lane_fixed.baseline_m, antenna_baseline)
+
+    assert wide_lane_antenna_error_m < 0.2
   end
 
   defp real_gps_l1_rtk_epochs(sp3, base_obs, rover_obs, count) do
@@ -144,6 +168,81 @@ defmodule Orbis.GNSS.RTKRealArcTest do
              code_m: c1,
              phase_m: l1 * @gps_l1_wavelength_m,
              lli: phase.lli
+           }}
+        ]
+      else
+        _ -> []
+      end
+    end)
+    |> Map.new()
+  end
+
+  defp real_gps_l1_l2_rtk_epochs(sp3, base_obs, rover_obs, count) do
+    rover_by_epoch = Map.new(Observations.epochs(rover_obs), &{&1.epoch, &1})
+
+    base_obs
+    |> Observations.epochs()
+    |> Enum.take(count)
+    |> Enum.flat_map(fn base_entry ->
+      case Map.fetch(rover_by_epoch, base_entry.epoch) do
+        {:ok, rover_entry} ->
+          base_values = gps_l1_l2_values(base_obs, base_entry.index)
+          rover_values = gps_l1_l2_values(rover_obs, rover_entry.index)
+
+          common =
+            base_values
+            |> Map.keys()
+            |> MapSet.new()
+            |> MapSet.intersection(rover_values |> Map.keys() |> MapSet.new())
+            |> MapSet.to_list()
+            |> Enum.sort()
+
+          epoch = naive_datetime(base_entry.epoch)
+          positions = satellite_positions(sp3, epoch, common)
+          usable = Enum.filter(common, &Map.has_key?(positions, &1))
+
+          if length(usable) >= 4 do
+            [
+              %{
+                epoch: epoch,
+                satellite_positions_m: Map.take(positions, usable),
+                base_observations: Enum.map(usable, &Map.fetch!(base_values, &1)),
+                rover_observations: Enum.map(usable, &Map.fetch!(rover_values, &1))
+              }
+            ]
+          else
+            []
+          end
+
+        :error ->
+          []
+      end
+    end)
+  end
+
+  defp gps_l1_l2_values(obs, index) do
+    {:ok, by_sat} = Observations.values(obs, index, codes: %{"G" => ["C1C", "C2W", "L1C", "L2W"]})
+
+    by_sat
+    |> Enum.flat_map(fn {sat, values} ->
+      values_by_code = Map.new(values, &{&1.code, &1})
+
+      with %{value: c1} when is_number(c1) <- values_by_code["C1C"],
+           %{value: c2} when is_number(c2) <- values_by_code["C2W"],
+           %{value: l1} = phase1 when is_number(l1) <- values_by_code["L1C"],
+           %{value: l2} = phase2 when is_number(l2) <- values_by_code["L2W"] do
+        [
+          {sat,
+           %{
+             satellite_id: sat,
+             p1_m: c1,
+             p2_m: c2,
+             phi1_cyc: l1,
+             phi2_cyc: l2,
+             f1_hz: @gps_l1_hz,
+             f2_hz: @gps_l2_hz,
+             lli1: phase1.lli,
+             lli2: phase2.lli
            }}
         ]
       else
