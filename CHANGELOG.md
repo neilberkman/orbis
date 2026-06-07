@@ -49,6 +49,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   second-best candidate, so `solve_fixed_epochs/3` keeps the same integer
   decision and ratio-test semantics while visiting far fewer complete
   candidates.
+- `Orbis.GNSS.PrecisePositioning.solve_fixed_epochs/3` now reports an empty
+  LAMBDA sphere-search result as `{:error, {:no_integer_candidates, count}}`
+  instead of conflating it with the `:too_many_integer_candidates` cap.
 
 ## [0.9.2] - 2026-06-06
 

@@ -65,15 +65,38 @@ defmodule Orbis.GNSS.PreciseRealArcTest do
     assert ztd_estimated.metadata.phase_rms_m < corrected.metadata.phase_rms_m
   end
 
-  defp real_gps_iono_free_arc(obs, count) do
+  @tag timeout: 180_000
+  test "real noisy narrow-lane fixing reports an empty candidate set distinctly" do
+    sp3 = SP3.load!(@sp3_path)
+    obs = Observations.load!(@obs_path)
+    {x0, y0, z0} = Observations.approx_position(obs)
+
+    # G21 has a detected slip on this arc; exclude it so this test exercises the
+    # narrow-lane LAMBDA empty-candidate path rather than the slip hard-abort.
+    epoch_observations = real_gps_iono_free_arc(obs, 120, exclude: ["G21"])
+
     {:ok, f1} = IonosphereFree.frequency("G", :l1)
     {:ok, f2} = IonosphereFree.frequency("G", :l2)
+
+    assert {:error, {:no_integer_candidates, 0}} =
+             PrecisePositioning.solve_fixed_epochs(sp3, epoch_observations,
+               initial_guess: {x0 + 100.0, y0 - 100.0, z0 + 100.0, 0.0},
+               max_iterations: 8,
+               troposphere: true,
+               ambiguity_wavelength_m: 299_792_458.0 / (f1 + f2)
+             )
+  end
+
+  defp real_gps_iono_free_arc(obs, count, opts \\ []) do
+    {:ok, f1} = IonosphereFree.frequency("G", :l1)
+    {:ok, f2} = IonosphereFree.frequency("G", :l2)
+    excluded = opts |> Keyword.get(:exclude, []) |> MapSet.new()
 
     obs
     |> Observations.epochs()
     |> Enum.take(count)
     |> Enum.map(fn entry ->
-      rows = epoch_rows(obs, entry.index, f1, f2)
+      rows = epoch_rows(obs, entry.index, f1, f2, excluded)
 
       if length(rows) < 6 do
         raise "fixture epoch #{inspect(entry.epoch)} has only #{length(rows)} complete GPS L1/L2 code+phase rows"
@@ -83,7 +106,7 @@ defmodule Orbis.GNSS.PreciseRealArcTest do
     end)
   end
 
-  defp epoch_rows(obs, index, f1, f2) do
+  defp epoch_rows(obs, index, f1, f2, excluded) do
     {:ok, by_sat} =
       Observations.values(obs, index, codes: %{"G" => ["C1C", "C2W", "L1C", "L2W"]})
 
@@ -95,6 +118,7 @@ defmodule Orbis.GNSS.PreciseRealArcTest do
            c2 when is_number(c2) <- values_by_code["C2W"],
            l1 when is_number(l1) <- values_by_code["L1C"],
            l2 when is_number(l2) <- values_by_code["L2W"],
+           false <- MapSet.member?(excluded, sat),
            {:ok, code_m} <- IonosphereFree.iono_free(c1, c2, f1, f2),
            {:ok, phase_m} <- IonosphereFree.iono_free_phase_cycles(l1, l2, f1, f2) do
         [%{satellite_id: sat, code_m: code_m, phase_m: phase_m}]

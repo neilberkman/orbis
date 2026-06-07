@@ -424,7 +424,9 @@ defmodule Orbis.GNSS.PrecisePositioning do
       ratio for `metadata.integer_status == :fixed` (default `3.0`).
     * `:integer_candidate_limit` - maximum candidates to evaluate before
       returning `{:error, {:too_many_integer_candidates, count, limit}}`
-      (default `50_000`).
+      (default `50_000`). If the sphere search finds no integer point inside
+      the search bound, the function returns `{:error, {:no_integer_candidates,
+      count}}`.
     * `:ambiguity_offset_m` - optional scalar or `%{"G05" => offset_m, ...}` map
       subtracted from each float ambiguity before converting to cycles and added
       back after fixing (default `0.0`). This is mainly for affine carrier-phase
@@ -1882,7 +1884,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
           err
 
         {:ok, [], evaluated, _bound} ->
-          {:error, {:too_many_integer_candidates, evaluated, opts.candidate_limit}}
+          {:error, {:no_integer_candidates, evaluated}}
 
         {:ok, candidates, evaluated, _bound} ->
           sorted =
