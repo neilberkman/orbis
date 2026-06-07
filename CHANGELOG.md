@@ -25,6 +25,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   code/carrier double differences, holding one float ambiguity per
   non-reference satellite across the arc. The float solution now exposes the
   double-difference ambiguity covariance and inverse covariance in metres.
+- `Orbis.GNSS.RTK.solve_fixed_baseline_epochs/3` for LAMBDA-fixed RTK baseline
+  estimation. It starts from the float RTK baseline, fixes double-difference
+  carrier ambiguities with the same correlated covariance used by the float
+  solve, and re-solves the baseline with those integers held fixed.
 - `Orbis.GNSS.PrecisePositioning.solve_widelane_fixed_epochs/3` now supports
   `on_cycle_slip: :split_arc`, which resets a satellite's carrier ambiguity at
   detected cycle slips and keeps any post-slip fragments long enough for
@@ -37,7 +41,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `Orbis.GNSS.PrecisePositioning.solve_fixed_epochs/3` now uses an
   LDL-consistent forward recursion for the decorrelated LAMBDA sphere search.
   This fixes the zero-candidate search miss on noisy real arcs without an
-  original-space fallback: those arcs now return a `FixedSolution` with
+  original-space substitute path: those arcs now return a `FixedSolution` with
   `metadata.integer_status == :not_fixed` when candidates exist but fail the
   ratio test.
 - `Orbis.GNSS.RTK.solve_float_baseline_epochs/3` now propagates the

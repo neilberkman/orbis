@@ -5,6 +5,7 @@ defmodule Orbis.GNSS.RTKTest do
 
   @base {1_110_000.0, -4_840_000.0, 3_980_000.0}
   @truth_baseline {12.5, -4.25, 2.75}
+  @l1_wavelength_m 299_792_458.0 / 1_575_420_000.0
   @sat_positions [
     %{
       "G01" => {21_000_000.0, 14_000_000.0, 20_000_000.0},
@@ -29,6 +30,7 @@ defmodule Orbis.GNSS.RTKTest do
     }
   ]
   @ambiguities %{"G01" => 0.0, "G02" => 0.42, "G03" => -0.73, "G04" => 1.12, "G05" => -0.38}
+  @fixed_cycles %{"G01" => 0, "G02" => 5, "G03" => -7, "G04" => 12, "G05" => -4}
 
   describe "double_differences/3" do
     test "receiver clocks and common satellite errors cancel" do
@@ -224,6 +226,79 @@ defmodule Orbis.GNSS.RTKTest do
 
       assert RTK.solve_float_baseline_epochs(@base, [epoch], max_iterations: 0) ==
                {:error, {:invalid_option, :max_iterations}}
+    end
+  end
+
+  describe "solve_fixed_baseline_epochs/3" do
+    test "recovers a fixed static baseline and integer DD ambiguities" do
+      ambiguities_m =
+        Map.new(@fixed_cycles, fn {sat, cycles} -> {sat, cycles * @l1_wavelength_m} end)
+
+      epochs =
+        @sat_positions
+        |> Enum.with_index()
+        |> Enum.map(fn {positions, idx} ->
+          synthetic_baseline_epoch(@base, @truth_baseline, positions,
+            epoch: idx,
+            base_clock_m: 80.0 + idx,
+            rover_clock_m: -25.0 + 2.0 * idx,
+            common_errors_m: %{
+              "G01" => 1.5,
+              "G02" => -2.0 + idx,
+              "G03" => 0.25 * idx,
+              "G04" => 3.0,
+              "G05" => -0.5
+            },
+            ambiguities_m: ambiguities_m
+          )
+        end)
+
+      assert {:ok, sol} =
+               RTK.solve_fixed_baseline_epochs(@base, epochs,
+                 reference_satellite_id: "G01",
+                 ambiguity_wavelength_m: @l1_wavelength_m,
+                 initial_baseline_m: {-40.0, 35.0, 12.0}
+               )
+
+      assert sol.reference_satellite_id == "G01"
+      assert sol.used_sats == ["G02", "G03", "G04", "G05"]
+      assert sol.metadata.integer_status == :fixed
+      assert sol.metadata.integer_method == :lambda
+      assert sol.metadata.integer_ratio > 1.0e6
+      assert sol.metadata.ambiguity_search.order == sol.used_sats
+      assert position_error(sol.baseline_m, @truth_baseline) < 1.0e-5
+
+      for sat <- sol.used_sats do
+        expected_cycles = Map.fetch!(@fixed_cycles, sat)
+        assert Map.fetch!(sol.fixed_ambiguities_cycles, sat) == expected_cycles
+
+        assert abs(Map.fetch!(sol.fixed_ambiguities_m, sat) - expected_cycles * @l1_wavelength_m) <
+                 1.0e-12
+      end
+
+      for residual <- sol.residuals_m do
+        assert abs(residual.code_m) < 1.0e-5
+        assert abs(residual.phase_m) < 1.0e-5
+      end
+    end
+
+    test "bad fixed-baseline inputs are tagged" do
+      epoch = synthetic_baseline_epoch(@base, @truth_baseline, hd(@sat_positions))
+
+      assert RTK.solve_fixed_baseline_epochs(@base, [epoch]) ==
+               {:error, :ambiguity_wavelength_required}
+
+      assert RTK.solve_fixed_baseline_epochs(@base, [epoch], ambiguity_wavelength_m: 0.0) ==
+               {:error, {:invalid_option, :ambiguity_wavelength_m}}
+
+      assert RTK.solve_fixed_baseline_epochs(@base, [epoch],
+               ambiguity_wavelength_m: %{"G02" => @l1_wavelength_m}
+             ) == {:error, {:invalid_ambiguity_wavelength, "G01"}}
+
+      assert RTK.solve_fixed_baseline_epochs(@base, [epoch],
+               ambiguity_wavelength_m: @l1_wavelength_m,
+               integer_ratio_threshold: -1.0
+             ) == {:error, {:invalid_option, :integer_ratio_threshold}}
     end
   end
 

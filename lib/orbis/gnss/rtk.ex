@@ -15,10 +15,13 @@ defmodule Orbis.GNSS.RTK do
   carrier-phase double differences are the measurement surface used by RTK
   baseline estimation and integer ambiguity fixing.
 
-  `double_differences/3` returns the normalized measurements. The first solver
-  layer, `solve_float_baseline_epochs/3`, estimates one static base-to-rover
-  baseline from code and carrier-phase double differences, keeping one float
-  carrier ambiguity per non-reference satellite across the arc.
+  `double_differences/3` returns the normalized measurements. The float solver,
+  `solve_float_baseline_epochs/3`, estimates one static base-to-rover baseline
+  from code and carrier-phase double differences, keeping one float carrier
+  ambiguity per non-reference satellite across the arc.
+  `solve_fixed_baseline_epochs/3` adds LAMBDA integer ambiguity fixing on top of
+  the same correlated double-difference covariance and re-solves the baseline
+  with the selected integers held fixed.
 
   ## Example
 
@@ -47,6 +50,7 @@ defmodule Orbis.GNSS.RTK do
       transpose: 1
     ]
 
+  alias Orbis.GNSS.Core.IntegerLeastSquares
   alias Orbis.GNSS.Core.Types
 
   @default_max_iterations 8
@@ -54,6 +58,9 @@ defmodule Orbis.GNSS.RTK do
   @default_ambiguity_tolerance_m 1.0e-4
   @default_code_sigma_m 1.0
   @default_phase_sigma_m 0.02
+  @default_integer_search_radius_cycles 1
+  @default_integer_ratio_threshold 3.0
+  @default_integer_candidate_limit 50_000
 
   defmodule FloatBaselineSolution do
     @moduledoc """
@@ -116,6 +123,75 @@ defmodule Orbis.GNSS.RTK do
               n_epochs: pos_integer(),
               n_observations: pos_integer(),
               dropped_sats: [String.t()]
+            }
+          }
+  end
+
+  defmodule FixedBaselineSolution do
+    @moduledoc """
+    Integer-fixed RTK baseline solution from code/carrier double differences.
+    """
+
+    @enforce_keys [
+      :baseline_m,
+      :rover_position_m,
+      :reference_satellite_id,
+      :used_sats,
+      :fixed_ambiguities_cycles,
+      :fixed_ambiguities_m,
+      :float_solution,
+      :residuals_m,
+      :metadata
+    ]
+    defstruct [
+      :baseline_m,
+      :rover_position_m,
+      :reference_satellite_id,
+      :used_sats,
+      :fixed_ambiguities_cycles,
+      :fixed_ambiguities_m,
+      :float_solution,
+      :residuals_m,
+      :metadata
+    ]
+
+    @type ecef :: %{x_m: float(), y_m: float(), z_m: float()}
+
+    @type t :: %__MODULE__{
+            baseline_m: ecef(),
+            rover_position_m: ecef(),
+            reference_satellite_id: String.t(),
+            used_sats: [String.t()],
+            fixed_ambiguities_cycles: %{String.t() => integer()},
+            fixed_ambiguities_m: %{String.t() => float()},
+            float_solution: FloatBaselineSolution.t(),
+            residuals_m: [FloatBaselineSolution.residual()],
+            metadata: %{
+              required(:iterations) => pos_integer(),
+              required(:converged) => boolean(),
+              required(:status) => :state_tolerance | :max_iterations,
+              required(:integer_status) => :fixed | :not_fixed,
+              required(:integer_method) => :lambda,
+              required(:integer_ratio) => float() | :infinity,
+              required(:integer_best_score) => float(),
+              required(:integer_second_best_score) => float() | nil,
+              required(:integer_candidates) => pos_integer(),
+              required(:code_rms_m) => float(),
+              required(:phase_rms_m) => float(),
+              required(:weighted_rms_m) => float(),
+              required(:n_epochs) => pos_integer(),
+              required(:n_observations) => pos_integer(),
+              required(:measurement_covariance) => %{
+                model: :double_difference,
+                code_sigma_m: float(),
+                phase_sigma_m: float()
+              },
+              required(:ambiguity_search) => %{
+                order: [String.t()],
+                float_cycles: %{String.t() => float()},
+                covariance_cycles: [[float()]],
+                covariance_inverse_cycles: [[float()]]
+              }
             }
           }
   end
@@ -205,8 +281,7 @@ defmodule Orbis.GNSS.RTK do
     * `:max_iterations`, `:position_tolerance_m`,
       `:ambiguity_tolerance_m`.
 
-  Returns `{:ok, %FloatBaselineSolution{}}` or a tagged error. The solver is a
-  float-ambiguity RTK layer; integer double-difference fixing is a later step.
+  Returns `{:ok, %FloatBaselineSolution{}}` or a tagged error.
   """
   @spec solve_float_baseline_epochs(ecef_input(), [baseline_epoch()], keyword()) ::
           {:ok, FloatBaselineSolution.t()} | {:error, term()}
@@ -252,6 +327,68 @@ defmodule Orbis.GNSS.RTK do
   end
 
   def solve_float_baseline_epochs(_base_position, _epochs, _opts), do: {:error, :invalid_epochs}
+
+  @doc """
+  Solve a static RTK baseline with integer-fixed double-difference ambiguities.
+
+  The function first runs `solve_float_baseline_epochs/3`, converts the float
+  double-difference ambiguities from metres to cycles using
+  `:ambiguity_wavelength_m`, runs the shared LAMBDA integer least-squares search
+  with the correlated float ambiguity covariance, and then re-solves the
+  baseline with the selected integer ambiguities held fixed.
+
+  Required option:
+
+    * `:ambiguity_wavelength_m` - either a positive scalar wavelength in metres
+      for every non-reference satellite, or a map `%{"G05" => wavelength_m, ...}`.
+
+  Integer search options mirror `Orbis.GNSS.PrecisePositioning`:
+
+    * `:integer_search_radius_cycles` - default
+      `#{@default_integer_search_radius_cycles}`.
+    * `:integer_ratio_threshold` - default `#{@default_integer_ratio_threshold}`.
+    * `:integer_candidate_limit` - default `#{@default_integer_candidate_limit}`.
+
+  The fixed solution is returned even when the ratio test fails; in that case
+  `metadata.integer_status` is `:not_fixed`.
+  """
+  @spec solve_fixed_baseline_epochs(ecef_input(), [baseline_epoch()], keyword()) ::
+          {:ok, FixedBaselineSolution.t()} | {:error, term()}
+  def solve_fixed_baseline_epochs(base_position, epochs, opts \\ [])
+
+  def solve_fixed_baseline_epochs(base_position, epochs, opts) when is_list(epochs) do
+    with {:ok, float_sol} <- solve_float_baseline_epochs(base_position, epochs, opts),
+         {:ok, wavelengths} <- ambiguity_wavelengths(float_sol.used_sats, opts),
+         {:ok, integer_opts} <- integer_options(opts),
+         {:ok, fixed_cycles, fixed_meta} <-
+           search_baseline_ambiguities(float_sol, wavelengths, integer_opts),
+         fixed_m = fixed_ambiguities_m(fixed_cycles, wavelengths),
+         {:ok, base} <- Types.normalize_ecef(base_position, :invalid_base_position),
+         {:ok, normalized_epochs} <- normalize_epochs(epochs),
+         {:ok, weights} <- baseline_weights(opts),
+         {:ok, solve_opts} <- baseline_solve_options(opts) do
+      state = %{
+        baseline: {float_sol.baseline_m.x_m, float_sol.baseline_m.y_m, float_sol.baseline_m.z_m}
+      }
+
+      iterate_fixed_baseline(
+        base,
+        normalized_epochs,
+        float_sol.reference_satellite_id,
+        float_sol.used_sats,
+        fixed_m,
+        state,
+        weights,
+        solve_opts,
+        float_sol,
+        fixed_cycles,
+        fixed_meta,
+        1
+      )
+    end
+  end
+
+  def solve_fixed_baseline_epochs(_base_position, _epochs, _opts), do: {:error, :invalid_epochs}
 
   @doc """
   Build code and carrier-phase double differences from base and rover observations.
@@ -438,6 +575,33 @@ defmodule Orbis.GNSS.RTK do
     end
   end
 
+  defp integer_options(opts) do
+    radius =
+      Keyword.get(opts, :integer_search_radius_cycles, @default_integer_search_radius_cycles)
+
+    ratio = Keyword.get(opts, :integer_ratio_threshold, @default_integer_ratio_threshold)
+    limit = Keyword.get(opts, :integer_candidate_limit, @default_integer_candidate_limit)
+
+    cond do
+      not is_integer(radius) or radius < 0 ->
+        {:error, {:invalid_option, :integer_search_radius_cycles}}
+
+      not is_number(ratio) or ratio < 0.0 ->
+        {:error, {:invalid_option, :integer_ratio_threshold}}
+
+      not is_integer(limit) or limit < 1 ->
+        {:error, {:invalid_option, :integer_candidate_limit}}
+
+      true ->
+        {:ok,
+         %{
+           radius_cycles: radius,
+           ratio_threshold: ratio / 1.0,
+           candidate_limit: limit
+         }}
+    end
+  end
+
   defp baseline_weights(opts) do
     with {:ok, code_sigma_m} <- measurement_sigma(opts, :code_sigma_m, @default_code_sigma_m),
          {:ok, phase_sigma_m} <- measurement_sigma(opts, :phase_sigma_m, @default_phase_sigma_m) do
@@ -463,6 +627,31 @@ defmodule Orbis.GNSS.RTK do
     opts
     |> Keyword.get(:initial_baseline_m, {0.0, 0.0, 0.0})
     |> Types.normalize_ecef(:invalid_initial_baseline)
+  end
+
+  defp ambiguity_wavelengths(sat_ids, opts) do
+    case Keyword.fetch(opts, :ambiguity_wavelength_m) do
+      {:ok, wavelength} when is_number(wavelength) and wavelength > 0.0 ->
+        {:ok, Map.new(sat_ids, &{&1, wavelength / 1.0})}
+
+      {:ok, wavelengths} when is_map(wavelengths) ->
+        sat_ids
+        |> Enum.reduce_while({:ok, %{}}, fn sat, {:ok, acc} ->
+          case Map.fetch(wavelengths, sat) do
+            {:ok, wavelength} when is_number(wavelength) and wavelength > 0.0 ->
+              {:cont, {:ok, Map.put(acc, sat, wavelength / 1.0)}}
+
+            _other ->
+              {:halt, {:error, {:invalid_ambiguity_wavelength, sat}}}
+          end
+        end)
+
+      {:ok, _other} ->
+        {:error, {:invalid_option, :ambiguity_wavelength_m}}
+
+      :error ->
+        {:error, :ambiguity_wavelength_required}
+    end
   end
 
   defp baseline_row_count(epochs, ambiguity_sats), do: 2 * length(epochs) * length(ambiguity_sats)
@@ -710,6 +899,270 @@ defmodule Orbis.GNSS.RTK do
     end
   end
 
+  defp search_baseline_ambiguities(float_sol, wavelengths, integer_opts) do
+    covariance_cycles =
+      covariance_m_to_cycles(
+        float_sol.metadata.ambiguity_float.covariance_m,
+        float_sol.used_sats,
+        wavelengths
+      )
+
+    float_cycles =
+      Map.new(float_sol.used_sats, fn sat ->
+        {sat, Map.fetch!(float_sol.ambiguities_m, sat) / Map.fetch!(wavelengths, sat)}
+      end)
+
+    IntegerLeastSquares.search(float_cycles, covariance_cycles, integer_opts)
+  end
+
+  defp covariance_m_to_cycles(covariance_m, sat_ids, wavelengths) do
+    for i <- 0..(length(sat_ids) - 1) do
+      sat_i = Enum.at(sat_ids, i)
+      lambda_i = Map.fetch!(wavelengths, sat_i)
+
+      for j <- 0..(length(sat_ids) - 1) do
+        sat_j = Enum.at(sat_ids, j)
+        lambda_j = Map.fetch!(wavelengths, sat_j)
+        (covariance_m |> Enum.at(i) |> Enum.at(j)) / (lambda_i * lambda_j)
+      end
+    end
+  end
+
+  defp fixed_ambiguities_m(fixed_cycles, wavelengths) do
+    Map.new(fixed_cycles, fn {sat, cycles} ->
+      {sat, cycles * Map.fetch!(wavelengths, sat)}
+    end)
+  end
+
+  defp iterate_fixed_baseline(
+         base,
+         epochs,
+         reference_sat,
+         ambiguity_sats,
+         fixed_m,
+         state,
+         weights,
+         opts,
+         float_sol,
+         fixed_cycles,
+         fixed_meta,
+         iter
+       ) do
+    with {:ok, rows} <-
+           build_fixed_baseline_rows(
+             base,
+             epochs,
+             reference_sat,
+             ambiguity_sats,
+             fixed_m,
+             state,
+             weights
+           ),
+         {:ok, dx} <- solve_baseline_normal_equations(rows, 3) do
+      next = apply_fixed_baseline_delta(state, dx)
+      baseline_step = fixed_baseline_step_norm(dx)
+
+      cond do
+        baseline_step <= opts.position_tolerance_m ->
+          finalize_fixed_baseline(
+            base,
+            epochs,
+            reference_sat,
+            ambiguity_sats,
+            fixed_m,
+            next,
+            weights,
+            float_sol,
+            fixed_cycles,
+            fixed_meta,
+            iter,
+            true,
+            :state_tolerance
+          )
+
+        iter >= opts.max_iterations ->
+          finalize_fixed_baseline(
+            base,
+            epochs,
+            reference_sat,
+            ambiguity_sats,
+            fixed_m,
+            next,
+            weights,
+            float_sol,
+            fixed_cycles,
+            fixed_meta,
+            iter,
+            false,
+            :max_iterations
+          )
+
+        true ->
+          iterate_fixed_baseline(
+            base,
+            epochs,
+            reference_sat,
+            ambiguity_sats,
+            fixed_m,
+            next,
+            weights,
+            opts,
+            float_sol,
+            fixed_cycles,
+            fixed_meta,
+            iter + 1
+          )
+      end
+    end
+  end
+
+  defp build_fixed_baseline_rows(
+         base,
+         epochs,
+         reference_sat,
+         ambiguity_sats,
+         fixed_m,
+         state,
+         weights
+       ) do
+    epochs
+    |> Enum.reduce_while({:ok, []}, fn epoch, {:ok, acc} ->
+      case build_fixed_epoch_baseline_rows(
+             base,
+             epoch,
+             reference_sat,
+             ambiguity_sats,
+             fixed_m,
+             state,
+             weights
+           ) do
+        {:ok, rows} -> {:cont, {:ok, rows ++ acc}}
+        {:error, _reason} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, rows} -> {:ok, Enum.reverse(rows)}
+      {:error, _reason} = err -> err
+    end
+  end
+
+  defp build_fixed_epoch_baseline_rows(
+         base,
+         epoch,
+         reference_sat,
+         ambiguity_sats,
+         fixed_m,
+         state,
+         weights
+       ) do
+    ref_dd = single_difference(epoch, reference_sat)
+    ref_pos = Map.fetch!(epoch.positions, reference_sat)
+
+    ambiguity_sats
+    |> Enum.reduce({:ok, []}, fn sat, {:ok, acc} ->
+      obs_dd = double_difference_measurement(epoch, sat, ref_dd)
+      sat_pos = Map.fetch!(epoch.positions, sat)
+      {geom_dd, deriv} = geometry_double_difference(base, state.baseline, sat_pos, ref_pos)
+      h = tuple3_to_list(deriv)
+      fixed = Map.fetch!(fixed_m, sat)
+
+      code_row = %{
+        kind: :code,
+        epoch_idx: epoch.idx,
+        epoch: epoch.epoch,
+        sat: sat,
+        h: h,
+        y: obs_dd.code_m - geom_dd,
+        sigma_m: weights.code_sigma_m,
+        weight: weights.code_dd_weight
+      }
+
+      phase_row = %{
+        kind: :phase,
+        epoch_idx: epoch.idx,
+        epoch: epoch.epoch,
+        sat: sat,
+        h: h,
+        y: obs_dd.phase_m - (geom_dd + fixed),
+        sigma_m: weights.phase_sigma_m,
+        weight: weights.phase_dd_weight
+      }
+
+      {:ok, [phase_row, code_row | acc]}
+    end)
+    |> case do
+      {:ok, rows} -> {:ok, Enum.reverse(rows)}
+      {:error, _reason} = err -> err
+    end
+  end
+
+  defp apply_fixed_baseline_delta(state, [dx, dy, dz]) do
+    {bx, by, bz} = state.baseline
+    %{state | baseline: {bx + dx, by + dy, bz + dz}}
+  end
+
+  defp fixed_baseline_step_norm([dx, dy, dz]), do: :math.sqrt(dx * dx + dy * dy + dz * dz)
+
+  defp finalize_fixed_baseline(
+         base,
+         epochs,
+         reference_sat,
+         ambiguity_sats,
+         fixed_m,
+         state,
+         weights,
+         float_sol,
+         fixed_cycles,
+         fixed_meta,
+         iterations,
+         converged?,
+         status
+       ) do
+    with {:ok, rows} <-
+           build_fixed_baseline_rows(
+             base,
+             epochs,
+             reference_sat,
+             ambiguity_sats,
+             fixed_m,
+             state,
+             weights
+           ) do
+      residuals = baseline_residuals(rows, reference_sat)
+      code_residuals = Enum.map(residuals, & &1.code_m)
+      phase_residuals = Enum.map(residuals, & &1.phase_m)
+      rover = add3(base, state.baseline)
+
+      {:ok,
+       %FixedBaselineSolution{
+         baseline_m: ecef_map(state.baseline),
+         rover_position_m: ecef_map(rover),
+         reference_satellite_id: reference_sat,
+         used_sats: ambiguity_sats,
+         fixed_ambiguities_cycles: fixed_cycles,
+         fixed_ambiguities_m: fixed_m,
+         float_solution: float_sol,
+         residuals_m: residuals,
+         metadata:
+           Map.merge(fixed_meta, %{
+             iterations: iterations,
+             converged: converged?,
+             status: status,
+             code_rms_m: rms(code_residuals),
+             phase_rms_m: rms(phase_residuals),
+             weighted_rms_m: weighted_rms(rows),
+             n_epochs: length(epochs),
+             n_observations: length(rows),
+             measurement_covariance: %{
+               model: :double_difference,
+               code_sigma_m: weights.code_sigma_m,
+               phase_sigma_m: weights.phase_sigma_m
+             }
+           })
+       }}
+    end
+  end
+
   defp baseline_residuals(rows, reference_sat) do
     rows
     |> Enum.group_by(&{&1.epoch, &1.sat})
@@ -812,6 +1265,7 @@ defmodule Orbis.GNSS.RTK do
   defp sub3({ax, ay, az}, {bx, by, bz}), do: {ax - bx, ay - by, az - bz}
   defp scale3({x, y, z}, s), do: {x * s, y * s, z * s}
   defp norm({x, y, z}), do: :math.sqrt(x * x + y * y + z * z)
+  defp tuple3_to_list({x, y, z}), do: [x, y, z]
   defp ecef_map({x, y, z}), do: %{x_m: x, y_m: y, z_m: z}
 
   defp normalize_observations(observations, error_tag) do
