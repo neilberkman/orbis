@@ -3,11 +3,13 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
 
   use ExUnit.Case, async: true
 
+  alias Orbis.Coordinates
   alias Orbis.GNSS.Observables
   alias Orbis.GNSS.PrecisePositioning
   alias Orbis.GNSS.PrecisePositioning.FixedSolution
   alias Orbis.GNSS.PrecisePositioning.Solution
   alias Orbis.GNSS.SP3
+  alias Orbis.GNSS.Troposphere
 
   @sp3_path Path.join(__DIR__, "fixtures/sp3/GRG0MGXFIN_20201760000_01D_15M_ORB.SP3")
   @epoch ~N[2020-06-24 12:00:00]
@@ -17,6 +19,7 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
   @truth {3_512_900.0, 780_500.0, 5_248_700.0}
   @clock_m 12.5
   @epoch_clocks_m [12.5, -8.25, 4.0]
+  @met %{pressure_hpa: 1013.25, temperature_k: 288.15, relative_humidity: 0.5}
   @c 299_792_458.0
   @l1_wavelength_m @c / 1_575_420_000.0
 
@@ -62,8 +65,10 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
      sp3: sp3,
      sats: sats,
      observations: synth_observations(sats),
+     tropo_observations: synth_observations(sats, troposphere: true, epoch: @epoch),
      multi_sats: multi_sats,
      epoch_observations: synth_epoch_observations(multi_sats),
+     tropo_epoch_observations: synth_epoch_observations(multi_sats, troposphere: true),
      fixed_epoch_observations: synth_fixed_epoch_observations(multi_sats)}
   end
 
@@ -96,6 +101,31 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
       assert sol.metadata.status == :position_tolerance
       assert sol.metadata.code_rms_m < 1.0e-4
       assert sol.metadata.phase_rms_m < 1.0e-4
+    end
+
+    test "applies a-priori troposphere to code and phase", ctx do
+      assert {:ok, %Solution{} = sol} =
+               PrecisePositioning.solve_float(ctx.sp3, ctx.tropo_observations, @epoch,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 troposphere: true,
+                 pressure_hpa: @met.pressure_hpa,
+                 temperature_k: @met.temperature_k,
+                 relative_humidity: @met.relative_humidity
+               )
+
+      assert position_error(sol.position, @truth) < 1.0e-3
+      assert abs(sol.rx_clock_m - @clock_m) < 1.0e-4
+      assert sol.metadata.troposphere_applied
+      assert sol.metadata.code_rms_m < 1.0e-4
+      assert sol.metadata.phase_rms_m < 1.0e-4
+
+      assert {:ok, uncorrected} =
+               PrecisePositioning.solve_float(ctx.sp3, ctx.tropo_observations, @epoch,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0}
+               )
+
+      refute uncorrected.metadata.troposphere_applied
+      assert uncorrected.metadata.code_rms_m > sol.metadata.code_rms_m + 0.1
     end
 
     test "can seed itself from the code-only SPP solution", ctx do
@@ -167,6 +197,22 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
       end
     end
 
+    test "multi-epoch arcs apply a-priori troposphere consistently", ctx do
+      assert {:ok, sol} =
+               PrecisePositioning.solve_float_epochs(ctx.sp3, ctx.tropo_epoch_observations,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 troposphere: true,
+                 pressure_hpa: @met.pressure_hpa,
+                 temperature_k: @met.temperature_k,
+                 relative_humidity: @met.relative_humidity
+               )
+
+      assert position_error(sol.position, @truth) < 1.0e-3
+      assert sol.metadata.troposphere_applied
+      assert sol.metadata.code_rms_m < 1.0e-4
+      assert sol.metadata.phase_rms_m < 1.0e-4
+    end
+
     test "can seed a multi-epoch arc from code-only SPP solutions", ctx do
       assert {:ok, sol} =
                PrecisePositioning.solve_float_epochs(ctx.sp3, ctx.epoch_observations,
@@ -225,6 +271,26 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
         assert abs(residual.code_m) < 1.0e-4
         assert abs(residual.phase_m) < 1.0e-4
       end
+    end
+
+    test "fixed-ambiguity arcs apply a-priori troposphere consistently", ctx do
+      fixed_tropo = synth_fixed_epoch_observations(ctx.multi_sats, troposphere: true)
+
+      assert {:ok, %FixedSolution{} = sol} =
+               PrecisePositioning.solve_fixed_epochs(ctx.sp3, fixed_tropo,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 ambiguity_wavelength_m: @l1_wavelength_m,
+                 troposphere: true,
+                 pressure_hpa: @met.pressure_hpa,
+                 temperature_k: @met.temperature_k,
+                 relative_humidity: @met.relative_humidity
+               )
+
+      assert position_error(sol.position, @truth) < 1.0e-3
+      assert sol.metadata.troposphere_applied
+      assert sol.metadata.integer_status == :fixed
+      assert sol.metadata.code_rms_m < 1.0e-4
+      assert sol.metadata.phase_rms_m < 1.0e-4
     end
 
     test "fixed-ambiguity input errors are tagged", ctx do
@@ -293,14 +359,37 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
                  initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
                  position_tolerance_m: -1.0
                )
+
+      assert {:error, {:invalid_option, :troposphere}} =
+               PrecisePositioning.solve_float(ctx.sp3, ctx.observations, @epoch,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 troposphere: :yes
+               )
+
+      assert {:error, {:invalid_option, :pressure_hpa}} =
+               PrecisePositioning.solve_float(ctx.sp3, ctx.observations, @epoch,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 troposphere: true,
+                 pressure_hpa: :bad
+               )
+
+      assert {:error, {:invalid_option, :relative_humidity}} =
+               PrecisePositioning.solve_float(ctx.sp3, ctx.observations, @epoch,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 troposphere: true,
+                 relative_humidity: 1.5
+               )
     end
   end
 
-  defp synth_observations(sats) do
+  defp synth_observations(sats, opts \\ []) do
+    epoch = Keyword.get(opts, :epoch, @epoch)
+
     sats
     |> Enum.with_index()
     |> Enum.map(fn {{sat, obs}, idx} ->
-      code = obs.geometric_range_m - @c * obs.sat_clock_s + @clock_m
+      tropo_m = synthetic_tropo_m(obs, epoch, opts)
+      code = obs.geometric_range_m - @c * obs.sat_clock_s + @clock_m + tropo_m
       ambiguity = ambiguity_m(idx)
 
       %{
@@ -311,7 +400,7 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
     end)
   end
 
-  defp synth_epoch_observations(multi_sats) do
+  defp synth_epoch_observations(multi_sats, opts \\ []) do
     @epochs
     |> Enum.zip(@epoch_clocks_m)
     |> Enum.map(fn {epoch, clock_m} ->
@@ -320,7 +409,8 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
           {_epoch, obs} =
             Enum.find(predictions, fn {prediction_epoch, _obs} -> prediction_epoch == epoch end)
 
-          code = obs.geometric_range_m - @c * obs.sat_clock_s + clock_m
+          tropo_m = synthetic_tropo_m(obs, epoch, opts)
+          code = obs.geometric_range_m - @c * obs.sat_clock_s + clock_m + tropo_m
           idx = Enum.find_index(multi_sats, fn {candidate, _} -> candidate == sat end)
 
           %{
@@ -334,7 +424,7 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
     end)
   end
 
-  defp synth_fixed_epoch_observations(multi_sats) do
+  defp synth_fixed_epoch_observations(multi_sats, opts \\ []) do
     @epochs
     |> Enum.zip(@epoch_clocks_m)
     |> Enum.map(fn {epoch, clock_m} ->
@@ -343,7 +433,8 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
           {_epoch, obs} =
             Enum.find(predictions, fn {prediction_epoch, _obs} -> prediction_epoch == epoch end)
 
-          code = obs.geometric_range_m - @c * obs.sat_clock_s + clock_m
+          tropo_m = synthetic_tropo_m(obs, epoch, opts)
+          code = obs.geometric_range_m - @c * obs.sat_clock_s + clock_m + tropo_m
           idx = Enum.find_index(multi_sats, fn {candidate, _} -> candidate == sat end)
 
           %{
@@ -355,6 +446,27 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
 
       %{epoch: epoch, observations: observations}
     end)
+  end
+
+  defp synthetic_tropo_m(prediction, epoch, opts) do
+    if Keyword.get(opts, :troposphere, false) do
+      {x, y, z} = @truth
+      geo = Coordinates.to_geodetic({x / 1000.0, y / 1000.0, z / 1000.0})
+
+      {:ok, delay_m} =
+        Troposphere.slant_delay(
+          prediction.elevation_deg,
+          geo.latitude,
+          geo.longitude,
+          geo.altitude_km * 1000.0,
+          @met,
+          epoch
+        )
+
+      delay_m
+    else
+      0.0
+    end
   end
 
   defp true_ambiguities(sats) do

@@ -7,12 +7,13 @@ defmodule Orbis.GNSS.PrecisePositioning do
   solves one SP3-backed epoch from dual-frequency ionosphere-free code and phase
   observations:
 
-      P_IF_i = rho_i(x) + b - c * dt_sat_i
-      L_IF_i = rho_i(x) + b - c * dt_sat_i + N_i
+      P_IF_i = rho_i(x) + b - c * dt_sat_i + T_i
+      L_IF_i = rho_i(x) + b - c * dt_sat_i + T_i + N_i
 
   where `x` is the receiver ECEF position, `b` is the receiver clock in metres,
-  and `N_i` is one float carrier-phase ambiguity per satellite, also in metres.
-  The state is linearized and iterated over `[x, y, z, b, N_1, N_2, ...]`.
+  `T_i` is the optional a-priori slant tropospheric delay, and `N_i` is one
+  float carrier-phase ambiguity per satellite, also in metres. The state is
+  linearized and iterated over `[x, y, z, b, N_1, N_2, ...]`.
 
   `solve_float/4` solves one epoch. `solve_float_epochs/3` solves a static
   multi-epoch arc with one receiver position, one receiver clock per epoch, and
@@ -40,16 +41,21 @@ defmodule Orbis.GNSS.PrecisePositioning do
   dual-frequency RINEX observations.
   """
 
+  alias Orbis.Coordinates
   alias Orbis.GNSS.Core.Constants
   alias Orbis.GNSS.Observables
   alias Orbis.GNSS.Positioning
   alias Orbis.GNSS.SP3
+  alias Orbis.GNSS.Troposphere
 
   @default_max_iterations 8
   @default_position_tolerance_m 1.0e-4
   @default_clock_tolerance_m 1.0e-4
   @default_code_sigma_m 1.0
   @default_phase_sigma_m 0.01
+  @default_pressure_hpa 1013.25
+  @default_temperature_k 288.15
+  @default_relative_humidity 0.5
   @default_integer_search_radius_cycles 1
   @default_integer_ratio_threshold 3.0
   @default_integer_candidate_limit 50_000
@@ -95,7 +101,8 @@ defmodule Orbis.GNSS.PrecisePositioning do
               status: :position_tolerance | :max_iterations,
               code_rms_m: float(),
               phase_rms_m: float(),
-              weighted_rms_m: float()
+              weighted_rms_m: float(),
+              troposphere_applied: boolean()
             }
           }
   end
@@ -154,7 +161,8 @@ defmodule Orbis.GNSS.PrecisePositioning do
               n_observations: pos_integer(),
               code_rms_m: float(),
               phase_rms_m: float(),
-              weighted_rms_m: float()
+              weighted_rms_m: float(),
+              troposphere_applied: boolean()
             }
           }
   end
@@ -225,7 +233,8 @@ defmodule Orbis.GNSS.PrecisePositioning do
               integer_ratio: float() | :infinity,
               integer_best_score: float(),
               integer_second_best_score: float() | nil,
-              integer_candidates: pos_integer()
+              integer_candidates: pos_integer(),
+              troposphere_applied: boolean()
             }
           }
   end
@@ -266,14 +275,23 @@ defmodule Orbis.GNSS.PrecisePositioning do
       (default `1.0e-4` m).
     * `:clock_tolerance_m` - receiver-clock update threshold (default
       `1.0e-4` m).
+    * `:troposphere` - apply an a-priori Saastamoinen/Niell slant
+      tropospheric delay to both code and phase (default `false`).
+    * `:pressure_hpa` - surface pressure in hPa when `:troposphere` is true
+      (default `1013.25`).
+    * `:temperature_k` - surface temperature in kelvin when `:troposphere` is
+      true (default `288.15`).
+    * `:relative_humidity` - relative humidity fraction when `:troposphere` is
+      true (default `0.5`).
 
   Returns `{:ok, %Solution{}}` or `{:error, reason}`. Reasons include
   `:no_observations`, `{:too_few_satellites, used, 4}`,
   `{:duplicate_observation, sat}`, `{:invalid_observation, entry}`,
   `:invalid_initial_guess`, `{:invalid_sigma, key}`, `{:invalid_option, key}`,
-  `{:code_seed_failed, reason}`, `{:no_ephemeris, sat, reason}`, and
-  `:singular_geometry`. If the iteration limit is reached after a valid solve
-  step, the function returns a solution with `metadata.converged == false` and
+  `{:code_seed_failed, reason}`, `{:no_ephemeris, sat, reason}`,
+  `{:troposphere_failed, sat, reason}`, and `:singular_geometry`. If the
+  iteration limit is reached after a valid solve step, the function returns a
+  solution with `metadata.converged == false` and
   `metadata.status == :max_iterations` so callers can inspect the residuals and
   decide whether to reject it.
   """
@@ -288,8 +306,9 @@ defmodule Orbis.GNSS.PrecisePositioning do
          :ok <- ensure_enough(obs),
          {:ok, weights} <- weights(opts),
          {:ok, solve_opts} <- solve_options(opts),
+         {:ok, tropo} <- troposphere_options(opts),
          {:ok, state} <- initial_state(sp3, obs, epoch, opts) do
-      iterate(sp3, obs, epoch, state, weights, solve_opts, 1)
+      iterate(sp3, obs, epoch, state, weights, tropo, solve_opts, 1)
     end
   end
 
@@ -329,9 +348,10 @@ defmodule Orbis.GNSS.PrecisePositioning do
          :ok <- ensure_multi_enough(epochs),
          {:ok, weights} <- weights(opts),
          {:ok, solve_opts} <- solve_options(opts),
+         {:ok, tropo} <- troposphere_options(opts),
          {:ok, state} <- initial_multi_state(sp3, epochs, opts) do
       sat_ids = multi_satellite_ids(epochs)
-      iterate_multi(sp3, epochs, sat_ids, state, weights, solve_opts, 1)
+      iterate_multi(sp3, epochs, sat_ids, state, weights, tropo, solve_opts, 1)
     end
   end
 
@@ -375,15 +395,24 @@ defmodule Orbis.GNSS.PrecisePositioning do
          :ok <- ensure_multi_enough(epochs),
          {:ok, weights} <- weights(opts),
          {:ok, solve_opts} <- solve_options(opts),
+         {:ok, tropo} <- troposphere_options(opts),
          {:ok, integer_opts} <- integer_options(opts),
          {:ok, float_sol} <- solve_float_epochs(sp3, epochs, opts),
          {:ok, wavelengths} <- ambiguity_wavelengths(float_sol.used_sats, opts),
          {:ok, fixed_cycles, fixed_meta} <-
-           search_integer_ambiguities(sp3, epochs, float_sol, wavelengths, weights, integer_opts),
+           search_integer_ambiguities(
+             sp3,
+             epochs,
+             float_sol,
+             wavelengths,
+             weights,
+             tropo,
+             integer_opts
+           ),
          fixed_m = fixed_ambiguities_m(fixed_cycles, wavelengths),
          state = fixed_state_from_float(float_sol),
          {:ok, fixed_state, iterations, converged, status} <-
-           iterate_fixed_multi(sp3, epochs, fixed_m, state, weights, solve_opts, 1) do
+           iterate_fixed_multi(sp3, epochs, fixed_m, state, weights, tropo, solve_opts, 1) do
       finalize_fixed_multi(
         sp3,
         epochs,
@@ -393,6 +422,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
         float_sol,
         fixed_state,
         weights,
+        tropo,
         iterations,
         converged,
         status,
@@ -586,6 +616,43 @@ defmodule Orbis.GNSS.PrecisePositioning do
     end
   end
 
+  defp troposphere_options(opts) do
+    case Keyword.get(opts, :troposphere, false) do
+      false ->
+        {:ok, %{enabled?: false, met: nil}}
+
+      true ->
+        pressure = Keyword.get(opts, :pressure_hpa, @default_pressure_hpa)
+        temperature = Keyword.get(opts, :temperature_k, @default_temperature_k)
+        humidity = Keyword.get(opts, :relative_humidity, @default_relative_humidity)
+
+        cond do
+          not is_number(pressure) or pressure <= 0.0 ->
+            {:error, {:invalid_option, :pressure_hpa}}
+
+          not is_number(temperature) or temperature <= 0.0 ->
+            {:error, {:invalid_option, :temperature_k}}
+
+          not is_number(humidity) or humidity < 0.0 or humidity > 1.0 ->
+            {:error, {:invalid_option, :relative_humidity}}
+
+          true ->
+            {:ok,
+             %{
+               enabled?: true,
+               met: %{
+                 pressure_hpa: pressure / 1.0,
+                 temperature_k: temperature / 1.0,
+                 relative_humidity: humidity / 1.0
+               }
+             }}
+        end
+
+      _other ->
+        {:error, {:invalid_option, :troposphere}}
+    end
+  end
+
   defp ambiguity_wavelengths(sat_ids, opts) do
     case Keyword.fetch(opts, :ambiguity_wavelength_m) do
       {:ok, wavelength} when is_number(wavelength) and wavelength > 0.0 ->
@@ -644,12 +711,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
     observations = Enum.map(obs, &{&1.satellite_id, &1.code_m})
     spp_initial = Keyword.get(opts, :spp_initial_guess, {0.0, 0.0, 0.0, 0.0})
 
-    case Positioning.solve(sp3, observations, epoch,
-           ionosphere: false,
-           troposphere: false,
-           initial_guess: spp_initial,
-           with_geodetic: false
-         ) do
+    case Positioning.solve(sp3, observations, epoch, spp_seed_options(opts, spp_initial)) do
       {:ok, sol} ->
         pos = {sol.position.x_m, sol.position.y_m, sol.position.z_m}
         state = state_from_guess(obs, pos, sol.rx_clock_s * Constants.speed_of_light_m_s())
@@ -691,11 +753,11 @@ defmodule Orbis.GNSS.PrecisePositioning do
       observations = Enum.map(epoch_row.observations, &{&1.satellite_id, &1.code_m})
       spp_initial = Keyword.get(opts, :spp_initial_guess, {0.0, 0.0, 0.0, 0.0})
 
-      case Positioning.solve(sp3, observations, epoch_row.epoch,
-             ionosphere: false,
-             troposphere: false,
-             initial_guess: spp_initial,
-             with_geodetic: false
+      case Positioning.solve(
+             sp3,
+             observations,
+             epoch_row.epoch,
+             spp_seed_options(opts, spp_initial)
            ) do
         {:ok, sol} ->
           pos = {sol.position.x_m, sol.position.y_m, sol.position.z_m}
@@ -720,6 +782,18 @@ defmodule Orbis.GNSS.PrecisePositioning do
     end
   end
 
+  defp spp_seed_options(opts, initial_guess) do
+    [
+      ionosphere: false,
+      troposphere: Keyword.get(opts, :troposphere, false),
+      pressure_hpa: Keyword.get(opts, :pressure_hpa, @default_pressure_hpa),
+      temperature_k: Keyword.get(opts, :temperature_k, @default_temperature_k),
+      relative_humidity: Keyword.get(opts, :relative_humidity, @default_relative_humidity),
+      initial_guess: initial_guess,
+      with_geodetic: false
+    ]
+  end
+
   defp mean_position(positions) do
     {sx, sy, sz} =
       Enum.reduce(positions, {0.0, 0.0, 0.0}, fn {x, y, z}, {ax, ay, az} ->
@@ -732,27 +806,27 @@ defmodule Orbis.GNSS.PrecisePositioning do
 
   # --- nonlinear solve -----------------------------------------------------
 
-  defp iterate(sp3, obs, epoch, state, weights, opts, iter) do
-    with {:ok, rows} <- build_rows(sp3, obs, epoch, state, weights),
+  defp iterate(sp3, obs, epoch, state, weights, tropo, opts, iter) do
+    with {:ok, rows} <- build_rows(sp3, obs, epoch, state, weights, tropo),
          {:ok, dx} <- solve_normal_equations(rows, 4 + length(obs)) do
       next = apply_delta(state, obs, dx)
       {pos_step, clock_step} = step_norms(dx)
 
       cond do
         pos_step <= opts.position_tolerance_m and abs(clock_step) <= opts.clock_tolerance_m ->
-          finalize(sp3, obs, epoch, next, weights, iter, true, :position_tolerance)
+          finalize(sp3, obs, epoch, next, weights, tropo, iter, true, :position_tolerance)
 
         iter >= opts.max_iterations ->
-          finalize(sp3, obs, epoch, next, weights, iter, false, :max_iterations)
+          finalize(sp3, obs, epoch, next, weights, tropo, iter, false, :max_iterations)
 
         true ->
-          iterate(sp3, obs, epoch, next, weights, opts, iter + 1)
+          iterate(sp3, obs, epoch, next, weights, tropo, opts, iter + 1)
       end
     end
   end
 
-  defp iterate_multi(sp3, epochs, sat_ids, state, weights, opts, iter) do
-    with {:ok, rows} <- build_multi_rows(sp3, epochs, sat_ids, state, weights),
+  defp iterate_multi(sp3, epochs, sat_ids, state, weights, tropo, opts, iter) do
+    with {:ok, rows} <- build_multi_rows(sp3, epochs, sat_ids, state, weights, tropo),
          {:ok, dx} <- solve_normal_equations(rows, 3 + length(epochs) + length(sat_ids)) do
       next = apply_multi_delta(state, epochs, sat_ids, dx)
       {pos_step, clock_step, ambiguity_step} = multi_step_norms(dx, length(epochs))
@@ -767,22 +841,23 @@ defmodule Orbis.GNSS.PrecisePositioning do
             sat_ids,
             next,
             weights,
+            tropo,
             iter,
             true,
             :state_tolerance
           )
 
         iter >= opts.max_iterations ->
-          finalize_multi(sp3, epochs, sat_ids, next, weights, iter, false, :max_iterations)
+          finalize_multi(sp3, epochs, sat_ids, next, weights, tropo, iter, false, :max_iterations)
 
         true ->
-          iterate_multi(sp3, epochs, sat_ids, next, weights, opts, iter + 1)
+          iterate_multi(sp3, epochs, sat_ids, next, weights, tropo, opts, iter + 1)
       end
     end
   end
 
-  defp iterate_fixed_multi(sp3, epochs, fixed_m, state, weights, opts, iter) do
-    with {:ok, rows} <- build_fixed_multi_rows(sp3, epochs, fixed_m, state, weights),
+  defp iterate_fixed_multi(sp3, epochs, fixed_m, state, weights, tropo, opts, iter) do
+    with {:ok, rows} <- build_fixed_multi_rows(sp3, epochs, fixed_m, state, weights, tropo),
          {:ok, dx} <- solve_normal_equations(rows, 3 + length(epochs)) do
       next = apply_fixed_multi_delta(state, dx, length(epochs))
       {pos_step, clock_step} = fixed_multi_step_norms(dx)
@@ -795,39 +870,45 @@ defmodule Orbis.GNSS.PrecisePositioning do
           {:ok, next, iter, false, :max_iterations}
 
         true ->
-          iterate_fixed_multi(sp3, epochs, fixed_m, next, weights, opts, iter + 1)
+          iterate_fixed_multi(sp3, epochs, fixed_m, next, weights, tropo, opts, iter + 1)
       end
     end
   end
 
-  defp build_rows(sp3, obs, epoch, state, weights) do
+  defp build_rows(sp3, obs, epoch, state, weights, tropo) do
     {rx, ry, rz} = state.position
 
     Enum.reduce_while(obs, {:ok, []}, fn o, {:ok, acc} ->
       case Observables.predict(sp3, o.satellite_id, {rx, ry, rz}, epoch) do
         {:ok, pred} ->
-          {ex, ey, ez} = pred.los_unit
-          sat_clock_m = Constants.speed_of_light_m_s() * (pred.sat_clock_s || 0.0)
-          model_code = pred.geometric_range_m + state.clock_m - sat_clock_m
-          ambiguity = Map.fetch!(state.ambiguities, o.satellite_id)
+          case model_troposphere_m(pred, {rx, ry, rz}, epoch, tropo) do
+            {:ok, tropo_m} ->
+              {ex, ey, ez} = pred.los_unit
+              sat_clock_m = Constants.speed_of_light_m_s() * (pred.sat_clock_s || 0.0)
+              model_code = pred.geometric_range_m + state.clock_m - sat_clock_m + tropo_m
+              ambiguity = Map.fetch!(state.ambiguities, o.satellite_id)
 
-          code_row = %{
-            kind: :code,
-            sat: o.satellite_id,
-            h: design_row({-ex, -ey, -ez, 1.0}, nil, obs),
-            y: o.code_m - model_code,
-            weight: weights.code
-          }
+              code_row = %{
+                kind: :code,
+                sat: o.satellite_id,
+                h: design_row({-ex, -ey, -ez, 1.0}, nil, obs),
+                y: o.code_m - model_code,
+                weight: weights.code
+              }
 
-          phase_row = %{
-            kind: :phase,
-            sat: o.satellite_id,
-            h: design_row({-ex, -ey, -ez, 1.0}, o.satellite_id, obs),
-            y: o.phase_m - (model_code + ambiguity),
-            weight: weights.phase
-          }
+              phase_row = %{
+                kind: :phase,
+                sat: o.satellite_id,
+                h: design_row({-ex, -ey, -ez, 1.0}, o.satellite_id, obs),
+                y: o.phase_m - (model_code + ambiguity),
+                weight: weights.phase
+              }
 
-          {:cont, {:ok, [phase_row, code_row | acc]}}
+              {:cont, {:ok, [phase_row, code_row | acc]}}
+
+            {:error, reason} ->
+              {:halt, {:error, {:troposphere_failed, o.satellite_id, reason}}}
+          end
 
         {:error, reason} ->
           {:halt, {:error, {:no_ephemeris, o.satellite_id, reason}}}
@@ -848,7 +929,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
     [dx, dy, dz, dc | ambiguity_cols]
   end
 
-  defp build_multi_rows(sp3, epochs, sat_ids, state, weights) do
+  defp build_multi_rows(sp3, epochs, sat_ids, state, weights, tropo) do
     {rx, ry, rz} = state.position
 
     epochs
@@ -860,31 +941,37 @@ defmodule Orbis.GNSS.PrecisePositioning do
       |> Enum.reduce_while({:ok, acc}, fn o, {:ok, rows_acc} ->
         case Observables.predict(sp3, o.satellite_id, {rx, ry, rz}, epoch_row.epoch) do
           {:ok, pred} ->
-            {ex, ey, ez} = pred.los_unit
-            sat_clock_m = Constants.speed_of_light_m_s() * (pred.sat_clock_s || 0.0)
-            model_code = pred.geometric_range_m + clock_m - sat_clock_m
-            ambiguity = Map.fetch!(state.ambiguities, o.satellite_id)
-            base = {-ex, -ey, -ez}
+            case model_troposphere_m(pred, {rx, ry, rz}, epoch_row.epoch, tropo) do
+              {:ok, tropo_m} ->
+                {ex, ey, ez} = pred.los_unit
+                sat_clock_m = Constants.speed_of_light_m_s() * (pred.sat_clock_s || 0.0)
+                model_code = pred.geometric_range_m + clock_m - sat_clock_m + tropo_m
+                ambiguity = Map.fetch!(state.ambiguities, o.satellite_id)
+                base = {-ex, -ey, -ez}
 
-            code_row = %{
-              kind: :code,
-              sat: o.satellite_id,
-              epoch: epoch_row.epoch,
-              h: multi_design_row(base, epoch_idx, nil, length(epochs), sat_ids),
-              y: o.code_m - model_code,
-              weight: weights.code
-            }
+                code_row = %{
+                  kind: :code,
+                  sat: o.satellite_id,
+                  epoch: epoch_row.epoch,
+                  h: multi_design_row(base, epoch_idx, nil, length(epochs), sat_ids),
+                  y: o.code_m - model_code,
+                  weight: weights.code
+                }
 
-            phase_row = %{
-              kind: :phase,
-              sat: o.satellite_id,
-              epoch: epoch_row.epoch,
-              h: multi_design_row(base, epoch_idx, o.satellite_id, length(epochs), sat_ids),
-              y: o.phase_m - (model_code + ambiguity),
-              weight: weights.phase
-            }
+                phase_row = %{
+                  kind: :phase,
+                  sat: o.satellite_id,
+                  epoch: epoch_row.epoch,
+                  h: multi_design_row(base, epoch_idx, o.satellite_id, length(epochs), sat_ids),
+                  y: o.phase_m - (model_code + ambiguity),
+                  weight: weights.phase
+                }
 
-            {:cont, {:ok, [phase_row, code_row | rows_acc]}}
+                {:cont, {:ok, [phase_row, code_row | rows_acc]}}
+
+              {:error, reason} ->
+                {:halt, {:error, {:troposphere_failed, o.satellite_id, reason}}}
+            end
 
           {:error, reason} ->
             {:halt, {:error, {:no_ephemeris, o.satellite_id, reason}}}
@@ -901,7 +988,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
     end
   end
 
-  defp build_fixed_multi_rows(sp3, epochs, fixed_m, state, weights) do
+  defp build_fixed_multi_rows(sp3, epochs, fixed_m, state, weights, tropo) do
     {rx, ry, rz} = state.position
 
     epochs
@@ -913,31 +1000,37 @@ defmodule Orbis.GNSS.PrecisePositioning do
       |> Enum.reduce_while({:ok, acc}, fn o, {:ok, rows_acc} ->
         case Observables.predict(sp3, o.satellite_id, {rx, ry, rz}, epoch_row.epoch) do
           {:ok, pred} ->
-            {ex, ey, ez} = pred.los_unit
-            sat_clock_m = Constants.speed_of_light_m_s() * (pred.sat_clock_s || 0.0)
-            model_code = pred.geometric_range_m + clock_m - sat_clock_m
-            ambiguity = Map.fetch!(fixed_m, o.satellite_id)
-            h = fixed_multi_design_row({-ex, -ey, -ez}, epoch_idx, length(epochs))
+            case model_troposphere_m(pred, {rx, ry, rz}, epoch_row.epoch, tropo) do
+              {:ok, tropo_m} ->
+                {ex, ey, ez} = pred.los_unit
+                sat_clock_m = Constants.speed_of_light_m_s() * (pred.sat_clock_s || 0.0)
+                model_code = pred.geometric_range_m + clock_m - sat_clock_m + tropo_m
+                ambiguity = Map.fetch!(fixed_m, o.satellite_id)
+                h = fixed_multi_design_row({-ex, -ey, -ez}, epoch_idx, length(epochs))
 
-            code_row = %{
-              kind: :code,
-              sat: o.satellite_id,
-              epoch: epoch_row.epoch,
-              h: h,
-              y: o.code_m - model_code,
-              weight: weights.code
-            }
+                code_row = %{
+                  kind: :code,
+                  sat: o.satellite_id,
+                  epoch: epoch_row.epoch,
+                  h: h,
+                  y: o.code_m - model_code,
+                  weight: weights.code
+                }
 
-            phase_row = %{
-              kind: :phase,
-              sat: o.satellite_id,
-              epoch: epoch_row.epoch,
-              h: h,
-              y: o.phase_m - (model_code + ambiguity),
-              weight: weights.phase
-            }
+                phase_row = %{
+                  kind: :phase,
+                  sat: o.satellite_id,
+                  epoch: epoch_row.epoch,
+                  h: h,
+                  y: o.phase_m - (model_code + ambiguity),
+                  weight: weights.phase
+                }
 
-            {:cont, {:ok, [phase_row, code_row | rows_acc]}}
+                {:cont, {:ok, [phase_row, code_row | rows_acc]}}
+
+              {:error, reason} ->
+                {:halt, {:error, {:troposphere_failed, o.satellite_id, reason}}}
+            end
 
           {:error, reason} ->
             {:halt, {:error, {:no_ephemeris, o.satellite_id, reason}}}
@@ -963,6 +1056,21 @@ defmodule Orbis.GNSS.PrecisePositioning do
   defp fixed_multi_design_row({dx, dy, dz}, epoch_idx, n_epochs) do
     clock_cols = for idx <- 0..(n_epochs - 1), do: if(idx == epoch_idx, do: 1.0, else: 0.0)
     [dx, dy, dz | clock_cols]
+  end
+
+  defp model_troposphere_m(_pred, _receiver_m, _epoch, %{enabled?: false}), do: {:ok, 0.0}
+
+  defp model_troposphere_m(pred, {rx, ry, rz}, epoch, %{enabled?: true, met: met}) do
+    geo = Coordinates.to_geodetic({rx / 1000.0, ry / 1000.0, rz / 1000.0})
+
+    Troposphere.slant_delay(
+      pred.elevation_deg,
+      geo.latitude,
+      geo.longitude,
+      geo.altitude_km * 1000.0,
+      met,
+      epoch
+    )
   end
 
   defp apply_delta(state, obs, dx) do
@@ -1043,10 +1151,10 @@ defmodule Orbis.GNSS.PrecisePositioning do
 
   # --- integer ambiguity fixing -------------------------------------------
 
-  defp search_integer_ambiguities(sp3, epochs, float_sol, wavelengths, weights, opts) do
+  defp search_integer_ambiguities(sp3, epochs, float_sol, wavelengths, weights, tropo, opts) do
     sat_ids = float_sol.used_sats
 
-    case ambiguity_covariance_cycles(sp3, epochs, sat_ids, float_sol, wavelengths, weights) do
+    case ambiguity_covariance_cycles(sp3, epochs, sat_ids, float_sol, wavelengths, weights, tropo) do
       {:ok, q_cycles} ->
         q_cycles = symmetrize_matrix(q_cycles)
 
@@ -1128,7 +1236,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
     end)
   end
 
-  defp ambiguity_covariance_cycles(sp3, epochs, sat_ids, float_sol, wavelengths, weights) do
+  defp ambiguity_covariance_cycles(sp3, epochs, sat_ids, float_sol, wavelengths, weights, tropo) do
     state = %{
       position: {float_sol.position.x_m, float_sol.position.y_m, float_sol.position.z_m},
       clocks_m: Enum.map(float_sol.epoch_clocks, & &1.rx_clock_m),
@@ -1138,7 +1246,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
     n = 3 + length(epochs) + length(sat_ids)
     start = 3 + length(epochs)
 
-    with {:ok, rows} <- build_multi_rows(sp3, epochs, sat_ids, state, weights),
+    with {:ok, rows} <- build_multi_rows(sp3, epochs, sat_ids, state, weights, tropo),
          {normal, _rhs} = normal_equations(rows, n),
          {:ok, covariance_m} <- ambiguity_covariance_from_normal(normal, start, length(sat_ids)) do
       covariance_cycles =
@@ -1751,8 +1859,8 @@ defmodule Orbis.GNSS.PrecisePositioning do
 
   # --- result assembly -----------------------------------------------------
 
-  defp finalize(sp3, obs, epoch, state, weights, iterations, converged, status) do
-    with {:ok, residual_rows} <- residual_rows(sp3, obs, epoch, state) do
+  defp finalize(sp3, obs, epoch, state, weights, tropo, iterations, converged, status) do
+    with {:ok, residual_rows} <- residual_rows(sp3, obs, epoch, state, tropo) do
       code = residual_rows |> Enum.map(& &1.code_m)
       phase = residual_rows |> Enum.map(& &1.phase_m)
 
@@ -1773,14 +1881,15 @@ defmodule Orbis.GNSS.PrecisePositioning do
            status: status,
            code_rms_m: rms(code),
            phase_rms_m: rms(phase),
-           weighted_rms_m: weighted_rms(residual_rows, weights)
+           weighted_rms_m: weighted_rms(residual_rows, weights),
+           troposphere_applied: tropo.enabled?
          }
        }}
     end
   end
 
-  defp finalize_multi(sp3, epochs, sat_ids, state, weights, iterations, converged, status) do
-    with {:ok, residual_rows} <- multi_residual_rows(sp3, epochs, state) do
+  defp finalize_multi(sp3, epochs, sat_ids, state, weights, tropo, iterations, converged, status) do
+    with {:ok, residual_rows} <- multi_residual_rows(sp3, epochs, state, tropo) do
       code = residual_rows |> Enum.map(& &1.code_m)
       phase = residual_rows |> Enum.map(& &1.phase_m)
       {x, y, z} = state.position
@@ -1811,7 +1920,8 @@ defmodule Orbis.GNSS.PrecisePositioning do
            n_observations: multi_observation_count(epochs),
            code_rms_m: rms(code),
            phase_rms_m: rms(phase),
-           weighted_rms_m: weighted_rms(residual_rows, weights)
+           weighted_rms_m: weighted_rms(residual_rows, weights),
+           troposphere_applied: tropo.enabled?
          }
        }}
     end
@@ -1826,12 +1936,13 @@ defmodule Orbis.GNSS.PrecisePositioning do
          float_sol,
          state,
          weights,
+         tropo,
          iterations,
          converged,
          status,
          fixed_meta
        ) do
-    with {:ok, residual_rows} <- fixed_multi_residual_rows(sp3, epochs, fixed_m, state) do
+    with {:ok, residual_rows} <- fixed_multi_residual_rows(sp3, epochs, fixed_m, state, tropo) do
       code = residual_rows |> Enum.map(& &1.code_m)
       phase = residual_rows |> Enum.map(& &1.phase_m)
       {x, y, z} = state.position
@@ -1865,29 +1976,36 @@ defmodule Orbis.GNSS.PrecisePositioning do
              n_observations: multi_observation_count(epochs),
              code_rms_m: rms(code),
              phase_rms_m: rms(phase),
-             weighted_rms_m: weighted_rms(residual_rows, weights)
+             weighted_rms_m: weighted_rms(residual_rows, weights),
+             troposphere_applied: tropo.enabled?
            })
        }}
     end
   end
 
-  defp residual_rows(sp3, obs, epoch, state) do
+  defp residual_rows(sp3, obs, epoch, state, tropo) do
     {rx, ry, rz} = state.position
 
     Enum.reduce_while(obs, {:ok, []}, fn o, {:ok, acc} ->
       case Observables.predict(sp3, o.satellite_id, {rx, ry, rz}, epoch) do
         {:ok, pred} ->
-          sat_clock_m = Constants.speed_of_light_m_s() * (pred.sat_clock_s || 0.0)
-          model_code = pred.geometric_range_m + state.clock_m - sat_clock_m
-          ambiguity = Map.fetch!(state.ambiguities, o.satellite_id)
+          case model_troposphere_m(pred, {rx, ry, rz}, epoch, tropo) do
+            {:ok, tropo_m} ->
+              sat_clock_m = Constants.speed_of_light_m_s() * (pred.sat_clock_s || 0.0)
+              model_code = pred.geometric_range_m + state.clock_m - sat_clock_m + tropo_m
+              ambiguity = Map.fetch!(state.ambiguities, o.satellite_id)
 
-          row = %{
-            sat: o.satellite_id,
-            code_m: o.code_m - model_code,
-            phase_m: o.phase_m - (model_code + ambiguity)
-          }
+              row = %{
+                sat: o.satellite_id,
+                code_m: o.code_m - model_code,
+                phase_m: o.phase_m - (model_code + ambiguity)
+              }
 
-          {:cont, {:ok, [row | acc]}}
+              {:cont, {:ok, [row | acc]}}
+
+            {:error, reason} ->
+              {:halt, {:error, {:troposphere_failed, o.satellite_id, reason}}}
+          end
 
         {:error, reason} ->
           {:halt, {:error, {:no_ephemeris, o.satellite_id, reason}}}
@@ -1899,7 +2017,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
     end
   end
 
-  defp multi_residual_rows(sp3, epochs, state) do
+  defp multi_residual_rows(sp3, epochs, state, tropo) do
     {rx, ry, rz} = state.position
 
     epochs
@@ -1911,18 +2029,24 @@ defmodule Orbis.GNSS.PrecisePositioning do
       |> Enum.reduce_while({:ok, acc}, fn o, {:ok, rows_acc} ->
         case Observables.predict(sp3, o.satellite_id, {rx, ry, rz}, epoch_row.epoch) do
           {:ok, pred} ->
-            sat_clock_m = Constants.speed_of_light_m_s() * (pred.sat_clock_s || 0.0)
-            model_code = pred.geometric_range_m + clock_m - sat_clock_m
-            ambiguity = Map.fetch!(state.ambiguities, o.satellite_id)
+            case model_troposphere_m(pred, {rx, ry, rz}, epoch_row.epoch, tropo) do
+              {:ok, tropo_m} ->
+                sat_clock_m = Constants.speed_of_light_m_s() * (pred.sat_clock_s || 0.0)
+                model_code = pred.geometric_range_m + clock_m - sat_clock_m + tropo_m
+                ambiguity = Map.fetch!(state.ambiguities, o.satellite_id)
 
-            row = %{
-              epoch: epoch_row.epoch,
-              satellite_id: o.satellite_id,
-              code_m: o.code_m - model_code,
-              phase_m: o.phase_m - (model_code + ambiguity)
-            }
+                row = %{
+                  epoch: epoch_row.epoch,
+                  satellite_id: o.satellite_id,
+                  code_m: o.code_m - model_code,
+                  phase_m: o.phase_m - (model_code + ambiguity)
+                }
 
-            {:cont, {:ok, [row | rows_acc]}}
+                {:cont, {:ok, [row | rows_acc]}}
+
+              {:error, reason} ->
+                {:halt, {:error, {:troposphere_failed, o.satellite_id, reason}}}
+            end
 
           {:error, reason} ->
             {:halt, {:error, {:no_ephemeris, o.satellite_id, reason}}}
@@ -1939,7 +2063,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
     end
   end
 
-  defp fixed_multi_residual_rows(sp3, epochs, fixed_m, state) do
+  defp fixed_multi_residual_rows(sp3, epochs, fixed_m, state, tropo) do
     {rx, ry, rz} = state.position
 
     epochs
@@ -1951,18 +2075,24 @@ defmodule Orbis.GNSS.PrecisePositioning do
       |> Enum.reduce_while({:ok, acc}, fn o, {:ok, rows_acc} ->
         case Observables.predict(sp3, o.satellite_id, {rx, ry, rz}, epoch_row.epoch) do
           {:ok, pred} ->
-            sat_clock_m = Constants.speed_of_light_m_s() * (pred.sat_clock_s || 0.0)
-            model_code = pred.geometric_range_m + clock_m - sat_clock_m
-            ambiguity = Map.fetch!(fixed_m, o.satellite_id)
+            case model_troposphere_m(pred, {rx, ry, rz}, epoch_row.epoch, tropo) do
+              {:ok, tropo_m} ->
+                sat_clock_m = Constants.speed_of_light_m_s() * (pred.sat_clock_s || 0.0)
+                model_code = pred.geometric_range_m + clock_m - sat_clock_m + tropo_m
+                ambiguity = Map.fetch!(fixed_m, o.satellite_id)
 
-            row = %{
-              epoch: epoch_row.epoch,
-              satellite_id: o.satellite_id,
-              code_m: o.code_m - model_code,
-              phase_m: o.phase_m - (model_code + ambiguity)
-            }
+                row = %{
+                  epoch: epoch_row.epoch,
+                  satellite_id: o.satellite_id,
+                  code_m: o.code_m - model_code,
+                  phase_m: o.phase_m - (model_code + ambiguity)
+                }
 
-            {:cont, {:ok, [row | rows_acc]}}
+                {:cont, {:ok, [row | rows_acc]}}
+
+              {:error, reason} ->
+                {:halt, {:error, {:troposphere_failed, o.satellite_id, reason}}}
+            end
 
           {:error, reason} ->
             {:halt, {:error, {:no_ephemeris, o.satellite_id, reason}}}
