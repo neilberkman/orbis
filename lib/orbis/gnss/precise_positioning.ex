@@ -238,22 +238,25 @@ defmodule Orbis.GNSS.PrecisePositioning do
             used_sats: [String.t()],
             epochs: [NaiveDateTime.t()],
             metadata: %{
-              iterations: pos_integer(),
-              converged: boolean(),
-              status: :state_tolerance | :max_iterations,
-              n_epochs: pos_integer(),
-              n_observations: pos_integer(),
-              code_rms_m: float(),
-              phase_rms_m: float(),
-              weighted_rms_m: float(),
-              integer_status: :fixed | :not_fixed,
-              integer_method: :lambda | :widelane_narrowlane_lambda,
-              integer_ratio: float() | :infinity,
-              integer_best_score: float(),
-              integer_second_best_score: float() | nil,
-              integer_candidates: pos_integer(),
-              troposphere_applied: boolean(),
-              ztd_estimated: boolean()
+              required(:iterations) => pos_integer(),
+              required(:converged) => boolean(),
+              required(:status) => :state_tolerance | :max_iterations,
+              required(:n_epochs) => pos_integer(),
+              required(:n_observations) => pos_integer(),
+              required(:code_rms_m) => float(),
+              required(:phase_rms_m) => float(),
+              required(:weighted_rms_m) => float(),
+              required(:integer_status) => :fixed | :not_fixed,
+              required(:integer_method) => :lambda | :widelane_narrowlane_lambda,
+              required(:integer_ratio) => float() | :infinity,
+              required(:integer_best_score) => float(),
+              required(:integer_second_best_score) => float() | nil,
+              required(:integer_candidates) => pos_integer(),
+              required(:troposphere_applied) => boolean(),
+              required(:ztd_estimated) => boolean(),
+              optional(:wide_lane_fixed) => boolean(),
+              optional(:dropped_cycle_slip_sats) => [String.t()],
+              optional(:split_cycle_slip_arcs) => [map()]
             }
           }
   end
@@ -525,8 +528,13 @@ defmodule Orbis.GNSS.PrecisePositioning do
     * `:on_cycle_slip` - what to do when a satellite arc has a detected cycle
       slip: `:error` returns `{:error, {:cycle_slip_detected, sat, epoch,
       reasons}}` (default); `:drop_satellite` removes that satellite from the
-      wide-lane and narrow-lane solve and records it in
-      `metadata.dropped_cycle_slip_sats`.
+      wide-lane and narrow-lane solve; `:split_arc` resets that satellite's
+      ambiguity at each slip and keeps any resulting arc with at least
+      `:wide_lane_min_epochs` usable epochs. Dropped satellites are reported in
+      `metadata.dropped_cycle_slip_sats`; split fragments are reported in
+      `metadata.split_cycle_slip_arcs`. Split fragments use ambiguity ids such
+      as `"G21#2"` in `used_sats` and the ambiguity maps, while ephemeris lookup
+      and residual rows continue to use the physical satellite id (`"G21"`).
 
   Cycle slips are detected with `Orbis.GNSS.CarrierPhase.detect_cycle_slips/2`;
   pass `:gf_threshold_m` / `:mw_threshold_cycles` to tune that detector.
@@ -538,8 +546,10 @@ defmodule Orbis.GNSS.PrecisePositioning do
   def solve_widelane_fixed_epochs(%SP3{} = sp3, dual_epoch_observations, opts)
       when is_list(dual_epoch_observations) do
     with {:ok, dual_epochs} <- normalize_dual_epoch_observations(dual_epoch_observations),
-         {:ok, wide_lane_cycles, dropped_sats} <- wide_lane_ambiguities(dual_epochs, opts),
-         filtered_dual_epochs = filter_dual_epochs_by_wide_lanes(dual_epochs, wide_lane_cycles),
+         {:ok, prepared_dual_epochs, wide_lane_cycles, slip_meta} <-
+           wide_lane_ambiguities(dual_epochs, opts),
+         filtered_dual_epochs =
+           filter_dual_epochs_by_wide_lanes(prepared_dual_epochs, wide_lane_cycles),
          {:ok, if_epochs, wavelengths, offsets} <-
            ionosphere_free_narrow_lane_epochs(filtered_dual_epochs, wide_lane_cycles),
          fixed_opts =
@@ -555,7 +565,8 @@ defmodule Orbis.GNSS.PrecisePositioning do
              Map.merge(sol.metadata, %{
                integer_method: :widelane_narrowlane_lambda,
                wide_lane_fixed: true,
-               dropped_cycle_slip_sats: dropped_sats
+               dropped_cycle_slip_sats: slip_meta.dropped_sats,
+               split_cycle_slip_arcs: slip_meta.split_arcs
              })
        }}
     end
@@ -595,15 +606,36 @@ defmodule Orbis.GNSS.PrecisePositioning do
 
   defp normalize_one(%{satellite_id: sat, code_m: code, phase_m: phase} = obs)
        when is_binary(sat) and is_number(code) and is_number(phase) do
-    {:ok, %{satellite_id: sat, code_m: code / 1.0, phase_m: phase / 1.0, raw: obs}}
+    case normalize_ambiguity_id(obs, sat) do
+      {:ok, ambiguity_id} ->
+        {:ok,
+         %{
+           satellite_id: sat,
+           ambiguity_id: ambiguity_id,
+           code_m: code / 1.0,
+           phase_m: phase / 1.0,
+           raw: obs
+         }}
+
+      {:error, _} = err ->
+        err
+    end
   end
 
   defp normalize_one({sat, code, phase} = obs)
        when is_binary(sat) and is_number(code) and is_number(phase) do
-    {:ok, %{satellite_id: sat, code_m: code / 1.0, phase_m: phase / 1.0, raw: obs}}
+    {:ok,
+     %{satellite_id: sat, ambiguity_id: sat, code_m: code / 1.0, phase_m: phase / 1.0, raw: obs}}
   end
 
   defp normalize_one(entry), do: {:error, {:invalid_observation, entry}}
+
+  defp normalize_ambiguity_id(obs, sat) do
+    case Map.get(obs, :ambiguity_id, sat) do
+      ambiguity_id when is_binary(ambiguity_id) -> {:ok, ambiguity_id}
+      _other -> {:error, {:invalid_observation, obs}}
+    end
+  end
 
   defp ensure_enough(obs) when length(obs) >= 4, do: :ok
   defp ensure_enough(obs), do: {:error, {:too_few_satellites, length(obs), 4}}
@@ -731,6 +763,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
     {:ok,
      %{
        satellite_id: sat,
+       ambiguity_id: sat,
        p1_m: p1 / 1.0,
        p2_m: p2 / 1.0,
        phi1_cyc: phi1 / 1.0,
@@ -959,26 +992,30 @@ defmodule Orbis.GNSS.PrecisePositioning do
 
       arcs
       |> Enum.sort_by(fn {sat, _arc} -> sat end)
-      |> Enum.reduce_while({:ok, %{}, []}, fn {sat, arc}, {:ok, acc, dropped} ->
+      |> Enum.reduce_while({:ok, [], %{}, [], []}, fn {sat, arc},
+                                                      {:ok, entries, cycles, dropped, split_arcs} ->
         arc = Enum.sort_by(arc, fn {_sat, epoch, _obs} -> NaiveDateTime.to_iso8601(epoch) end)
 
-        case ensure_wide_lane_continuity(sat, arc, opts, slip_policy) do
-          :ok ->
-            case estimate_wide_lane_integer(sat, arc, wl_opts) do
-              {:ok, fixed} -> {:cont, {:ok, Map.put(acc, sat, fixed), dropped}}
-              {:error, _} = err -> {:halt, err}
-            end
-
-          {:drop, _slip} ->
-            {:cont, {:ok, acc, [sat | dropped]}}
+        case prepare_wide_lane_arc(sat, arc, opts, wl_opts, slip_policy) do
+          {:ok, arc_entries, arc_cycles, arc_dropped, arc_splits} ->
+            {:cont,
+             {:ok, arc_entries ++ entries, Map.merge(cycles, arc_cycles), arc_dropped ++ dropped,
+              arc_splits ++ split_arcs}}
 
           {:error, _} = err ->
             {:halt, err}
         end
       end)
       |> case do
-        {:ok, cycles, dropped} -> {:ok, cycles, Enum.reverse(dropped)}
-        {:error, _} = err -> err
+        {:ok, entries, cycles, dropped, split_arcs} ->
+          {:ok, dual_epochs_from_entries(entries), cycles,
+           %{
+             dropped_sats: dropped |> Enum.uniq() |> Enum.sort(),
+             split_arcs: split_arcs |> Enum.sort_by(&{&1.satellite_id, &1.ambiguity_id})
+           }}
+
+        {:error, _} = err ->
+          err
       end
     end
   end
@@ -1003,32 +1040,151 @@ defmodule Orbis.GNSS.PrecisePositioning do
     case Keyword.get(opts, :on_cycle_slip, @default_cycle_slip_policy) do
       :error -> {:ok, :error}
       :drop_satellite -> {:ok, :drop_satellite}
+      :split_arc -> {:ok, :split_arc}
       _other -> {:error, {:invalid_option, :on_cycle_slip}}
     end
   end
 
-  defp ensure_wide_lane_continuity(sat, arc, opts, slip_policy) do
-    carrier_arc =
-      Enum.map(arc, fn {_sat, epoch, obs} ->
-        %{
-          epoch: epoch,
-          phi1: obs.phi1_cyc,
-          phi2: obs.phi2_cyc,
-          p1: obs.p1_m,
-          p2: obs.p2_m,
-          f1: obs.f1_hz,
-          f2: obs.f2_hz,
-          lli1: obs.lli1,
-          lli2: obs.lli2
-        }
-      end)
+  defp prepare_wide_lane_arc(sat, arc, opts, wl_opts, :split_arc) do
+    case cycle_slips_for_arc(arc, opts) do
+      [] ->
+        estimate_tagged_wide_lane_arc(sat, sat, arc, wl_opts, [])
 
-    case Enum.find(CarrierPhase.detect_cycle_slips(carrier_arc, opts), & &1.slip) do
-      nil -> :ok
-      slip when slip_policy == :drop_satellite -> {:drop, slip}
-      slip -> {:error, {:cycle_slip_detected, sat, slip.epoch, slip.reasons}}
+      slips ->
+        segments = split_wide_lane_arc(arc, MapSet.new(Enum.map(slips, & &1.epoch)))
+
+        segments
+        |> Enum.reduce_while({:ok, [], %{}, [], []}, fn {segment_idx, segment},
+                                                        {:ok, entries, cycles, dropped,
+                                                         split_arcs} ->
+          if length(segment) < wl_opts.min_epochs do
+            {:cont, {:ok, entries, cycles, dropped, split_arcs}}
+          else
+            ambiguity_id = split_ambiguity_id(sat, segment_idx)
+
+            case estimate_tagged_wide_lane_arc(ambiguity_id, ambiguity_id, segment, wl_opts, [
+                   split_arc_metadata(sat, ambiguity_id, segment)
+                 ]) do
+              {:ok, arc_entries, arc_cycles, _arc_dropped, arc_splits} ->
+                {:cont,
+                 {:ok, arc_entries ++ entries, Map.merge(cycles, arc_cycles), dropped,
+                  arc_splits ++ split_arcs}}
+
+              {:error, _} = err ->
+                {:halt, err}
+            end
+          end
+        end)
+        |> case do
+          {:ok, entries, cycles, dropped, split_arcs} when map_size(cycles) > 0 ->
+            {:ok, entries, cycles, dropped, split_arcs}
+
+          {:ok, _entries, _cycles, dropped, split_arcs} ->
+            {:ok, [], %{}, [sat | dropped], split_arcs}
+
+          {:error, _} = err ->
+            err
+        end
     end
   end
+
+  defp prepare_wide_lane_arc(sat, arc, opts, wl_opts, slip_policy) do
+    case cycle_slips_for_arc(arc, opts) do
+      [] ->
+        estimate_tagged_wide_lane_arc(sat, sat, arc, wl_opts, [])
+
+      [_slip | _] when slip_policy == :drop_satellite ->
+        {:ok, [], %{}, [sat], []}
+
+      [slip | _] ->
+        {:error, {:cycle_slip_detected, sat, slip.epoch, slip.reasons}}
+    end
+  end
+
+  defp estimate_tagged_wide_lane_arc(error_id, ambiguity_id, arc, wl_opts, split_arcs) do
+    case estimate_wide_lane_integer(error_id, arc, wl_opts) do
+      {:ok, fixed} ->
+        entries =
+          Enum.map(arc, fn {_sat, epoch, obs} ->
+            {epoch, Map.put(obs, :ambiguity_id, ambiguity_id)}
+          end)
+
+        {:ok, entries, %{ambiguity_id => fixed}, [], split_arcs}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp cycle_slips_for_arc(arc, opts) do
+    arc
+    |> carrier_phase_arc()
+    |> CarrierPhase.detect_cycle_slips(opts)
+    |> Enum.filter(& &1.slip)
+  end
+
+  defp carrier_phase_arc(arc) do
+    Enum.map(arc, fn {_sat, epoch, obs} ->
+      %{
+        epoch: epoch,
+        phi1: obs.phi1_cyc,
+        phi2: obs.phi2_cyc,
+        p1: obs.p1_m,
+        p2: obs.p2_m,
+        f1: obs.f1_hz,
+        f2: obs.f2_hz,
+        lli1: obs.lli1,
+        lli2: obs.lli2
+      }
+    end)
+  end
+
+  defp split_wide_lane_arc(arc, slip_epochs) do
+    {segments, current, current_idx} =
+      Enum.reduce(arc, {[], [], 1}, fn {_sat, epoch, _obs} = row, {segments, current, idx} ->
+        if MapSet.member?(slip_epochs, epoch) do
+          segments =
+            if current == [], do: segments, else: [{idx, Enum.reverse(current)} | segments]
+
+          {segments, [row], idx + 1}
+        else
+          {segments, [row | current], idx}
+        end
+      end)
+
+    segments =
+      if current == [], do: segments, else: [{current_idx, Enum.reverse(current)} | segments]
+
+    Enum.reverse(segments)
+  end
+
+  defp split_ambiguity_id(sat, segment_idx), do: "#{sat}##{segment_idx}"
+
+  defp split_arc_metadata(sat, ambiguity_id, segment) do
+    epochs = Enum.map(segment, fn {_sat, epoch, _obs} -> epoch end)
+
+    %{
+      satellite_id: sat,
+      ambiguity_id: ambiguity_id,
+      start_epoch: List.first(epochs),
+      end_epoch: List.last(epochs),
+      n_epochs: length(epochs)
+    }
+  end
+
+  defp dual_epochs_from_entries(entries) do
+    entries
+    |> Enum.group_by(fn {epoch, _obs} -> epoch end, fn {_epoch, obs} -> obs end)
+    |> Enum.map(fn {epoch, observations} ->
+      %{
+        epoch: epoch,
+        observations: Enum.sort_by(observations, &{&1.satellite_id, ambiguity_id(&1)})
+      }
+    end)
+    |> Enum.sort_by(&NaiveDateTime.to_iso8601(&1.epoch))
+  end
+
+  defp ambiguity_id(obs), do: Map.get(obs, :ambiguity_id, obs.satellite_id)
 
   defp estimate_wide_lane_integer(sat, arc, opts) do
     arc
@@ -1079,7 +1235,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
     dual_epochs
     |> Enum.map(fn epoch_row ->
       observations =
-        Enum.filter(epoch_row.observations, &MapSet.member?(keep, &1.satellite_id))
+        Enum.filter(epoch_row.observations, &MapSet.member?(keep, ambiguity_id(&1)))
 
       %{epoch_row | observations: observations}
     end)
@@ -1099,7 +1255,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
     dual_epochs
     |> Enum.flat_map(& &1.observations)
     |> Enum.reduce_while({:ok, %{}}, fn obs, {:ok, acc} ->
-      sat = obs.satellite_id
+      sat = ambiguity_id(obs)
 
       with {:ok, wide_lane} <- fetch_wide_lane(wide_lane_cycles, sat),
            {:ok, params} <- narrow_lane_param(obs.f1_hz, obs.f2_hz, wide_lane),
@@ -1175,7 +1331,16 @@ defmodule Orbis.GNSS.PrecisePositioning do
                obs.f2_hz
              ) do
         {:cont,
-         {:ok, [%{satellite_id: obs.satellite_id, code_m: code_m, phase_m: phase_m} | acc]}}
+         {:ok,
+          [
+            %{
+              satellite_id: obs.satellite_id,
+              ambiguity_id: ambiguity_id(obs),
+              code_m: code_m,
+              phase_m: phase_m
+            }
+            | acc
+          ]}}
       else
         {:error, reason} -> {:halt, {:error, {:ionosphere_free_failed, obs.satellite_id, reason}}}
       end
@@ -1209,7 +1374,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
   defp state_from_guess(obs, position, clock_m) do
     ambiguities =
       Map.new(obs, fn o ->
-        {o.satellite_id, o.phase_m - o.code_m}
+        {ambiguity_id(o), o.phase_m - o.code_m}
       end)
 
     %{position: position, clock_m: clock_m, ambiguities: ambiguities}
@@ -1251,7 +1416,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
     epochs
     |> Enum.flat_map(& &1.observations)
     |> Enum.reduce(%{}, fn obs, acc ->
-      Map.put_new(acc, obs.satellite_id, obs.phase_m - obs.code_m)
+      Map.put_new(acc, ambiguity_id(obs), obs.phase_m - obs.code_m)
     end)
   end
 
@@ -1415,7 +1580,8 @@ defmodule Orbis.GNSS.PrecisePositioning do
               sat_clock_m = Constants.speed_of_light_m_s() * (pred.sat_clock_s || 0.0)
               tropo_m = applied_troposphere_m(tropo_model, state)
               model_code = pred.geometric_range_m + state.clock_m - sat_clock_m + tropo_m
-              ambiguity = Map.fetch!(state.ambiguities, o.satellite_id)
+              arc_id = ambiguity_id(o)
+              ambiguity = Map.fetch!(state.ambiguities, arc_id)
 
               code_row = %{
                 kind: :code,
@@ -1428,7 +1594,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
               phase_row = %{
                 kind: :phase,
                 sat: o.satellite_id,
-                h: design_row({-ex, -ey, -ez, 1.0}, o.satellite_id, obs),
+                h: design_row({-ex, -ey, -ez, 1.0}, arc_id, obs),
                 y: o.phase_m - (model_code + ambiguity),
                 weight: weights.phase
               }
@@ -1452,7 +1618,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
   defp design_row({dx, dy, dz, dc}, ambiguity_sat, obs) do
     ambiguity_cols =
       Enum.map(obs, fn o ->
-        if o.satellite_id == ambiguity_sat, do: 1.0, else: 0.0
+        if ambiguity_id(o) == ambiguity_sat, do: 1.0, else: 0.0
       end)
 
     [dx, dy, dz, dc | ambiguity_cols]
@@ -1476,7 +1642,8 @@ defmodule Orbis.GNSS.PrecisePositioning do
                 sat_clock_m = Constants.speed_of_light_m_s() * (pred.sat_clock_s || 0.0)
                 tropo_m = applied_troposphere_m(tropo_model, state)
                 model_code = pred.geometric_range_m + clock_m - sat_clock_m + tropo_m
-                ambiguity = Map.fetch!(state.ambiguities, o.satellite_id)
+                arc_id = ambiguity_id(o)
+                ambiguity = Map.fetch!(state.ambiguities, arc_id)
                 base = {-ex, -ey, -ez}
 
                 code_row = %{
@@ -1505,7 +1672,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
                     multi_design_row(
                       base,
                       epoch_idx,
-                      o.satellite_id,
+                      arc_id,
                       length(epochs),
                       sat_ids,
                       tropo_model.ztd_mapping,
@@ -1554,7 +1721,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
                 sat_clock_m = Constants.speed_of_light_m_s() * (pred.sat_clock_s || 0.0)
                 tropo_m = applied_troposphere_m(tropo_model, state)
                 model_code = pred.geometric_range_m + clock_m - sat_clock_m + tropo_m
-                ambiguity = Map.fetch!(fixed_m, o.satellite_id)
+                ambiguity = Map.fetch!(fixed_m, ambiguity_id(o))
 
                 h =
                   fixed_multi_design_row(
@@ -1671,7 +1838,8 @@ defmodule Orbis.GNSS.PrecisePositioning do
       obs
       |> Enum.zip(ambiguity_deltas)
       |> Map.new(fn {o, d} ->
-        {o.satellite_id, Map.fetch!(state.ambiguities, o.satellite_id) + d}
+        arc_id = ambiguity_id(o)
+        {arc_id, Map.fetch!(state.ambiguities, arc_id) + d}
       end)
 
     %{
@@ -2614,7 +2782,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
               sat_clock_m = Constants.speed_of_light_m_s() * (pred.sat_clock_s || 0.0)
               tropo_m = applied_troposphere_m(tropo_model, state)
               model_code = pred.geometric_range_m + state.clock_m - sat_clock_m + tropo_m
-              ambiguity = Map.fetch!(state.ambiguities, o.satellite_id)
+              ambiguity = Map.fetch!(state.ambiguities, ambiguity_id(o))
 
               row = %{
                 sat: o.satellite_id,
@@ -2655,7 +2823,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
                 sat_clock_m = Constants.speed_of_light_m_s() * (pred.sat_clock_s || 0.0)
                 tropo_m = applied_troposphere_m(tropo_model, state)
                 model_code = pred.geometric_range_m + clock_m - sat_clock_m + tropo_m
-                ambiguity = Map.fetch!(state.ambiguities, o.satellite_id)
+                ambiguity = Map.fetch!(state.ambiguities, ambiguity_id(o))
 
                 row = %{
                   epoch: epoch_row.epoch,
@@ -2702,7 +2870,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
                 sat_clock_m = Constants.speed_of_light_m_s() * (pred.sat_clock_s || 0.0)
                 tropo_m = applied_troposphere_m(tropo_model, state)
                 model_code = pred.geometric_range_m + clock_m - sat_clock_m + tropo_m
-                ambiguity = Map.fetch!(fixed_m, o.satellite_id)
+                ambiguity = Map.fetch!(fixed_m, ambiguity_id(o))
 
                 row = %{
                   epoch: epoch_row.epoch,
@@ -2735,7 +2903,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
   defp multi_satellite_ids(epochs) do
     epochs
     |> Enum.flat_map(& &1.observations)
-    |> Enum.map(& &1.satellite_id)
+    |> Enum.map(&ambiguity_id/1)
     |> Enum.uniq()
     |> Enum.sort()
   end

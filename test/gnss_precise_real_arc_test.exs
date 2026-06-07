@@ -87,6 +87,31 @@ defmodule Orbis.GNSS.PreciseRealArcTest do
              )
   end
 
+  @tag timeout: 180_000
+  test "real slipped arcs can be split before the narrow-lane search" do
+    sp3 = SP3.load!(@sp3_path)
+    obs = Observations.load!(@obs_path)
+    {x0, y0, z0} = Observations.approx_position(obs)
+    dual_epoch_observations = real_gps_dual_frequency_arc(obs, 30)
+
+    assert {:error, {:cycle_slip_detected, "G21", _epoch, _reasons}} =
+             PrecisePositioning.solve_widelane_fixed_epochs(sp3, dual_epoch_observations,
+               initial_guess: {x0 + 100.0, y0 - 100.0, z0 + 100.0, 0.0},
+               max_iterations: 5,
+               troposphere: true
+             )
+
+    assert {:error, {:no_integer_candidates, 0}} =
+             PrecisePositioning.solve_widelane_fixed_epochs(sp3, dual_epoch_observations,
+               initial_guess: {x0 + 100.0, y0 - 100.0, z0 + 100.0, 0.0},
+               max_iterations: 5,
+               troposphere: true,
+               on_cycle_slip: :split_arc,
+               wide_lane_tolerance_cycles: 2.0,
+               integer_candidate_limit: 5_000
+             )
+  end
+
   defp real_gps_iono_free_arc(obs, count, opts \\ []) do
     {:ok, f1} = IonosphereFree.frequency("G", :l1)
     {:ok, f2} = IonosphereFree.frequency("G", :l2)
@@ -97,6 +122,24 @@ defmodule Orbis.GNSS.PreciseRealArcTest do
     |> Enum.take(count)
     |> Enum.map(fn entry ->
       rows = epoch_rows(obs, entry.index, f1, f2, excluded)
+
+      if length(rows) < 6 do
+        raise "fixture epoch #{inspect(entry.epoch)} has only #{length(rows)} complete GPS L1/L2 code+phase rows"
+      end
+
+      %{epoch: naive_datetime(entry.epoch), observations: rows}
+    end)
+  end
+
+  defp real_gps_dual_frequency_arc(obs, count) do
+    {:ok, f1} = IonosphereFree.frequency("G", :l1)
+    {:ok, f2} = IonosphereFree.frequency("G", :l2)
+
+    obs
+    |> Observations.epochs()
+    |> Enum.take(count)
+    |> Enum.map(fn entry ->
+      rows = dual_epoch_rows(obs, entry.index, f1, f2)
 
       if length(rows) < 6 do
         raise "fixture epoch #{inspect(entry.epoch)} has only #{length(rows)} complete GPS L1/L2 code+phase rows"
@@ -122,6 +165,36 @@ defmodule Orbis.GNSS.PreciseRealArcTest do
            {:ok, code_m} <- IonosphereFree.iono_free(c1, c2, f1, f2),
            {:ok, phase_m} <- IonosphereFree.iono_free_phase_cycles(l1, l2, f1, f2) do
         [%{satellite_id: sat, code_m: code_m, phase_m: phase_m}]
+      else
+        _ -> []
+      end
+    end)
+    |> Enum.sort_by(& &1.satellite_id)
+  end
+
+  defp dual_epoch_rows(obs, index, f1, f2) do
+    {:ok, by_sat} =
+      Observations.values(obs, index, codes: %{"G" => ["C1C", "C2W", "L1C", "L2W"]})
+
+    by_sat
+    |> Enum.flat_map(fn {sat, values} ->
+      values_by_code = Map.new(values, &{&1.code, &1.value})
+
+      with c1 when is_number(c1) <- values_by_code["C1C"],
+           c2 when is_number(c2) <- values_by_code["C2W"],
+           l1 when is_number(l1) <- values_by_code["L1C"],
+           l2 when is_number(l2) <- values_by_code["L2W"] do
+        [
+          %{
+            satellite_id: sat,
+            p1_m: c1,
+            p2_m: c2,
+            phi1_cyc: l1,
+            phi2_cyc: l2,
+            f1_hz: f1,
+            f2_hz: f2
+          }
+        ]
       else
         _ -> []
       end

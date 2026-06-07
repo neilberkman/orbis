@@ -464,22 +464,7 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
       slip_epoch = @epoch2
 
       slipped =
-        Enum.map(ctx.dual_frequency_epoch_observations, fn epoch_row ->
-          observations =
-            Enum.map(epoch_row.observations, fn
-              %{satellite_id: ^bad_sat} = obs ->
-                if NaiveDateTime.compare(epoch_row.epoch, slip_epoch) in [:eq, :gt] do
-                  %{obs | phi1_cyc: obs.phi1_cyc + 8.0}
-                else
-                  obs
-                end
-
-              obs ->
-                obs
-            end)
-
-          %{epoch_row | observations: observations}
-        end)
+        slip_dual_frequency_after(ctx.dual_frequency_epoch_observations, bad_sat, slip_epoch, 8.0)
 
       assert {:error, {:cycle_slip_detected, ^bad_sat, ^slip_epoch, reasons}} =
                PrecisePositioning.solve_widelane_fixed_epochs(ctx.sp3, slipped,
@@ -494,22 +479,7 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
       slip_epoch = @epoch2
 
       slipped =
-        Enum.map(ctx.dual_frequency_epoch_observations, fn epoch_row ->
-          observations =
-            Enum.map(epoch_row.observations, fn
-              %{satellite_id: ^bad_sat} = obs ->
-                if NaiveDateTime.compare(epoch_row.epoch, slip_epoch) in [:eq, :gt] do
-                  %{obs | phi1_cyc: obs.phi1_cyc + 8.0}
-                else
-                  obs
-                end
-
-              obs ->
-                obs
-            end)
-
-          %{epoch_row | observations: observations}
-        end)
+        slip_dual_frequency_after(ctx.dual_frequency_epoch_observations, bad_sat, slip_epoch, 8.0)
 
       assert {:ok, %FixedSolution{} = sol} =
                PrecisePositioning.solve_widelane_fixed_epochs(ctx.sp3, slipped,
@@ -526,13 +496,54 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
       assert sol.metadata.integer_status == :fixed
     end
 
+    test "can split a slipped satellite into a fresh ambiguity arc", ctx do
+      [{bad_sat, _predictions} | _] = ctx.multi_sats
+      slip_epoch = @epoch2
+
+      slipped =
+        slip_dual_frequency_after(ctx.dual_frequency_epoch_observations, bad_sat, slip_epoch, 8.0)
+
+      split_arc = "#{bad_sat}#2"
+
+      assert {:ok, %FixedSolution{} = sol} =
+               PrecisePositioning.solve_widelane_fixed_epochs(ctx.sp3, slipped,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 on_cycle_slip: :split_arc,
+                 wide_lane_tolerance_cycles: 0.01
+               )
+
+      assert position_error(sol.position, @truth) < 1.0e-3
+      assert split_arc in sol.used_sats
+      refute bad_sat in sol.used_sats
+
+      assert sol.wide_lane_ambiguities_cycles[split_arc] ==
+               true_wide_lane_cycles(ctx.multi_sats)[bad_sat] + 8
+
+      assert sol.fixed_ambiguities_cycles[split_arc] ==
+               true_fixed_cycles(ctx.multi_sats)[bad_sat] + 8
+
+      assert sol.metadata.dropped_cycle_slip_sats == []
+
+      assert [
+               %{
+                 satellite_id: ^bad_sat,
+                 ambiguity_id: ^split_arc,
+                 start_epoch: ^slip_epoch,
+                 end_epoch: @epoch3,
+                 n_epochs: 2
+               }
+             ] = sol.metadata.split_cycle_slip_arcs
+
+      assert sol.metadata.integer_status == :fixed
+    end
+
     test "rejects an unknown cycle-slip policy", ctx do
       assert {:error, {:invalid_option, :on_cycle_slip}} =
                PrecisePositioning.solve_widelane_fixed_epochs(
                  ctx.sp3,
                  ctx.dual_frequency_epoch_observations,
                  initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
-                 on_cycle_slip: :split_arc
+                 on_cycle_slip: :bogus
                )
     end
   end
@@ -774,6 +785,25 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
     sats
     |> Enum.with_index()
     |> Map.new(fn {{sat, _obs}, idx} -> {sat, wide_lane_cycles(idx)} end)
+  end
+
+  defp slip_dual_frequency_after(epoch_observations, sat, slip_epoch, cycles) do
+    Enum.map(epoch_observations, fn epoch_row ->
+      observations =
+        Enum.map(epoch_row.observations, fn
+          %{satellite_id: ^sat} = obs ->
+            if NaiveDateTime.compare(epoch_row.epoch, slip_epoch) in [:eq, :gt] do
+              %{obs | phi1_cyc: obs.phi1_cyc + cycles}
+            else
+              obs
+            end
+
+          obs ->
+            obs
+        end)
+
+      %{epoch_row | observations: observations}
+    end)
   end
 
   defp position_error(%{x_m: x, y_m: y, z_m: z}, {tx, ty, tz}) do

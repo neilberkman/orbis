@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `Orbis.GNSS.PrecisePositioning.solve_widelane_fixed_epochs/3` now supports
+  `on_cycle_slip: :split_arc`, which resets a satellite's carrier ambiguity at
+  detected cycle slips and keeps any post-slip fragments long enough for
+  wide-lane fixing. Split fragments are reported in
+  `metadata.split_cycle_slip_arcs` and use suffixed ambiguity ids such as
+  `"G21#2"` in `used_sats` and the ambiguity maps.
+
 ## [0.10.0] - 2026-06-07
 
 ### Added
