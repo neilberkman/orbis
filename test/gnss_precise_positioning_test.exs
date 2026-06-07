@@ -384,6 +384,27 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
       assert sol.metadata.phase_rms_m < 1.0e-4
     end
 
+    test "fixed-ambiguity arcs can down-weight low elevations", ctx do
+      assert {:ok, %FixedSolution{} = sol} =
+               PrecisePositioning.solve_fixed_epochs(ctx.sp3, ctx.fixed_epoch_observations,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 ambiguity_wavelength_m: @l1_wavelength_m,
+                 elevation_weighting: true
+               )
+
+      assert position_error(sol.position, @truth) < 1.0e-3
+      assert sol.metadata.integer_status == :fixed
+      assert sol.metadata.code_rms_m < 1.0e-4
+      assert sol.metadata.phase_rms_m < 1.0e-4
+
+      code_weights = Enum.map(sol.residuals_m, & &1.code_weight)
+      phase_weights = Enum.map(sol.residuals_m, & &1.phase_weight)
+
+      assert Enum.all?(code_weights, &(&1 > 0.0 and &1 <= 1.0))
+      assert Enum.any?(code_weights, &(&1 < 0.95))
+      assert Enum.all?(phase_weights, &(&1 > 0.0 and &1 <= 100.0))
+    end
+
     test "fixed-ambiguity arcs estimate a residual zenith troposphere delay", ctx do
       fixed_tropo =
         synth_fixed_epoch_observations(ctx.multi_sats,
@@ -422,6 +443,13 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
                  initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
                  ambiguity_wavelength_m: @l1_wavelength_m,
                  integer_search_radius_cycles: -1
+               )
+
+      assert {:error, {:invalid_option, :elevation_weighting}} =
+               PrecisePositioning.solve_fixed_epochs(ctx.sp3, ctx.fixed_epoch_observations,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 ambiguity_wavelength_m: @l1_wavelength_m,
+                 elevation_weighting: :yes
                )
 
       assert {:error, {:too_many_integer_candidates, 2, 1}} =

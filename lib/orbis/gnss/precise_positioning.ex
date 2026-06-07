@@ -67,6 +67,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
   @default_integer_ratio_threshold 3.0
   @default_integer_candidate_limit 50_000
   @default_cycle_slip_policy :error
+  @min_elevation_weight_scale 1.0e-3
   @pivot_epsilon 1.0e-12
 
   defmodule Solution do
@@ -150,10 +151,12 @@ defmodule Orbis.GNSS.PrecisePositioning do
           }
 
     @type residual :: %{
-            epoch: NaiveDateTime.t(),
-            satellite_id: String.t(),
-            code_m: float(),
-            phase_m: float()
+            required(:epoch) => NaiveDateTime.t(),
+            required(:satellite_id) => String.t(),
+            required(:code_m) => float(),
+            required(:phase_m) => float(),
+            optional(:code_weight) => float(),
+            optional(:phase_weight) => float()
           }
 
     @type t :: %__MODULE__{
@@ -220,10 +223,12 @@ defmodule Orbis.GNSS.PrecisePositioning do
           }
 
     @type residual :: %{
-            epoch: NaiveDateTime.t(),
-            satellite_id: String.t(),
-            code_m: float(),
-            phase_m: float()
+            required(:epoch) => NaiveDateTime.t(),
+            required(:satellite_id) => String.t(),
+            required(:code_m) => float(),
+            required(:phase_m) => float(),
+            optional(:code_weight) => float(),
+            optional(:phase_weight) => float()
           }
 
     @type t :: %__MODULE__{
@@ -316,6 +321,10 @@ defmodule Orbis.GNSS.PrecisePositioning do
       is omitted (default `{0, 0, 0, 0}`).
     * `:code_sigma_m` - code row standard deviation (default `1.0` m).
     * `:phase_sigma_m` - phase row standard deviation (default `0.01` m).
+    * `:elevation_weighting` - when `true`, scale both code and phase row
+      standard deviations by `1 / sin(elevation)` so low-elevation
+      observations contribute less to the float, fixed, and ambiguity-covariance
+      solves (default `false`).
     * `:max_iterations` - maximum nonlinear iterations (default `8`).
     * `:position_tolerance_m` - position-update convergence threshold
       (default `1.0e-4` m).
@@ -814,6 +823,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
   defp weights(opts) do
     code_sigma = Keyword.get(opts, :code_sigma_m, @default_code_sigma_m)
     phase_sigma = Keyword.get(opts, :phase_sigma_m, @default_phase_sigma_m)
+    elevation_weighting = Keyword.get(opts, :elevation_weighting, false)
 
     cond do
       not is_number(code_sigma) or code_sigma <= 0.0 ->
@@ -822,8 +832,36 @@ defmodule Orbis.GNSS.PrecisePositioning do
       not is_number(phase_sigma) or phase_sigma <= 0.0 ->
         {:error, {:invalid_sigma, :phase_sigma_m}}
 
+      elevation_weighting not in [true, false] ->
+        {:error, {:invalid_option, :elevation_weighting}}
+
       true ->
-        {:ok, %{code: 1.0 / code_sigma, phase: 1.0 / phase_sigma}}
+        {:ok,
+         %{
+           code: 1.0 / code_sigma,
+           phase: 1.0 / phase_sigma,
+           elevation_weighting?: elevation_weighting
+         }}
+    end
+  end
+
+  defp measurement_weight(weights, kind, elevation_deg) do
+    base = Map.fetch!(weights, kind)
+
+    if weights.elevation_weighting? do
+      base * elevation_weight_scale(elevation_deg)
+    else
+      base
+    end
+  end
+
+  defp elevation_weight_scale(elevation_deg) do
+    sin_el = :math.sin(elevation_deg * :math.pi() / 180.0)
+
+    cond do
+      not is_number(sin_el) -> @min_elevation_weight_scale
+      sin_el < @min_elevation_weight_scale -> @min_elevation_weight_scale
+      true -> sin_el
     end
   end
 
@@ -1594,7 +1632,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
                 sat: o.satellite_id,
                 h: design_row({-ex, -ey, -ez, 1.0}, nil, obs),
                 y: o.code_m - model_code,
-                weight: weights.code
+                weight: measurement_weight(weights, :code, pred.elevation_deg)
               }
 
               phase_row = %{
@@ -1602,7 +1640,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
                 sat: o.satellite_id,
                 h: design_row({-ex, -ey, -ez, 1.0}, arc_id, obs),
                 y: o.phase_m - (model_code + ambiguity),
-                weight: weights.phase
+                weight: measurement_weight(weights, :phase, pred.elevation_deg)
               }
 
               {:cont, {:ok, [phase_row, code_row | acc]}}
@@ -1667,7 +1705,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
                       tropo
                     ),
                   y: o.code_m - model_code,
-                  weight: weights.code
+                  weight: measurement_weight(weights, :code, pred.elevation_deg)
                 }
 
                 phase_row = %{
@@ -1685,7 +1723,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
                       tropo
                     ),
                   y: o.phase_m - (model_code + ambiguity),
-                  weight: weights.phase
+                  weight: measurement_weight(weights, :phase, pred.elevation_deg)
                 }
 
                 {:cont, {:ok, [phase_row, code_row | rows_acc]}}
@@ -1744,7 +1782,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
                   epoch: epoch_row.epoch,
                   h: h,
                   y: o.code_m - model_code,
-                  weight: weights.code
+                  weight: measurement_weight(weights, :code, pred.elevation_deg)
                 }
 
                 phase_row = %{
@@ -1753,7 +1791,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
                   epoch: epoch_row.epoch,
                   h: h,
                   y: o.phase_m - (model_code + ambiguity),
-                  weight: weights.phase
+                  weight: measurement_weight(weights, :phase, pred.elevation_deg)
                 }
 
                 {:cont, {:ok, [phase_row, code_row | rows_acc]}}
@@ -2662,7 +2700,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
   # --- result assembly -----------------------------------------------------
 
   defp finalize(sp3, obs, epoch, state, weights, tropo, iterations, converged, status) do
-    with {:ok, residual_rows} <- residual_rows(sp3, obs, epoch, state, tropo) do
+    with {:ok, residual_rows} <- residual_rows(sp3, obs, epoch, state, tropo, weights) do
       code = residual_rows |> Enum.map(& &1.code_m)
       phase = residual_rows |> Enum.map(& &1.phase_m)
 
@@ -2691,7 +2729,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
   end
 
   defp finalize_multi(sp3, epochs, sat_ids, state, weights, tropo, iterations, converged, status) do
-    with {:ok, residual_rows} <- multi_residual_rows(sp3, epochs, state, tropo) do
+    with {:ok, residual_rows} <- multi_residual_rows(sp3, epochs, state, tropo, weights) do
       code = residual_rows |> Enum.map(& &1.code_m)
       phase = residual_rows |> Enum.map(& &1.phase_m)
       {x, y, z} = state.position
@@ -2746,7 +2784,8 @@ defmodule Orbis.GNSS.PrecisePositioning do
          status,
          fixed_meta
        ) do
-    with {:ok, residual_rows} <- fixed_multi_residual_rows(sp3, epochs, fixed_m, state, tropo) do
+    with {:ok, residual_rows} <-
+           fixed_multi_residual_rows(sp3, epochs, fixed_m, state, tropo, weights) do
       code = residual_rows |> Enum.map(& &1.code_m)
       phase = residual_rows |> Enum.map(& &1.phase_m)
       {x, y, z} = state.position
@@ -2793,7 +2832,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
   defp solution_ztd_residual_m(state, %{estimate_ztd?: true}), do: state_ztd_m(state)
   defp solution_ztd_residual_m(_state, _tropo), do: nil
 
-  defp residual_rows(sp3, obs, epoch, state, tropo) do
+  defp residual_rows(sp3, obs, epoch, state, tropo, weights) do
     {rx, ry, rz} = state.position
 
     Enum.reduce_while(obs, {:ok, []}, fn o, {:ok, acc} ->
@@ -2809,7 +2848,9 @@ defmodule Orbis.GNSS.PrecisePositioning do
               row = %{
                 sat: o.satellite_id,
                 code_m: o.code_m - model_code,
-                phase_m: o.phase_m - (model_code + ambiguity)
+                phase_m: o.phase_m - (model_code + ambiguity),
+                code_weight: measurement_weight(weights, :code, pred.elevation_deg),
+                phase_weight: measurement_weight(weights, :phase, pred.elevation_deg)
               }
 
               {:cont, {:ok, [row | acc]}}
@@ -2828,7 +2869,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
     end
   end
 
-  defp multi_residual_rows(sp3, epochs, state, tropo) do
+  defp multi_residual_rows(sp3, epochs, state, tropo, weights) do
     {rx, ry, rz} = state.position
 
     epochs
@@ -2851,7 +2892,9 @@ defmodule Orbis.GNSS.PrecisePositioning do
                   epoch: epoch_row.epoch,
                   satellite_id: o.satellite_id,
                   code_m: o.code_m - model_code,
-                  phase_m: o.phase_m - (model_code + ambiguity)
+                  phase_m: o.phase_m - (model_code + ambiguity),
+                  code_weight: measurement_weight(weights, :code, pred.elevation_deg),
+                  phase_weight: measurement_weight(weights, :phase, pred.elevation_deg)
                 }
 
                 {:cont, {:ok, [row | rows_acc]}}
@@ -2875,7 +2918,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
     end
   end
 
-  defp fixed_multi_residual_rows(sp3, epochs, fixed_m, state, tropo) do
+  defp fixed_multi_residual_rows(sp3, epochs, fixed_m, state, tropo, weights) do
     {rx, ry, rz} = state.position
 
     epochs
@@ -2898,7 +2941,9 @@ defmodule Orbis.GNSS.PrecisePositioning do
                   epoch: epoch_row.epoch,
                   satellite_id: o.satellite_id,
                   code_m: o.code_m - model_code,
-                  phase_m: o.phase_m - (model_code + ambiguity)
+                  phase_m: o.phase_m - (model_code + ambiguity),
+                  code_weight: measurement_weight(weights, :code, pred.elevation_deg),
+                  phase_weight: measurement_weight(weights, :phase, pred.elevation_deg)
                 }
 
                 {:cont, {:ok, [row | rows_acc]}}
@@ -2943,7 +2988,10 @@ defmodule Orbis.GNSS.PrecisePositioning do
   defp weighted_rms(rows, weights) do
     values =
       Enum.flat_map(rows, fn r ->
-        [r.code_m * weights.code, r.phase_m * weights.phase]
+        [
+          r.code_m * Map.get(r, :code_weight, weights.code),
+          r.phase_m * Map.get(r, :phase_weight, weights.phase)
+        ]
       end)
 
     rms(values)
