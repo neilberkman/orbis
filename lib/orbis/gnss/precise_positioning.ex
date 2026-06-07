@@ -256,7 +256,13 @@ defmodule Orbis.GNSS.PrecisePositioning do
               required(:ztd_estimated) => boolean(),
               optional(:wide_lane_fixed) => boolean(),
               optional(:dropped_cycle_slip_sats) => [String.t()],
-              optional(:split_cycle_slip_arcs) => [map()]
+              optional(:split_cycle_slip_arcs) => [map()],
+              optional(:ambiguity_search) => %{
+                required(:order) => [String.t()],
+                required(:float_cycles) => %{String.t() => float()},
+                required(:covariance_cycles) => [[float()]],
+                required(:covariance_inverse_cycles) => [[float()]]
+              }
             }
           }
   end
@@ -1938,20 +1944,31 @@ defmodule Orbis.GNSS.PrecisePositioning do
     case ambiguity_covariance_cycles(sp3, epochs, sat_ids, float_sol, wavelengths, weights, tropo) do
       {:ok, q_cycles} ->
         q_cycles = symmetrize_matrix(q_cycles)
+        float_cycles_by_sat = float_ambiguities_cycles(float_sol, wavelengths, offsets)
 
         case invert_matrix(q_cycles) do
           {:ok, q_inv} ->
+            q_inv = symmetrize_matrix(q_inv)
+
             case lambda_decorrelate(q_cycles) do
               {:ok, q_decorrelated, z_transform} ->
                 with {:ok, candidates, evaluated} <-
                        lambda_sphere_search(
-                         float_ambiguities_cycles(float_sol, wavelengths, offsets),
-                         symmetrize_matrix(q_inv),
+                         float_cycles_by_sat,
+                         q_inv,
                          q_decorrelated,
                          z_transform,
                          opts
-                       ) do
-                  lambda_search_result(candidates, evaluated, opts)
+                       ),
+                     {:ok, fixed_cycles, fixed_meta} <-
+                       lambda_search_result(candidates, evaluated, opts) do
+                  {:ok, fixed_cycles,
+                   Map.put(fixed_meta, :ambiguity_search, %{
+                     order: sat_ids,
+                     float_cycles: float_cycles_by_sat,
+                     covariance_cycles: q_cycles,
+                     covariance_inverse_cycles: q_inv
+                   })}
                 end
 
               {:error, _} = err ->

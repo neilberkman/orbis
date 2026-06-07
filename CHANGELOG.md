@@ -8,6 +8,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `Orbis.GNSS.PrecisePositioning.solve_fixed_epochs/3` now reports
+  `metadata.ambiguity_search` diagnostics (satellite order, float ambiguities,
+  ambiguity covariance, and inverse covariance in cycles) so callers can audit
+  the LAMBDA integer decision against the same lattice metric.
 - `Orbis.GNSS.PrecisePositioning.solve_widelane_fixed_epochs/3` now supports
   `on_cycle_slip: :split_arc`, which resets a satellite's carrier ambiguity at
   detected cycle slips and keeps any post-slip fragments long enough for

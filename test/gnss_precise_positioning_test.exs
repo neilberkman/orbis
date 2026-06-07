@@ -317,6 +317,53 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
       end
     end
 
+    test "exports ambiguity covariance for independent ILS scoring", ctx do
+      assert {:ok, %FixedSolution{} = sol} =
+               PrecisePositioning.solve_fixed_epochs(ctx.sp3, ctx.fixed_epoch_observations,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 ambiguity_wavelength_m: @l1_wavelength_m
+               )
+
+      search = sol.metadata.ambiguity_search
+      assert search.order == sol.used_sats
+      assert Map.keys(search.float_cycles) |> Enum.sort() == search.order
+      assert square_matrix?(search.covariance_cycles, length(search.order))
+      assert square_matrix?(search.covariance_inverse_cycles, length(search.order))
+
+      [{best_score, best_cycles}, {second_score, _second_cycles} | _] =
+        brute_force_ils(search, 1)
+
+      assert best_cycles == sol.fixed_ambiguities_cycles
+      assert best_score == sol.metadata.integer_best_score
+      assert second_score == sol.metadata.integer_second_best_score
+    end
+
+    test "independent ILS gate catches non-rounding low-ratio candidates", ctx do
+      [sat_a, sat_b | _] = ctx.multi_sats |> Enum.map(&elem(&1, 0)) |> Enum.sort()
+
+      biased =
+        bias_fixed_epoch_phases(ctx.fixed_epoch_observations, %{
+          sat_a => 0.47,
+          sat_b => -0.47
+        })
+
+      assert {:ok, %FixedSolution{} = sol} =
+               PrecisePositioning.solve_fixed_epochs(ctx.sp3, biased,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 ambiguity_wavelength_m: @l1_wavelength_m
+               )
+
+      search = sol.metadata.ambiguity_search
+      rounded = coordinate_rounded_cycles(search)
+      [{best_score, best_cycles}, {second_score, _second_cycles} | _] = brute_force_ils(search, 1)
+
+      assert sol.metadata.integer_status == :not_fixed
+      assert best_cycles == sol.fixed_ambiguities_cycles
+      assert best_cycles != rounded
+      assert best_score == sol.metadata.integer_best_score
+      assert second_score == sol.metadata.integer_second_best_score
+    end
+
     test "fixed-ambiguity arcs apply a-priori troposphere consistently", ctx do
       fixed_tropo = synth_fixed_epoch_observations(ctx.multi_sats, troposphere: true)
 
@@ -785,6 +832,73 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
     sats
     |> Enum.with_index()
     |> Map.new(fn {{sat, _obs}, idx} -> {sat, wide_lane_cycles(idx)} end)
+  end
+
+  defp bias_fixed_epoch_phases(epoch_observations, biases_cycles_by_sat) do
+    Enum.map(epoch_observations, fn epoch_row ->
+      observations =
+        Enum.map(epoch_row.observations, fn obs ->
+          case Map.fetch(biases_cycles_by_sat, obs.satellite_id) do
+            {:ok, bias_cycles} ->
+              %{obs | phase_m: obs.phase_m + bias_cycles * @l1_wavelength_m}
+
+            :error ->
+              obs
+          end
+        end)
+
+      %{epoch_row | observations: observations}
+    end)
+  end
+
+  defp square_matrix?(matrix, n) do
+    length(matrix) == n and Enum.all?(matrix, &(length(&1) == n))
+  end
+
+  defp brute_force_ils(search, radius) do
+    floats = Enum.map(search.order, &Map.fetch!(search.float_cycles, &1))
+
+    floats
+    |> Enum.map(&round/1)
+    |> integer_box(radius)
+    |> Enum.map(fn cycles ->
+      {quadratic_integer_score(floats, cycles, search.covariance_inverse_cycles),
+       Map.new(Enum.zip(search.order, cycles))}
+    end)
+    |> Enum.sort_by(fn {score, fixed_cycles} ->
+      {score, Enum.map(search.order, &Map.fetch!(fixed_cycles, &1))}
+    end)
+  end
+
+  defp coordinate_rounded_cycles(search) do
+    coordinate_rounded_cycles(search.order, search.float_cycles)
+  end
+
+  defp coordinate_rounded_cycles(order, float_cycles) do
+    Map.new(order, fn sat -> {sat, Map.fetch!(float_cycles, sat) |> round()} end)
+  end
+
+  defp integer_box(rounded_cycles, radius) do
+    rounded_cycles
+    |> Enum.reduce([[]], fn center, acc ->
+      for prefix <- acc, value <- (center - radius)..(center + radius), do: [value | prefix]
+    end)
+    |> Enum.map(&Enum.reverse/1)
+  end
+
+  defp quadratic_integer_score(float_cycles, fixed_cycles, q_inv) do
+    deltas =
+      fixed_cycles
+      |> Enum.zip(float_cycles)
+      |> Enum.map(fn {z, a} -> a - z end)
+
+    n = length(deltas)
+
+    Enum.reduce(0..(n - 1), 0.0, fn i, acc ->
+      Enum.reduce(0..(n - 1), acc, fn j, inner ->
+        inner + Enum.at(deltas, i) * (q_inv |> Enum.at(i) |> Enum.at(j)) * Enum.at(deltas, j)
+      end)
+    end)
   end
 
   defp slip_dual_frequency_after(epoch_observations, sat, slip_epoch, cycles) do
