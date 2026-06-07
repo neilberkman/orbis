@@ -1198,10 +1198,10 @@ defmodule Orbis.GNSS.PrecisePositioning do
         {:error, _} = err ->
           err
 
-        {:ok, [], evaluated} ->
+        {:ok, [], evaluated, _bound} ->
           {:error, {:too_many_integer_candidates, evaluated, opts.candidate_limit}}
 
-        {:ok, candidates, evaluated} ->
+        {:ok, candidates, evaluated, _bound} ->
           sorted =
             candidates
             |> Enum.map(fn {_score, decorrelated_cycles} ->
@@ -1353,7 +1353,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
          k,
          z,
          dist,
-         _bound,
+         bound,
          candidates,
          evaluated,
          limit
@@ -1364,7 +1364,9 @@ defmodule Orbis.GNSS.PrecisePositioning do
     if evaluated > limit do
       {:error, {:too_many_integer_candidates, evaluated, limit}}
     else
-      {:ok, [{dist, z} | candidates], evaluated}
+      candidates = lambda_top_two([{dist, z} | candidates])
+      bound = lambda_live_bound(candidates, bound)
+      {:ok, candidates, evaluated, bound}
     end
   end
 
@@ -1385,20 +1387,21 @@ defmodule Orbis.GNSS.PrecisePositioning do
     remaining = bound - dist
 
     if remaining < 0.0 do
-      {:ok, candidates, evaluated}
+      {:ok, candidates, evaluated, bound}
     else
       span = :math.sqrt(remaining * dk)
       low = Float.floor(center - span) |> trunc()
       high = Float.ceil(center + span) |> trunc()
 
       integers_near(center, low, high)
-      |> Enum.reduce_while({:ok, candidates, evaluated}, fn value,
-                                                            {:ok, acc_candidates, acc_evaluated} ->
+      |> Enum.reduce_while({:ok, candidates, evaluated, bound}, fn value,
+                                                                   {:ok, acc_candidates,
+                                                                    acc_evaluated, acc_bound} ->
         term = center - value
         next_dist = dist + term * term / dk
 
-        if next_dist > bound do
-          {:cont, {:ok, acc_candidates, acc_evaluated}}
+        if next_dist > acc_bound do
+          {:cont, {:ok, acc_candidates, acc_evaluated, acc_bound}}
         else
           next_z = List.replace_at(z, k, value)
 
@@ -1409,13 +1412,13 @@ defmodule Orbis.GNSS.PrecisePositioning do
                  k - 1,
                  next_z,
                  next_dist,
-                 bound,
+                 acc_bound,
                  acc_candidates,
                  acc_evaluated,
                  limit
                ) do
-            {:ok, next_candidates, next_evaluated} ->
-              {:cont, {:ok, next_candidates, next_evaluated}}
+            {:ok, next_candidates, next_evaluated, next_bound} ->
+              {:cont, {:ok, next_candidates, next_evaluated, next_bound}}
 
             {:error, _} = err ->
               {:halt, err}
@@ -1424,6 +1427,17 @@ defmodule Orbis.GNSS.PrecisePositioning do
       end)
     end
   end
+
+  defp lambda_top_two(candidates) do
+    candidates
+    |> Enum.sort_by(fn {score, cycles} -> {score, cycles} end)
+    |> Enum.take(2)
+  end
+
+  defp lambda_live_bound([{_best_score, _best_cycles}, {second_score, _second_cycles}], _bound),
+    do: second_score
+
+  defp lambda_live_bound(_candidates, bound), do: bound
 
   defp lambda_conditional_offset(lower, float_cycles, z, k) do
     n = length(z)

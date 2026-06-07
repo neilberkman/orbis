@@ -31,6 +31,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   integer method, ratio-test status, weighted scores, and evaluated candidate
   count.
 
+### Changed
+
+- The LAMBDA integer search now shrinks its live search bound to the current
+  second-best candidate, so `solve_fixed_epochs/3` keeps the same integer
+  decision and ratio-test semantics while visiting far fewer complete
+  candidates.
+
 ## [0.9.2] - 2026-06-06
 
 ### Added

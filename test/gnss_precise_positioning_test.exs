@@ -210,7 +210,7 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
       assert sol.metadata.integer_status == :fixed
       assert sol.metadata.integer_method == :lambda
       assert sol.metadata.integer_ratio > 1.0e6
-      assert sol.metadata.integer_candidates == 5_055
+      assert sol.metadata.integer_candidates == 2
 
       for {clock, expected} <- Enum.zip(sol.epoch_clocks, @epoch_clocks_m) do
         assert abs(clock.rx_clock_m - expected) < 1.0e-4
@@ -240,11 +240,11 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
                  integer_search_radius_cycles: -1
                )
 
-      assert {:error, {:too_many_integer_candidates, 101, 100}} =
+      assert {:error, {:too_many_integer_candidates, 2, 1}} =
                PrecisePositioning.solve_fixed_epochs(ctx.sp3, ctx.fixed_epoch_observations,
                  initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
                  ambiguity_wavelength_m: @l1_wavelength_m,
-                 integer_candidate_limit: 100
+                 integer_candidate_limit: 1
                )
     end
   end

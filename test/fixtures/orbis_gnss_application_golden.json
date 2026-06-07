@@ -1678,7 +1678,7 @@
           "integer_ratio": "0x1.dde0725d05410p+48",
           "integer_best_score": "0x1.8b61e2d078040p-42",
           "integer_second_best_score": "0x1.710804f313db0p+7",
-          "integer_candidates": 1503
+          "integer_candidates": 2
         }
       }
     }
