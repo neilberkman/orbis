@@ -107,6 +107,7 @@ defmodule Orbis.MixProject do
           Orbis.GNSS.Velocity,
           Orbis.GNSS.QC,
           Orbis.GNSS.DGNSS,
+          Orbis.GNSS.RTK,
           Orbis.GNSS.SolutionReport,
           Orbis.GNSS.CarrierPhase,
           Orbis.GNSS.IonosphereFree,

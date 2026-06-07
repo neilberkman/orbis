@@ -63,6 +63,21 @@ defmodule Orbis.GNSS.PreciseRealArcTest do
     assert uncorrected_error_m - corrected_error_m > 18.0
     assert ztd_estimated.metadata.weighted_rms_m < corrected.metadata.weighted_rms_m
     assert ztd_estimated.metadata.phase_rms_m < corrected.metadata.phase_rms_m
+
+    assert {:ok, elevation_weighted} =
+             PrecisePositioning.solve_float_epochs(
+               sp3,
+               epoch_observations,
+               Keyword.put(opts, :elevation_weighting, true)
+             )
+
+    elevation_weighted_error_m = position_error(elevation_weighted.position, truth)
+
+    # Elevation weighting is a stochastic-model improvement, not an integer-fix
+    # breakthrough. On this no-troposphere real arc it materially improves the
+    # float position and weighted RMS by down-weighting low-elevation rows.
+    assert elevation_weighted_error_m < uncorrected_error_m / 3.0
+    assert elevation_weighted.metadata.weighted_rms_m < uncorrected.metadata.weighted_rms_m / 5.0
   end
 
   @tag timeout: 180_000
@@ -90,6 +105,45 @@ defmodule Orbis.GNSS.PreciseRealArcTest do
     assert fixed.metadata.integer_ratio < 3.0
     assert fixed.metadata.integer_candidates == 23
     assert position_error(fixed.position, {x0, y0, z0}) < 6.0
+  end
+
+  @tag timeout: 180_000
+  test "real elevation-weighted narrow-lane fixing still refuses an unsafe fix" do
+    sp3 = SP3.load!(@sp3_path)
+    obs = Observations.load!(@obs_path)
+    truth = Observations.approx_position(obs)
+    {x0, y0, z0} = truth
+
+    # Keep G21 excluded so this test measures noisy narrow-lane separability
+    # rather than cycle-slip handling.
+    epoch_observations = real_gps_iono_free_arc(obs, 120, exclude: ["G21"])
+
+    {:ok, f1} = IonosphereFree.frequency("G", :l1)
+    {:ok, f2} = IonosphereFree.frequency("G", :l2)
+
+    opts = [
+      initial_guess: {x0 + 100.0, y0 - 100.0, z0 + 100.0, 0.0},
+      max_iterations: 8,
+      ambiguity_wavelength_m: 299_792_458.0 / (f1 + f2)
+    ]
+
+    assert {:ok, unweighted} =
+             PrecisePositioning.solve_fixed_epochs(sp3, epoch_observations, opts)
+
+    assert {:ok, weighted} =
+             PrecisePositioning.solve_fixed_epochs(
+               sp3,
+               epoch_observations,
+               Keyword.put(opts, :elevation_weighting, true)
+             )
+
+    assert unweighted.metadata.integer_status == :not_fixed
+    assert weighted.metadata.integer_status == :not_fixed
+    assert weighted.metadata.integer_ratio < 3.0
+    assert weighted.metadata.integer_candidates == 16
+
+    assert position_error(weighted.position, truth) <
+             position_error(unweighted.position, truth) / 2.0
   end
 
   @tag timeout: 180_000

@@ -16,6 +16,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   float, multi-epoch, and fixed solves, scaling code and phase row sigmas by
   `1 / sin(elevation)` for a simple real-data stochastic model that down-weights
   low-elevation observations.
+- `Orbis.GNSS.RTK.double_differences/3` for deterministic base/rover
+  code-and-carrier double differences, the RTK measurement primitive that
+  cancels receiver clocks and common short-baseline satellite errors before
+  baseline estimation.
 - `Orbis.GNSS.PrecisePositioning.solve_widelane_fixed_epochs/3` now supports
   `on_cycle_slip: :split_arc`, which resets a satellite's carrier ambiguity at
   detected cycle slips and keeps any post-slip fragments long enough for
