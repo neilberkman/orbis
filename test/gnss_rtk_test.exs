@@ -150,6 +150,25 @@ defmodule Orbis.GNSS.RTKTest do
       assert sol.metadata.converged
       assert sol.metadata.n_epochs == 3
       assert sol.metadata.dropped_sats == []
+
+      assert sol.metadata.measurement_covariance == %{
+               model: :double_difference,
+               code_sigma_m: 1.0,
+               phase_sigma_m: 0.02
+             }
+
+      assert sol.metadata.ambiguity_float.order == sol.used_sats
+      assert length(sol.metadata.ambiguity_float.covariance_m) == length(sol.used_sats)
+      assert nonzero_off_diagonal?(sol.metadata.ambiguity_float.covariance_m)
+
+      assert_identity(
+        matmul(
+          sol.metadata.ambiguity_float.covariance_m,
+          sol.metadata.ambiguity_float.covariance_inverse_m
+        ),
+        1.0e-6
+      )
+
       assert position_error(sol.baseline_m, @truth_baseline) < 1.0e-5
 
       for {sat, expected} <- Map.delete(@ambiguities, "G01") do
@@ -162,7 +181,7 @@ defmodule Orbis.GNSS.RTKTest do
       end
     end
 
-    test "selects a deterministic reference and reports satellites not usable across the arc" do
+    test "selects the highest-elevation default reference and reports unusable satellites" do
       [first, second | _] = @sat_positions
 
       epoch_a =
@@ -179,8 +198,8 @@ defmodule Orbis.GNSS.RTKTest do
 
       assert {:ok, sol} = RTK.solve_float_baseline_epochs(@base, [epoch_a, epoch_b])
 
-      assert sol.reference_satellite_id == "G01"
-      assert sol.used_sats == ["G02", "G03", "G04"]
+      assert sol.reference_satellite_id == "G03"
+      assert sol.used_sats == ["G01", "G02", "G04"]
       assert sol.metadata.dropped_sats == ["G05"]
       assert position_error(sol.baseline_m, @truth_baseline) < 1.0e-4
     end
@@ -218,6 +237,47 @@ defmodule Orbis.GNSS.RTKTest do
 
   defp position_error(%{x_m: x, y_m: y, z_m: z}, {tx, ty, tz}) do
     :math.sqrt((x - tx) * (x - tx) + (y - ty) * (y - ty) + (z - tz) * (z - tz))
+  end
+
+  defp nonzero_off_diagonal?(matrix) do
+    matrix
+    |> Enum.with_index()
+    |> Enum.any?(fn {row, i} ->
+      row
+      |> Enum.with_index()
+      |> Enum.any?(fn {value, j} -> i != j and abs(value) > 1.0e-12 end)
+    end)
+  end
+
+  defp assert_identity(matrix, tol) do
+    matrix
+    |> Enum.with_index()
+    |> Enum.each(fn {row, i} ->
+      row
+      |> Enum.with_index()
+      |> Enum.each(fn {value, j} ->
+        expected = if i == j, do: 1.0, else: 0.0
+        assert abs(value - expected) < tol
+      end)
+    end)
+  end
+
+  defp matmul(a, b) do
+    b_t = transpose(b)
+
+    Enum.map(a, fn row ->
+      Enum.map(b_t, fn col ->
+        row
+        |> Enum.zip(col)
+        |> Enum.reduce(0.0, fn {x, y}, acc -> acc + x * y end)
+      end)
+    end)
+  end
+
+  defp transpose(matrix) do
+    matrix
+    |> Enum.zip()
+    |> Enum.map(&Tuple.to_list/1)
   end
 
   defp synthetic_baseline_epoch(base, baseline, satellite_positions_m, opts \\ []) do

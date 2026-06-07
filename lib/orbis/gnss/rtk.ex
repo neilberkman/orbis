@@ -35,6 +35,18 @@ defmodule Orbis.GNSS.RTK do
       [%{satellite_id: "G02", reference_satellite_id: "G01", code_m: 15.0, phase_m: 17.0}]
   """
 
+  import Orbis.GNSS.Core.LinearAlgebra,
+    only: [
+      correlated_normal_equations: 2,
+      invert_matrix: 1,
+      matmul: 2,
+      matrix_sub: 2,
+      solve_linear: 2,
+      solve_matrix: 2,
+      submatrix: 5,
+      transpose: 1
+    ]
+
   alias Orbis.GNSS.Core.Types
 
   @default_max_iterations 8
@@ -42,7 +54,6 @@ defmodule Orbis.GNSS.RTK do
   @default_ambiguity_tolerance_m 1.0e-4
   @default_code_sigma_m 1.0
   @default_phase_sigma_m 0.02
-  @pivot_epsilon 1.0e-12
 
   defmodule FloatBaselineSolution do
     @moduledoc """
@@ -89,6 +100,16 @@ defmodule Orbis.GNSS.RTK do
               iterations: pos_integer(),
               converged: boolean(),
               status: :state_tolerance | :max_iterations,
+              ambiguity_float: %{
+                order: [String.t()],
+                covariance_m: [[float()]],
+                covariance_inverse_m: [[float()]]
+              },
+              measurement_covariance: %{
+                model: :double_difference,
+                code_sigma_m: float(),
+                phase_sigma_m: float()
+              },
               code_rms_m: float(),
               phase_rms_m: float(),
               weighted_rms_m: float(),
@@ -163,14 +184,24 @@ defmodule Orbis.GNSS.RTK do
   non-reference satellite for phase. Receiver clocks and any satellite-common
   short-baseline errors cancel before the solve.
 
+  The normal equations use the full double-difference covariance block for each
+  epoch and measurement kind. Double-difference rows sharing the reference
+  satellite are therefore correlated, and the returned
+  `metadata.ambiguity_float` contains the resulting float ambiguity covariance
+  and inverse covariance in metres.
+
   Options:
 
     * `:reference_satellite_id` - fixed reference satellite. When omitted, the
-      lexicographically first satellite common to every epoch is used.
+      highest-average-elevation satellite common to every epoch is used, with a
+      lexicographic tie-break.
     * `:initial_baseline_m` - initial base-to-rover ECEF vector, default
       `{0.0, 0.0, 0.0}`.
-    * `:code_sigma_m` / `:phase_sigma_m` - row sigmas in metres, defaults
-      `#{@default_code_sigma_m}` and `#{@default_phase_sigma_m}`.
+    * `:code_sigma_m` / `:phase_sigma_m` - undifferenced receiver measurement
+      sigmas in metres. The solver propagates them into the non-diagonal
+      double-difference covariance where rows sharing the reference satellite
+      are correlated. Defaults are `#{@default_code_sigma_m}` and
+      `#{@default_phase_sigma_m}`.
     * `:max_iterations`, `:position_tolerance_m`,
       `:ambiguity_tolerance_m`.
 
@@ -187,7 +218,8 @@ defmodule Orbis.GNSS.RTK do
          {:ok, normalized_epochs} <- normalize_epochs(epochs),
          {:ok, common_sats, dropped_sats} <- common_epoch_sats(normalized_epochs),
          :ok <- ensure_baseline_satellites(common_sats),
-         {:ok, reference_sat} <- reference_satellite(common_sats, opts),
+         {:ok, reference_sat} <-
+           baseline_reference_satellite(common_sats, opts, base, normalized_epochs),
          {:ok, solve_opts} <- baseline_solve_options(opts),
          {:ok, weights} <- baseline_weights(opts),
          {:ok, initial_baseline} <- initial_baseline(opts) do
@@ -407,17 +439,23 @@ defmodule Orbis.GNSS.RTK do
   end
 
   defp baseline_weights(opts) do
-    with {:ok, code} <- sigma_weight(opts, :code_sigma_m, @default_code_sigma_m),
-         {:ok, phase} <- sigma_weight(opts, :phase_sigma_m, @default_phase_sigma_m) do
-      {:ok, %{code: code, phase: phase}}
+    with {:ok, code_sigma_m} <- measurement_sigma(opts, :code_sigma_m, @default_code_sigma_m),
+         {:ok, phase_sigma_m} <- measurement_sigma(opts, :phase_sigma_m, @default_phase_sigma_m) do
+      {:ok,
+       %{
+         code_sigma_m: code_sigma_m,
+         phase_sigma_m: phase_sigma_m,
+         code_dd_weight: 1.0 / (2.0 * code_sigma_m),
+         phase_dd_weight: 1.0 / (2.0 * phase_sigma_m)
+       }}
     end
   end
 
-  defp sigma_weight(opts, key, default) do
+  defp measurement_sigma(opts, key, default) do
     sigma = Keyword.get(opts, key, default)
 
     if is_number(sigma) and sigma > 0.0,
-      do: {:ok, 1.0 / sigma},
+      do: {:ok, sigma / 1.0},
       else: {:error, {:invalid_sigma, key}}
   end
 
@@ -444,7 +482,8 @@ defmodule Orbis.GNSS.RTK do
        ) do
     with {:ok, rows} <-
            build_baseline_rows(base, epochs, reference_sat, ambiguity_sats, state, weights),
-         {:ok, dx} <- solve_normal_equations(rows, baseline_unknown_count(ambiguity_sats)) do
+         {:ok, dx} <-
+           solve_baseline_normal_equations(rows, baseline_unknown_count(ambiguity_sats)) do
       next = apply_baseline_delta(state, ambiguity_sats, dx)
       {baseline_step, ambiguity_step} = baseline_step_norms(dx)
 
@@ -523,20 +562,24 @@ defmodule Orbis.GNSS.RTK do
 
       code_row = %{
         kind: :code,
+        epoch_idx: epoch.idx,
         epoch: epoch.epoch,
         sat: sat,
         h: h_base,
         y: obs_dd.code_m - geom_dd,
-        weight: weights.code
+        sigma_m: weights.code_sigma_m,
+        weight: weights.code_dd_weight
       }
 
       phase_row = %{
         kind: :phase,
+        epoch_idx: epoch.idx,
         epoch: epoch.epoch,
         sat: sat,
         h: h_phase,
         y: obs_dd.phase_m - (geom_dd + ambiguity),
-        weight: weights.phase
+        sigma_m: weights.phase_sigma_m,
+        weight: weights.phase_dd_weight
       }
 
       {:ok, [phase_row, code_row | acc]}
@@ -620,7 +663,15 @@ defmodule Orbis.GNSS.RTK do
          status
        ) do
     with {:ok, rows} <-
-           build_baseline_rows(base, epochs, reference_sat, ambiguity_sats, state, weights) do
+           build_baseline_rows(base, epochs, reference_sat, ambiguity_sats, state, weights),
+         {:ok, covariance_m} <-
+           baseline_ambiguity_covariance(
+             rows,
+             baseline_unknown_count(ambiguity_sats),
+             3,
+             length(ambiguity_sats)
+           ),
+         {:ok, covariance_inverse_m} <- invert_matrix(covariance_m) do
       residuals = baseline_residuals(rows, reference_sat)
       code_residuals = Enum.map(residuals, & &1.code_m)
       phase_residuals = Enum.map(residuals, & &1.phase_m)
@@ -638,6 +689,16 @@ defmodule Orbis.GNSS.RTK do
            iterations: iterations,
            converged: converged?,
            status: status,
+           ambiguity_float: %{
+             order: ambiguity_sats,
+             covariance_m: covariance_m,
+             covariance_inverse_m: covariance_inverse_m
+           },
+           measurement_covariance: %{
+             model: :double_difference,
+             code_sigma_m: weights.code_sigma_m,
+             phase_sigma_m: weights.phase_sigma_m
+           },
            code_rms_m: rms(code_residuals),
            phase_rms_m: rms(phase_residuals),
            weighted_rms_m: weighted_rms(rows),
@@ -667,117 +728,66 @@ defmodule Orbis.GNSS.RTK do
     |> Enum.sort_by(&{inspect(&1.epoch), &1.satellite_id})
   end
 
-  defp solve_normal_equations(rows, n) do
-    {ata, aty} = normal_equations(rows, n)
+  defp solve_baseline_normal_equations(rows, n) do
+    {ata, aty} = baseline_normal_equations(rows, n)
     solve_linear(ata, aty)
   end
 
-  defp normal_equations(rows, n) do
-    Enum.reduce(rows, {zero_matrix(n), zero_vector(n)}, fn row, {ata, aty} ->
-      h = Enum.map(row.h, &(&1 * row.weight))
-      y = row.y * row.weight
-      {accumulate_ata(ata, h), accumulate_aty(aty, h, y)}
-    end)
-  end
-
-  defp zero_matrix(n), do: for(_ <- 1..n, do: zero_vector(n))
-  defp zero_vector(n), do: for(_ <- 1..n, do: 0.0)
-
-  defp accumulate_ata(ata, h) do
-    Enum.with_index(ata)
-    |> Enum.map(fn {row, i} ->
-      hi = Enum.at(h, i)
-
-      row
-      |> Enum.with_index()
-      |> Enum.map(fn {aij, j} -> aij + hi * Enum.at(h, j) end)
-    end)
-  end
-
-  defp accumulate_aty(aty, h, y) do
-    aty
-    |> Enum.zip(h)
-    |> Enum.map(fn {acc, hi} -> acc + hi * y end)
-  end
-
-  defp solve_linear(a, b) do
-    augmented = Enum.zip_with(a, b, fn row, bi -> row ++ [bi] end)
-
-    case eliminate(augmented, 0, length(b)) do
-      :singular -> {:error, :singular_geometry}
-      upper -> {:ok, back_substitute(upper)}
-    end
-  end
-
-  defp eliminate(rows, col, n) when col >= n, do: rows
-
-  defp eliminate(rows, col, n) do
-    {pivot_row, pivot_abs} =
-      rows
-      |> Enum.with_index()
-      |> Enum.drop(col)
-      |> Enum.map(fn {row, idx} -> {idx, abs(Enum.at(row, col))} end)
-      |> Enum.max_by(fn {_idx, value} -> value end)
-
-    if pivot_abs <= @pivot_epsilon do
-      :singular
-    else
-      rows = swap_rows(rows, col, pivot_row)
-      pivot = Enum.at(rows, col)
-      pivot_value = Enum.at(pivot, col)
-
-      rows =
-        rows
-        |> Enum.with_index()
-        |> Enum.map(fn {row, idx} ->
-          if idx <= col do
-            row
-          else
-            factor = Enum.at(row, col) / pivot_value
-
-            row
-            |> Enum.zip(pivot)
-            |> Enum.map(fn {rij, pij} -> rij - factor * pij end)
-          end
-        end)
-
-      eliminate(rows, col + 1, n)
-    end
-  end
-
-  defp swap_rows(rows, i, i), do: rows
-
-  defp swap_rows(rows, i, j) do
-    ri = Enum.at(rows, i)
-    rj = Enum.at(rows, j)
-
+  defp baseline_normal_equations(rows, n) do
     rows
-    |> List.replace_at(i, rj)
-    |> List.replace_at(j, ri)
+    |> baseline_covariance_blocks()
+    |> correlated_normal_equations(n)
   end
 
-  defp back_substitute(rows) do
-    n = length(rows)
+  defp baseline_covariance_blocks(rows) do
+    rows
+    |> Enum.group_by(&{&1.epoch_idx, &1.kind})
+    |> Enum.sort_by(fn {{epoch_idx, kind}, _rows} -> {epoch_idx, kind} end)
+    |> Enum.map(fn {_key, block_rows} ->
+      rows = Enum.sort_by(block_rows, & &1.sat)
+      sigma_m = rows |> hd() |> Map.fetch!(:sigma_m)
 
-    solved =
-      (n - 1)..0//-1
-      |> Enum.reduce(%{}, fn i, solved ->
-        row = Enum.at(rows, i)
+      %{
+        rows: rows,
+        inverse_covariance: double_difference_inverse_covariance(length(rows), sigma_m)
+      }
+    end)
+  end
 
-        known =
-          if i == n - 1 do
-            0.0
-          else
-            Enum.reduce((i + 1)..(n - 1), 0.0, fn j, acc ->
-              acc + Enum.at(row, j) * Map.fetch!(solved, j)
-            end)
-          end
+  # For one epoch and one measurement kind, DD_i = SD_i - SD_ref. With
+  # independent receiver observations of sigma^2 at each station, each single
+  # difference has variance 2*sigma^2. Therefore the double-difference
+  # covariance is v*(I + J), where v = 2*sigma^2: diagonal 4*sigma^2 and
+  # off-diagonal 2*sigma^2 because every DD shares the same reference SD.
+  defp double_difference_inverse_covariance(m, sigma_m) do
+    sd_variance = 2.0 * sigma_m * sigma_m
+    diagonal_scale = 1.0 / sd_variance * (1.0 - 1.0 / (m + 1.0))
+    off_diagonal = -1.0 / (sd_variance * (m + 1.0))
 
-        xi = (Enum.at(row, n) - known) / Enum.at(row, i)
-        Map.put(solved, i, xi)
-      end)
+    for i <- 0..(m - 1) do
+      for j <- 0..(m - 1), do: if(i == j, do: diagonal_scale, else: off_diagonal)
+    end
+  end
 
-    Enum.map(0..(n - 1), &Map.fetch!(solved, &1))
+  defp baseline_ambiguity_covariance(rows, n, start, n_ambiguities) do
+    {normal, _rhs} = baseline_normal_equations(rows, n)
+    ambiguity_covariance_from_normal(normal, start, n_ambiguities)
+  end
+
+  defp ambiguity_covariance_from_normal(normal, start, n_ambiguities) do
+    a = submatrix(normal, 0, start, 0, start)
+    b = submatrix(normal, 0, start, start, n_ambiguities)
+    c = submatrix(normal, start, n_ambiguities, start, n_ambiguities)
+
+    with {:ok, a_inv_b} <- solve_matrix(a, b) do
+      bt_a_inv_b = matmul(transpose(b), a_inv_b)
+      schur = matrix_sub(c, bt_a_inv_b)
+
+      case invert_matrix(schur) do
+        {:ok, covariance} -> {:ok, covariance}
+        {:error, :singular_geometry} = err -> err
+      end
+    end
   end
 
   defp weighted_rms(rows) do
@@ -873,4 +883,61 @@ defmodule Orbis.GNSS.RTK do
         {:error, {:invalid_option, :reference_satellite_id}}
     end
   end
+
+  defp baseline_reference_satellite(common, opts, base, epochs) do
+    case Keyword.get(opts, :reference_satellite_id) do
+      nil ->
+        {:ok, highest_elevation_reference(common, base, epochs)}
+
+      sat when is_binary(sat) ->
+        if sat in common do
+          {:ok, sat}
+        else
+          {:error, {:reference_satellite_missing, sat}}
+        end
+
+      _other ->
+        {:error, {:invalid_option, :reference_satellite_id}}
+    end
+  end
+
+  defp highest_elevation_reference(common, base, epochs) do
+    common
+    |> Enum.map(fn sat -> {sat, average_elevation_score(base, epochs, sat)} end)
+    |> Enum.sort_by(fn {sat, score} -> {-score, sat} end)
+    |> hd()
+    |> elem(0)
+  end
+
+  defp average_elevation_score(base, epochs, sat) do
+    {:ok, up} = local_up(base)
+
+    scores =
+      Enum.map(epochs, fn epoch ->
+        sat_pos = Map.fetch!(epoch.positions, sat)
+
+        case unit3(sub3(sat_pos, base)) do
+          {:ok, los} -> dot3(los, up)
+          :zero -> -1.0
+        end
+      end)
+
+    Enum.sum(scores) / length(scores)
+  end
+
+  defp local_up(base) do
+    case norm(base) do
+      n when n > 0.0 -> {:ok, scale3(base, 1.0 / n)}
+      _zero -> {:ok, {0.0, 0.0, 1.0}}
+    end
+  end
+
+  defp unit3(v) do
+    case norm(v) do
+      n when n > 0.0 -> {:ok, scale3(v, 1.0 / n)}
+      _zero -> :zero
+    end
+  end
+
+  defp dot3({ax, ay, az}, {bx, by, bz}), do: ax * bx + ay * by + az * bz
 end

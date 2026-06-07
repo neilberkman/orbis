@@ -23,7 +23,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `Orbis.GNSS.RTK.solve_float_baseline_epochs/3` for static float RTK baseline
   estimation from supplied satellite ECEF positions and multi-epoch
   code/carrier double differences, holding one float ambiguity per
-  non-reference satellite across the arc.
+  non-reference satellite across the arc. The float solution now exposes the
+  double-difference ambiguity covariance and inverse covariance in metres.
 - `Orbis.GNSS.PrecisePositioning.solve_widelane_fixed_epochs/3` now supports
   `on_cycle_slip: :split_arc`, which resets a satellite's carrier ambiguity at
   detected cycle slips and keeps any post-slip fragments long enough for
@@ -39,6 +40,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   original-space fallback: those arcs now return a `FixedSolution` with
   `metadata.integer_status == :not_fixed` when candidates exist but fail the
   ratio test.
+- `Orbis.GNSS.RTK.solve_float_baseline_epochs/3` now propagates the
+  non-diagonal double-difference measurement covariance into the normal
+  equations and ambiguity covariance instead of treating DD rows that share a
+  reference satellite as independent.
+- `Orbis.GNSS.RTK.solve_float_baseline_epochs/3` now chooses the
+  highest-average-elevation common satellite as the default reference, with a
+  deterministic satellite-id tie-break. `double_differences/3` still defaults to
+  the lexicographically first common satellite because it has no geometry.
 
 ## [0.10.0] - 2026-06-07
 

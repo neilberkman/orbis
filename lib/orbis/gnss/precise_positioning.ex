@@ -45,6 +45,21 @@ defmodule Orbis.GNSS.PrecisePositioning do
   dual-frequency RINEX observations.
   """
 
+  import Orbis.GNSS.Core.LinearAlgebra,
+    only: [
+      identity_matrix: 1,
+      invert_matrix: 1,
+      matmul: 2,
+      matrix_sub: 2,
+      matvec_transpose: 2,
+      normal_equations: 2,
+      solve_linear: 2,
+      solve_matrix: 2,
+      solve_normal_equations: 2,
+      submatrix: 5,
+      transpose: 1
+    ]
+
   alias Orbis.Coordinates
   alias Orbis.GNSS.CarrierPhase
   alias Orbis.GNSS.Core.Constants
@@ -68,7 +83,6 @@ defmodule Orbis.GNSS.PrecisePositioning do
   @default_integer_candidate_limit 50_000
   @default_cycle_slip_policy :error
   @min_elevation_weight_scale 1.0e-3
-  @pivot_epsilon 1.0e-12
 
   defmodule Solution do
     @moduledoc """
@@ -2425,170 +2439,6 @@ defmodule Orbis.GNSS.PrecisePositioning do
   defp integer_ratio_pass?(:infinity, _threshold), do: true
   defp integer_ratio_pass?(ratio, threshold), do: ratio >= threshold
 
-  # --- dynamic least squares ----------------------------------------------
-
-  defp solve_normal_equations(rows, n) do
-    {ata, aty} = normal_equations(rows, n)
-    solve_linear(ata, aty)
-  end
-
-  defp normal_equations(rows, n) do
-    {ata, aty} =
-      Enum.reduce(rows, {zero_matrix(n), zero_vector(n)}, fn row, {ata, aty} ->
-        h = Enum.map(row.h, &(&1 * row.weight))
-        y = row.y * row.weight
-        {accumulate_ata(ata, h), accumulate_aty(aty, h, y)}
-      end)
-
-    {ata, aty}
-  end
-
-  defp zero_matrix(n), do: for(_ <- 1..n, do: zero_vector(n))
-  defp zero_vector(n), do: for(_ <- 1..n, do: 0.0)
-
-  defp accumulate_ata(ata, h) do
-    Enum.with_index(ata)
-    |> Enum.map(fn {row, i} ->
-      hi = Enum.at(h, i)
-
-      row
-      |> Enum.with_index()
-      |> Enum.map(fn {aij, j} -> aij + hi * Enum.at(h, j) end)
-    end)
-  end
-
-  defp accumulate_aty(aty, h, y) do
-    aty
-    |> Enum.zip(h)
-    |> Enum.map(fn {acc, hi} -> acc + hi * y end)
-  end
-
-  # Gaussian elimination with partial pivoting, returning :singular for
-  # rank-deficient normal equations.
-  defp solve_linear(a, b) do
-    augmented = Enum.zip_with(a, b, fn row, bi -> row ++ [bi] end)
-
-    case eliminate(augmented, 0, length(b)) do
-      :singular -> {:error, :singular_geometry}
-      upper -> {:ok, back_substitute(upper)}
-    end
-  end
-
-  defp eliminate(rows, col, n) when col >= n, do: rows
-
-  defp eliminate(rows, col, n) do
-    {pivot_row, pivot_abs} =
-      rows
-      |> Enum.with_index()
-      |> Enum.drop(col)
-      |> Enum.map(fn {row, idx} -> {idx, abs(Enum.at(row, col))} end)
-      |> Enum.max_by(fn {_idx, value} -> value end)
-
-    if pivot_abs <= @pivot_epsilon do
-      :singular
-    else
-      rows = swap_rows(rows, col, pivot_row)
-      pivot = Enum.at(rows, col)
-      pivot_value = Enum.at(pivot, col)
-
-      rows =
-        rows
-        |> Enum.with_index()
-        |> Enum.map(fn {row, idx} ->
-          if idx <= col do
-            row
-          else
-            factor = Enum.at(row, col) / pivot_value
-
-            row
-            |> Enum.zip(pivot)
-            |> Enum.map(fn {rij, pij} -> rij - factor * pij end)
-          end
-        end)
-
-      eliminate(rows, col + 1, n)
-    end
-  end
-
-  defp swap_rows(rows, i, i), do: rows
-
-  defp swap_rows(rows, i, j) do
-    ri = Enum.at(rows, i)
-    rj = Enum.at(rows, j)
-
-    rows
-    |> List.replace_at(i, rj)
-    |> List.replace_at(j, ri)
-  end
-
-  defp back_substitute(rows) do
-    n = length(rows)
-
-    solved =
-      (n - 1)..0//-1
-      |> Enum.reduce(%{}, fn i, solved ->
-        row = Enum.at(rows, i)
-
-        known =
-          if i == n - 1 do
-            0.0
-          else
-            Enum.reduce((i + 1)..(n - 1), 0.0, fn j, acc ->
-              acc + Enum.at(row, j) * Map.fetch!(solved, j)
-            end)
-          end
-
-        xi = (Enum.at(row, n) - known) / Enum.at(row, i)
-        Map.put(solved, i, xi)
-      end)
-
-    Enum.map(0..(n - 1), &Map.fetch!(solved, &1))
-  end
-
-  defp invert_matrix(a) do
-    n = length(a)
-
-    0..(n - 1)
-    |> Enum.reduce_while({:ok, []}, fn col, {:ok, columns} ->
-      case solve_linear(a, unit_vector(n, col)) do
-        {:ok, solution} -> {:cont, {:ok, [solution | columns]}}
-        {:error, _} = err -> {:halt, err}
-      end
-    end)
-    |> case do
-      {:ok, columns} -> {:ok, columns |> Enum.reverse() |> transpose()}
-      {:error, _} = err -> err
-    end
-  end
-
-  defp solve_matrix(a, b) do
-    columns = transpose(b)
-
-    columns
-    |> Enum.reduce_while({:ok, []}, fn col, {:ok, acc} ->
-      case solve_linear(a, col) do
-        {:ok, solution} -> {:cont, {:ok, [solution | acc]}}
-        {:error, _} = err -> {:halt, err}
-      end
-    end)
-    |> case do
-      {:ok, solved_columns} -> {:ok, solved_columns |> Enum.reverse() |> transpose()}
-      {:error, _} = err -> err
-    end
-  end
-
-  defp submatrix(matrix, row_start, row_count, col_start, col_count) do
-    matrix
-    |> Enum.slice(row_start, row_count)
-    |> Enum.map(&Enum.slice(&1, col_start, col_count))
-  end
-
-  defp identity_matrix(n) do
-    for i <- 0..(n - 1) do
-      for j <- 0..(n - 1), do: if(i == j, do: 1.0, else: 0.0)
-    end
-  end
-
   defp swap_columns(matrix, i, j) do
     Enum.map(matrix, fn row ->
       vi = Enum.at(row, i)
@@ -2598,48 +2448,6 @@ defmodule Orbis.GNSS.PrecisePositioning do
       |> List.replace_at(i, vj)
       |> List.replace_at(j, vi)
     end)
-  end
-
-  defp matvec_transpose(matrix, vector) do
-    matrix
-    |> transpose()
-    |> Enum.map(fn row ->
-      row
-      |> Enum.zip(vector)
-      |> Enum.reduce(0.0, fn {a, b}, acc -> acc + a * b end)
-    end)
-  end
-
-  defp matmul(a, b) do
-    b_t = transpose(b)
-
-    Enum.map(a, fn row ->
-      Enum.map(b_t, fn col ->
-        row
-        |> Enum.zip(col)
-        |> Enum.reduce(0.0, fn {x, y}, acc -> acc + x * y end)
-      end)
-    end)
-  end
-
-  defp matrix_sub(a, b) do
-    a
-    |> Enum.zip(b)
-    |> Enum.map(fn {row_a, row_b} ->
-      row_a
-      |> Enum.zip(row_b)
-      |> Enum.map(fn {x, y} -> x - y end)
-    end)
-  end
-
-  defp unit_vector(n, col) do
-    for idx <- 0..(n - 1), do: if(idx == col, do: 1.0, else: 0.0)
-  end
-
-  defp transpose(matrix) do
-    matrix
-    |> Enum.zip()
-    |> Enum.map(&Tuple.to_list/1)
   end
 
   defp ldl_decompose(a) do
