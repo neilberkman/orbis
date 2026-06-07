@@ -66,6 +66,46 @@ the network by default.
     `8ed476c011802032040beaf7a3fb774f06bb180a93f856eb7ae2396366496c45`
 - **Header APPROX POSITION XYZ (ECEF m):** `3582105.2910  532589.7313  5232754.8054`.
 
+## WTZR00DEU / WTZZ00DEU 2020 DOY177 120-epoch RTK pair
+
+- **Stations / day:** WTZR00DEU and WTZZ00DEU (Wettzell, Germany), 2020
+  day-of-year 177 (2020-06-25), 30 s sampling, MIXED observation.
+- **Purpose:** real short-baseline RTK regression. The stations are co-located
+  at Wettzell with a 1.6 m surveyed marker baseline, so receiver/satellite clock
+  terms and short-baseline atmosphere should cancel in double differences. The
+  fixture exercises GPS L1 C/A code + L1 carrier phase, cycle-slip splitting,
+  elevation-weighted correlated DD covariance, and the LAMBDA refusal path on
+  noisy real data.
+- **Upstream source:** daily gzip-compressed CRINEX products staged locally from
+  public BKG/EPN data products:
+  - `WTZR00DEU_R_20201770000_01D_30S_MO.crx.gz`
+  - `WTZZ00DEU_R_20201770000_01D_30S_MO.crx.gz`
+- **Decode / trim:** decompressed the upstream `.crx.gz`, decoded each `.crx`
+  with `Orbis.GNSS.RINEX.Observations.decode_crinex/1`, kept the verbatim header
+  plus the first 120 epochs (00:00:00 through 00:59:30 GPST), and updated
+  `TIME OF LAST OBS` to the last retained epoch. The committed fixtures are
+  plain `.rnx`; they are not re-compressed because the RTK real-arc gate only
+  needs the RINEX observation parser.
+- **sha256:**
+  - WTZR upstream `.crx.gz`:
+    `4b89b3c69a001a5ed286d13299f09fcfb2af952cec6d9fb58cc6b972149a736c`
+  - WTZZ upstream `.crx.gz`:
+    `7bff7904f6faf1f3b03e11b2d3bc6f06e6027361a7d3a31715ee31233a1d46ea`
+  - committed WTZR 120-epoch `.rnx`:
+    `95d20f3a80c03284d06055ab67f8dbdc801057ba231df46d164c15884fa886a3`
+  - committed WTZZ 120-epoch `.rnx`:
+    `8ffeea547a2f588cdacae418610259f17af97cc18d2c1557251c48e36fcde736`
+- **Truth coordinates:** EPN ITRF2020 SSC marker coordinates at epoch
+  2020-01-01:
+  - WTZR00DEU: `4075580.3111  931854.0543  4801568.2808`
+  - WTZZ00DEU: `4075579.1913  931853.3696  4801569.1897`
+- **Marker baseline WTZR -> WTZZ (ECEF m):**
+  `-1.119800  -0.684700  +0.908900`, length `1.596517`.
+- **Antenna-height deltas:** WTZR `0.0710 m`, WTZZ `0.2840 m`, from the RINEX
+  `ANTENNA: DELTA H/E/N` header records. The real RTK gate compares the solved
+  L1 carrier/code baseline to the antenna-reference-point baseline, i.e. marker
+  coordinates plus the local-up height deltas.
+
 ## algo0010_2015001_v1_trim.crx / .rnx
 
 - **Station / day:** ALGO (Algonquin Park, Canada), 2015 day-of-year 001
