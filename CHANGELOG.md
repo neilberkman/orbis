@@ -23,12 +23,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `Orbis.GNSS.RTK.solve_float_baseline_epochs/3` for static float RTK baseline
   estimation from supplied satellite ECEF positions and multi-epoch
   code/carrier double differences, holding one float ambiguity per
-  non-reference satellite across the arc. The float solution now exposes the
+  non-reference double-difference arc. The float solution now exposes the
   double-difference ambiguity covariance and inverse covariance in metres.
 - `Orbis.GNSS.RTK.solve_fixed_baseline_epochs/3` for LAMBDA-fixed RTK baseline
   estimation. It starts from the float RTK baseline, fixes double-difference
   carrier ambiguities with the same correlated covariance used by the float
   solve, and re-solves the baseline with those integers held fixed.
+- `Orbis.GNSS.RTK.solve_float_baseline_epochs/3` and
+  `solve_fixed_baseline_epochs/3` now understand carrier-phase arc identities:
+  map observations may carry `:ambiguity_id`, and LLI loss-of-lock can be
+  handled with `on_cycle_slip: :error | :drop_satellite | :split_arc`. Split
+  arcs reset the affected double-difference ambiguity while residuals keep the
+  physical satellite id.
 - `Orbis.GNSS.PrecisePositioning.solve_widelane_fixed_epochs/3` now supports
   `on_cycle_slip: :split_arc`, which resets a satellite's carrier ambiguity at
   detected cycle slips and keeps any post-slip fragments long enough for

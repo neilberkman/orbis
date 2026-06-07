@@ -93,8 +93,32 @@ defmodule Orbis.GNSS.RTKTest do
       assert result.dropped_sats == ["G09", "G10"]
 
       assert result.double_differences == [
-               %{satellite_id: "G02", reference_satellite_id: "G01", code_m: 15.0, phase_m: 15.0}
+               %{
+                 satellite_id: "G02",
+                 reference_satellite_id: "G01",
+                 ambiguity_id: "G02",
+                 code_m: 15.0,
+                 phase_m: 15.0
+               }
              ]
+    end
+
+    test "reports double-difference ambiguity ids when carrier arcs are explicit" do
+      base = [
+        %{satellite_id: "G01", code_m: 100.0, phase_m: 101.0},
+        %{satellite_id: "G02", code_m: 210.0, phase_m: 211.0}
+      ]
+
+      rover = [
+        %{satellite_id: "G01", code_m: 105.0, phase_m: 108.0, ambiguity_id: "G01#2"},
+        %{satellite_id: "G02", code_m: 230.0, phase_m: 233.0, ambiguity_id: "G02#2"}
+      ]
+
+      assert {:ok, result} = RTK.double_differences(base, rover, reference_satellite_id: "G01")
+
+      assert [%{ambiguity_id: ambiguity_id}] = result.double_differences
+
+      assert ambiguity_id == "G02#2|ref=G01#2"
     end
 
     test "bad inputs are tagged" do
@@ -206,6 +230,99 @@ defmodule Orbis.GNSS.RTKTest do
       assert position_error(sol.baseline_m, @truth_baseline) < 1.0e-4
     end
 
+    test "defaults to an error on LLI cycle slips" do
+      [first, second | _] = @sat_positions
+
+      epoch_a =
+        synthetic_baseline_epoch(@base, @truth_baseline, first,
+          ambiguities_m: @ambiguities,
+          epoch: 0
+        )
+
+      epoch_b =
+        @base
+        |> synthetic_baseline_epoch(@truth_baseline, second,
+          ambiguities_m: @ambiguities,
+          epoch: 1
+        )
+        |> mark_rover_lli("G02", 1)
+
+      assert RTK.solve_float_baseline_epochs(@base, [epoch_a, epoch_b]) ==
+               {:error, {:cycle_slip_detected, :rover, "G02", 1, [:lli]}}
+    end
+
+    test "can drop satellites with LLI cycle slips" do
+      epochs =
+        @sat_positions
+        |> Enum.with_index()
+        |> Enum.map(fn {positions, idx} ->
+          epoch =
+            synthetic_baseline_epoch(@base, @truth_baseline, positions,
+              ambiguities_m: @ambiguities,
+              epoch: idx
+            )
+
+          if idx == 1, do: mark_rover_lli(epoch, "G02", 1), else: epoch
+        end)
+
+      assert {:ok, sol} =
+               RTK.solve_float_baseline_epochs(@base, epochs,
+                 reference_satellite_id: "G01",
+                 on_cycle_slip: :drop_satellite,
+                 initial_baseline_m: {-40.0, 35.0, 12.0}
+               )
+
+      assert sol.used_sats == ["G03", "G04", "G05"]
+      assert sol.metadata.dropped_cycle_slip_sats == ["G02"]
+      assert sol.metadata.dropped_sats == ["G02"]
+      assert position_error(sol.baseline_m, @truth_baseline) < 1.0e-5
+    end
+
+    test "can split ambiguity arcs at LLI cycle slips" do
+      epochs =
+        @sat_positions
+        |> Enum.with_index()
+        |> Enum.map(fn {positions, idx} ->
+          ambiguities =
+            if idx == 0 do
+              Map.put(@ambiguities, "G02", 5.0 * @l1_wavelength_m)
+            else
+              Map.put(@ambiguities, "G02", 8.0 * @l1_wavelength_m)
+            end
+
+          epoch =
+            synthetic_baseline_epoch(@base, @truth_baseline, positions,
+              ambiguities_m: ambiguities,
+              epoch: idx
+            )
+
+          if idx == 1, do: mark_rover_lli(epoch, "G02", 1), else: epoch
+        end)
+
+      assert {:ok, sol} =
+               RTK.solve_float_baseline_epochs(@base, epochs,
+                 reference_satellite_id: "G01",
+                 on_cycle_slip: :split_arc,
+                 initial_baseline_m: {-40.0, 35.0, 12.0}
+               )
+
+      g02_ids = Enum.filter(sol.used_sats, &String.contains?(&1, "G02"))
+      assert length(g02_ids) == 2
+
+      split_ids = sol.metadata.split_cycle_slip_arcs |> Enum.map(& &1.ambiguity_id) |> Enum.sort()
+      assert length(split_ids) == 2
+
+      g02_ambiguities =
+        g02_ids
+        |> Enum.map(&Map.fetch!(sol.ambiguities_m, &1))
+        |> Enum.sort()
+
+      assert Enum.zip(g02_ambiguities, [5.0 * @l1_wavelength_m, 8.0 * @l1_wavelength_m])
+             |> Enum.all?(fn {got, expected} -> abs(got - expected) < 1.0e-5 end)
+
+      assert position_error(sol.baseline_m, @truth_baseline) < 1.0e-5
+    end
+
     test "bad baseline-solve inputs are tagged" do
       epoch = synthetic_baseline_epoch(@base, @truth_baseline, hd(@sat_positions))
 
@@ -226,6 +343,9 @@ defmodule Orbis.GNSS.RTKTest do
 
       assert RTK.solve_float_baseline_epochs(@base, [epoch], max_iterations: 0) ==
                {:error, {:invalid_option, :max_iterations}}
+
+      assert RTK.solve_float_baseline_epochs(@base, [epoch], on_cycle_slip: :bad) ==
+               {:error, {:invalid_option, :on_cycle_slip}}
     end
   end
 
@@ -280,6 +400,50 @@ defmodule Orbis.GNSS.RTKTest do
         assert abs(residual.code_m) < 1.0e-5
         assert abs(residual.phase_m) < 1.0e-5
       end
+    end
+
+    test "fixed solve respects split ambiguity arcs" do
+      epochs =
+        @sat_positions
+        |> Enum.with_index()
+        |> Enum.map(fn {positions, idx} ->
+          cycles = if idx == 0, do: 5, else: 8
+
+          ambiguities_m =
+            @fixed_cycles
+            |> Map.put("G02", cycles)
+            |> Map.new(fn {sat, sat_cycles} -> {sat, sat_cycles * @l1_wavelength_m} end)
+
+          epoch =
+            synthetic_baseline_epoch(@base, @truth_baseline, positions,
+              epoch: idx,
+              ambiguities_m: ambiguities_m
+            )
+
+          if idx == 1, do: mark_rover_lli(epoch, "G02", 1), else: epoch
+        end)
+
+      assert {:ok, sol} =
+               RTK.solve_fixed_baseline_epochs(@base, epochs,
+                 reference_satellite_id: "G01",
+                 ambiguity_wavelength_m: @l1_wavelength_m,
+                 on_cycle_slip: :split_arc,
+                 initial_baseline_m: {-40.0, 35.0, 12.0}
+               )
+
+      g02_ids = Enum.filter(sol.used_sats, &String.contains?(&1, "G02"))
+      assert length(g02_ids) == 2
+      assert sol.metadata.integer_status == :fixed
+      assert sol.metadata.dropped_cycle_slip_sats == []
+      assert length(sol.metadata.split_cycle_slip_arcs) == 2
+
+      g02_cycles =
+        g02_ids
+        |> Enum.map(&Map.fetch!(sol.fixed_ambiguities_cycles, &1))
+        |> Enum.sort()
+
+      assert g02_cycles == [5, 8]
+      assert position_error(sol.baseline_m, @truth_baseline) < 1.0e-5
     end
 
     test "bad fixed-baseline inputs are tagged" do
@@ -353,6 +517,18 @@ defmodule Orbis.GNSS.RTKTest do
     matrix
     |> Enum.zip()
     |> Enum.map(&Tuple.to_list/1)
+  end
+
+  defp mark_rover_lli(epoch, sat, lli) do
+    %{epoch | rover_observations: mark_observation_lli(epoch.rover_observations, sat, lli)}
+  end
+
+  defp mark_observation_lli(observations, sat, lli) do
+    Enum.map(observations, fn
+      {^sat, code, phase} -> %{satellite_id: sat, code_m: code, phase_m: phase, lli: lli}
+      %{satellite_id: ^sat} = obs -> Map.put(obs, :lli, lli)
+      obs -> obs
+    end)
   end
 
   defp synthetic_baseline_epoch(base, baseline, satellite_positions_m, opts \\ []) do
