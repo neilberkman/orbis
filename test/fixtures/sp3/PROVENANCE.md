@@ -50,3 +50,15 @@ multi-epoch precise-positioning / troposphere regression.
 
 Hand-authored rank-deficient fixture (five GPS satellites at one ECEF point) for
 the graceful-degeneracy path; not a redistributed product.
+
+## `COD0MGXFIN_20201770000_01D_05M_ORB.SP3`
+
+- **Upstream source:** `COD0MGXFIN_20201770000_01D_05M_ORB.SP3.gz`, the CODE MGEX
+  final precise orbit/clock product for 2020 day-of-year 177 (GPS week 2111),
+  fetched via `Orbis.GNSS.Data` from the ESA GSSC archive.
+- **Trim:** none — the verbatim full-day product (289 epochs, 00:00 through the
+  following day 00:00 GPST at 5-minute cadence), GPS+GLONASS+Galileo+BeiDou.
+- **Use:** the precise reference for the full-day broadcast-vs-precise accuracy
+  check in `gnss_ephemeris_test.exs`.
+- **sha256 (committed `.SP3`):**
+  `54b70fa009a840ecf8cec25fbd4d749c9aaef7c95bdf463484e115f74d802215`

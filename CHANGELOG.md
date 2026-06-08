@@ -39,10 +39,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `Orbis.GNSS.Broadcast.position/3` evaluates a single satellite's broadcast
   ECEF position and clock at an epoch (IS-GPS-200 LNAV, Galileo OS-SIS-ICD,
   BeiDou BDS-SIS-ICD).
-- `Orbis.GNSS.BroadcastComparison.compare/4` computes per-satellite
-  broadcast-vs-precise orbit and clock differences (3D plus radial/along/cross
-  RMS and max) over a window — the standard broadcast ephemeris accuracy check.
-  GPS LNAV agrees with the IGS precise product at ~1-2 m orbit RMS.
+- `Orbis.GNSS.BroadcastComparison.compare/4` (and the `mix gnss.broadcast_diff`
+  task, with a `--system` selector) computes per-satellite broadcast-vs-precise
+  orbit and clock differences (3D plus radial/along/cross RMS and max) over a
+  window — the standard broadcast ephemeris accuracy check. Validated over a full
+  UTC day against the IGS combined broadcast (`BRDC00IGS`) and CODE MGEX final
+  precise orbits (`COD0MGXFIN`): GPS LNAV ~1.4 m, Galileo I/NAV ~0.9 m, BeiDou
+  ~2.5 m orbit RMS.
 - `Orbis.GNSS.RTK.solve_float_baseline_epochs/3` and fixed RTK solvers now
   accept `code_smoothing: true` to apply per-receiver/per-ambiguity-arc Hatch
   carrier smoothing to code observations before forming double differences.

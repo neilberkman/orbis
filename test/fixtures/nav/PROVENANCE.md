@@ -102,3 +102,24 @@ parser test and the `Orbis.GNSS.Broadcast` wrapper test.
   = 18, used for the GLONASS-time↔GPS-time mapping. Used by the GLONASS broadcast
   recipe/golden/parser work (Phase 5b). GLONASS precise orbits for physical
   validation are in `GBM0MGXRAP_…_ORB.SP3` (R01–R24).
+
+## `BRDC00IGS_R_20201770000_01D_GEC.rnx`
+
+- **Upstream source:** `BRDC00IGS_R_20201770000_01D_MN.rnx`, the IGS combined
+  multi-GNSS broadcast navigation message for 2020 day-of-year 177, fetched via
+  `Orbis.GNSS.Data` from the ESA GSSC archive. The combined product is used
+  instead of a single station because one station has Galileo/BeiDou coverage
+  gaps that inflate the broadcast-vs-precise residual.
+- **Trim:** kept the header plus only GPS/Galileo/BeiDou ephemeris blocks
+  (dropped GLONASS/SBAS/QZSS, unused by the check):
+  ```
+  awk 'BEGIN{hdr=1}
+       hdr==1{print; if($0~/END OF HEADER/)hdr=0; next}
+       /^[A-Z][0-9][0-9] /{keep=($0~/^[GEC][0-9][0-9] /)}
+       keep{print}'
+  ```
+- **Content:** 417 GPS LNAV + 9086 Galileo I/NAV+F/NAV + 940 BeiDou D1/D2 records.
+- **Use:** the broadcast source for the full-day broadcast-vs-precise accuracy
+  check in `gnss_ephemeris_test.exs`.
+- **sha256 (committed `.rnx`):**
+  `6f06fda75efefaec555e119806944453de4618b20a92cd7aea4f6ec054fe0f20`
