@@ -50,7 +50,8 @@ defmodule Orbis.NIF do
         _jd_whole,
         _jd_fraction,
         _skyfield_compat
-      ), do: :erlang.nif_error(:nif_not_loaded)
+      ),
+      do: :erlang.nif_error(:nif_not_loaded)
 
   def utc_to_tdb_jd(_year, _month, _day, _hour, _minute, _second),
     do: :erlang.nif_error(:nif_not_loaded)
@@ -69,7 +70,8 @@ defmodule Orbis.NIF do
         _station_lon_deg,
         _station_alt_km,
         _datetime_tuple
-      ), do: :erlang.nif_error(:nif_not_loaded)
+      ),
+      do: :erlang.nif_error(:nif_not_loaded)
 
   def iod_gibbs(_r1, _r2, _r3), do: :erlang.nif_error(:nif_not_loaded)
   def iod_hgibbs(_r1, _r2, _r3, _jd1, _jd2, _jd3), do: :erlang.nif_error(:nif_not_loaded)
@@ -87,6 +89,9 @@ defmodule Orbis.NIF do
   def sp3_satellite_ids(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
   def broadcast_parse(_text), do: :erlang.nif_error(:nif_not_loaded)
+
+  def broadcast_position(_handle, _system_letter, _prn, _t_j2000_s),
+    do: :erlang.nif_error(:nif_not_loaded)
 
   def sp3_position(_handle, _system_letter, _prn, _scale, _jd_whole, _jd_fraction),
     do: :erlang.nif_error(:nif_not_loaded)
@@ -138,7 +143,8 @@ defmodule Orbis.NIF do
         _temperature_k,
         _relative_humidity,
         _with_geodetic
-      ), do: :erlang.nif_error(:nif_not_loaded)
+      ),
+      do: :erlang.nif_error(:nif_not_loaded)
 
   def spp_solve_broadcast(
         _handle,
@@ -155,7 +161,8 @@ defmodule Orbis.NIF do
         _temperature_k,
         _relative_humidity,
         _with_geodetic
-      ), do: :erlang.nif_error(:nif_not_loaded)
+      ),
+      do: :erlang.nif_error(:nif_not_loaded)
 
   def klobuchar_delay(
         _lat_deg,
@@ -166,7 +173,8 @@ defmodule Orbis.NIF do
         _frequency_hz,
         _alpha,
         _beta
-      ), do: :erlang.nif_error(:nif_not_loaded)
+      ),
+      do: :erlang.nif_error(:nif_not_loaded)
 
   def ionex_parse(_bytes), do: :erlang.nif_error(:nif_not_loaded)
 
@@ -178,7 +186,8 @@ defmodule Orbis.NIF do
         _azimuth_rad,
         _epoch_j2000_s,
         _frequency_hz
-      ), do: :erlang.nif_error(:nif_not_loaded)
+      ),
+      do: :erlang.nif_error(:nif_not_loaded)
 
   def tropo_zenith_delay(_lat_rad, _height_m, _pressure_hpa, _temperature_k, _relative_humidity),
     do: :erlang.nif_error(:nif_not_loaded)
@@ -196,7 +205,8 @@ defmodule Orbis.NIF do
         _relative_humidity,
         _jd_whole,
         _jd_fraction
-      ), do: :erlang.nif_error(:nif_not_loaded)
+      ),
+      do: :erlang.nif_error(:nif_not_loaded)
 
   def iod_gauss(
         _decl1,
@@ -214,5 +224,6 @@ defmodule Orbis.NIF do
         _rseci1,
         _rseci2,
         _rseci3
-      ), do: :erlang.nif_error(:nif_not_loaded)
+      ),
+      do: :erlang.nif_error(:nif_not_loaded)
 end
