@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-06-08
+
 ### Added
 
 - `Orbis.GNSS.SP3.merge/2` merges several SP3 products from different analysis
