@@ -76,7 +76,10 @@ defmodule Mix.Tasks.Gnss.BroadcastDiff do
 
   defp print_report(report, system, from, to, step_s) do
     Mix.shell().info("broadcast-vs-precise #{system}  #{from} .. #{to}  step #{step_s}s\n")
-    Mix.shell().info("  sat   n   orbit_rms  orbit_max   radial   along    cross    clock_rms")
+
+    Mix.shell().info(
+      "  sat   n   orbit_rms  orbit_max   radial   along    cross    clock_rms  clock_rms(datum-free)"
+    )
 
     report.per_satellite
     |> Enum.sort_by(fn {sat, _stats} -> sat end)
@@ -98,7 +101,8 @@ defmodule Mix.Tasks.Gnss.BroadcastDiff do
       meters(s.radial_rms_m, 8),
       meters(s.along_rms_m, 8),
       meters(s.cross_rms_m, 8),
-      meters(s.clock_rms_m, 10)
+      meters(s.clock_rms_m, 10),
+      meters(s.clock_datum_removed_rms_m, 21)
     ]
     |> Enum.join("  ")
   end

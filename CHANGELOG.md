@@ -8,6 +8,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `Orbis.GNSS.SP3.merge/2` merges several SP3 products from different analysis
+  centers into one consistent precise-ephemeris dataset. Coverage is the union
+  across satellite×epoch (a satellite present in any input is present in the
+  output, filling a single center's dropouts); overlapping records are resolved
+  by robust consensus — the largest subset of centers agreeing within tolerance
+  is combined (`:mean`, `:median`, or `:precedence`), disagreeing centers are
+  recorded as outliers, and a cell with no agreeing subset is quarantined rather
+  than averaged. Pure and deterministic; returns the merged product plus an audit
+  report (`:quarantined`, `:single_source`, `:position_outliers`).
+- `Orbis.GNSS.SP3.clock_reference_offset/3` and
+  `Orbis.GNSS.SP3.align_clock_reference/3` expose the clock-datum primitive:
+  precise clock products from different centers are referenced to different
+  station/ensemble clocks, so their raw clocks differ by a per-epoch common
+  offset. The first estimates that offset (robust median over common satellites);
+  the second returns a copy of a product with its clocks shifted onto a
+  reference's datum so the two are directly comparable. Positions need no such
+  treatment.
+- `Orbis.GNSS.BroadcastComparison` now reports `clock_datum_removed_rms_m` /
+  `clock_datum_removed_max_m` alongside the raw clock statistics: the per-epoch
+  common reference-clock offset (median over satellites) is removed to give the
+  actual signal-in-space clock error, several times smaller than the raw value.
 - `Orbis.GNSS.Ephemeris.sample/3` samples a precise (`Orbis.GNSS.SP3`) or
   broadcast (`Orbis.GNSS.Broadcast`) ephemeris over an epoch window into a
   unified per-satellite, per-epoch table of ECEF position and clock bias — the

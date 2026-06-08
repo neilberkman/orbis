@@ -94,6 +94,21 @@ defmodule Orbis.NIF do
   def sp3_position(_handle, _system_letter, _prn, _scale, _jd_whole, _jd_fraction),
     do: :erlang.nif_error(:nif_not_loaded)
 
+  def sp3_clock_reference_offset(_reference, _other, _min_common),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def sp3_align_clock_reference(_reference, _other, _min_common),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  def sp3_merge(
+        _handles,
+        _position_tolerance_m,
+        _clock_tolerance_s,
+        _min_agree,
+        _clock_min_common,
+        _combine
+      ), do: :erlang.nif_error(:nif_not_loaded)
+
   def crinex_decode(_text), do: :erlang.nif_error(:nif_not_loaded)
 
   def rinex_obs_parse(_text), do: :erlang.nif_error(:nif_not_loaded)

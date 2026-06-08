@@ -58,10 +58,12 @@ defmodule Orbis.GNSS.BroadcastComparison do
   2020 day-of-year 177 — all GPS satellites over a multi-hour window at a 15 min
   step — gives an overall 3D orbit RMS of about **1.5 m** (max ~4 m), split as
   roughly 1.1 m radial / 0.9 m along-track / 0.5 m cross-track, the expected GPS
-  broadcast accuracy. The raw clock differences are larger (several meters)
-  because the broadcast clock (L1/TGD-referenced) and the precise clock
-  (ionosphere-free referenced) carry a per-satellite datum offset that this
-  comparison does not remove; the orbit RMS is the datum-free accuracy metric.
+  broadcast accuracy. The raw clock differences (`clock_rms_m`) are larger
+  (several meters) because the broadcast and precise clocks are referenced to
+  different time datums, which differ by a common per-epoch offset that drifts
+  over the day. `clock_datum_removed_rms_m` removes that common offset (the
+  per-epoch median over satellites) and reports the actual signal-in-space clock
+  error, which is several times smaller.
   The same call works against a broadcast product with no change of shape, so
   `mix gnss.broadcast_diff --nav BRDC.rnx --sp3 igs.sp3 --from ... --to ...`
   prints this table from the command line.
@@ -79,9 +81,14 @@ defmodule Orbis.GNSS.BroadcastComparison do
     `orbit_3d_rms_m` / `orbit_3d_max_m` are the Euclidean position-difference
     magnitudes. `radial_*`, `along_*`, `cross_*` are the RMS and max of the signed
     RAC components of the position difference (`broadcast - precise`).
-    `clock_rms_m` / `clock_max_m` are the satellite-clock differences scaled to
-    meters by the speed of light; they are `nil` when neither product carried a
-    clock estimate for any compared epoch.
+    `clock_rms_m` / `clock_max_m` are the **raw** satellite-clock differences
+    scaled to meters by the speed of light; they are `nil` when neither product
+    carried a clock estimate for any compared epoch. They are dominated by the
+    per-epoch common reference-clock offset between the two products' time
+    datums. `clock_datum_removed_rms_m` / `clock_datum_removed_max_m` are the
+    same differences after that per-epoch common offset (the median over all
+    satellites at the epoch) is removed — the actual signal-in-space clock error
+    (the SISRE clock term), typically several times smaller than the raw value.
     """
     @enforce_keys [
       :count,
@@ -94,7 +101,9 @@ defmodule Orbis.GNSS.BroadcastComparison do
       :cross_rms_m,
       :cross_max_m,
       :clock_rms_m,
-      :clock_max_m
+      :clock_max_m,
+      :clock_datum_removed_rms_m,
+      :clock_datum_removed_max_m
     ]
     defstruct [
       :count,
@@ -107,7 +116,9 @@ defmodule Orbis.GNSS.BroadcastComparison do
       :cross_rms_m,
       :cross_max_m,
       :clock_rms_m,
-      :clock_max_m
+      :clock_max_m,
+      :clock_datum_removed_rms_m,
+      :clock_datum_removed_max_m
     ]
 
     @type t :: %__MODULE__{
@@ -121,7 +132,9 @@ defmodule Orbis.GNSS.BroadcastComparison do
             cross_rms_m: float() | nil,
             cross_max_m: float() | nil,
             clock_rms_m: float() | nil,
-            clock_max_m: float() | nil
+            clock_max_m: float() | nil,
+            clock_datum_removed_rms_m: float() | nil,
+            clock_datum_removed_max_m: float() | nil
           }
   end
 
@@ -164,17 +177,26 @@ defmodule Orbis.GNSS.BroadcastComparison do
   def compare(%Broadcast{} = broadcast, %SP3{} = precise, sat_ids, window)
       when is_list(sat_ids) do
     per_sat =
-      Map.new(sat_ids, fn sat_id ->
-        {sat_id, compare_satellite(broadcast, precise, sat_id, window)}
+      Enum.map(sat_ids, fn sat_id ->
+        {diffs, missing} = compare_satellite(broadcast, precise, sat_id, window)
+        {sat_id, diffs, missing}
       end)
 
-    overall = aggregate(Enum.flat_map(per_sat, fn {_id, {diffs, _missing}} -> diffs end))
+    # The raw clock difference at each epoch carries a common reference-clock
+    # offset between the two products' time datums; estimate it (median over all
+    # satellites at the epoch) and remove it so each diff also carries the true
+    # datum-removed clock residual. Done across all satellites because the datum
+    # is shared by them, not per satellite.
+    all_diffs = Enum.flat_map(per_sat, fn {_id, diffs, _missing} -> diffs end)
+    datum_by_epoch = clock_datum_by_epoch(all_diffs)
+    enrich = fn diffs -> Enum.map(diffs, &put_clock_residual(&1, datum_by_epoch)) end
 
-    per_satellite = Map.new(per_sat, fn {id, {diffs, _missing}} -> {id, stats(diffs)} end)
+    overall = aggregate(enrich.(all_diffs))
+    per_satellite = Map.new(per_sat, fn {id, diffs, _missing} -> {id, stats(enrich.(diffs))} end)
 
     missing =
       per_sat
-      |> Enum.map(fn {id, {_diffs, missing}} -> {id, missing} end)
+      |> Enum.map(fn {id, _diffs, missing} -> {id, missing} end)
       |> Enum.filter(fn {_id, n} -> n > 0 end)
       |> Enum.sort()
 
@@ -215,6 +237,7 @@ defmodule Orbis.GNSS.BroadcastComparison do
 
       {:ok,
        %{
+         epoch: epoch,
          orbit_3d: norm(d),
          radial: radial,
          along: along,
@@ -309,12 +332,15 @@ defmodule Orbis.GNSS.BroadcastComparison do
       cross_rms_m: nil,
       cross_max_m: nil,
       clock_rms_m: nil,
-      clock_max_m: nil
+      clock_max_m: nil,
+      clock_datum_removed_rms_m: nil,
+      clock_datum_removed_max_m: nil
     }
   end
 
   defp aggregate(diffs) do
     clocks = diffs |> Enum.map(& &1.clock_m) |> Enum.reject(&is_nil/1)
+    clock_resids = diffs |> Enum.map(&Map.get(&1, :clock_residual_m)) |> Enum.reject(&is_nil/1)
 
     %Stats{
       count: length(diffs),
@@ -327,8 +353,48 @@ defmodule Orbis.GNSS.BroadcastComparison do
       cross_rms_m: rms(Enum.map(diffs, & &1.cross)),
       cross_max_m: max_abs(Enum.map(diffs, & &1.cross)),
       clock_rms_m: rms_or_nil(clocks),
-      clock_max_m: max_abs_or_nil(clocks)
+      clock_max_m: max_abs_or_nil(clocks),
+      clock_datum_removed_rms_m: rms_or_nil(clock_resids),
+      clock_datum_removed_max_m: max_abs_or_nil(clock_resids)
     }
+  end
+
+  # Per-epoch common reference-clock offset (meters): the median over all
+  # satellites at the epoch of the raw clock difference. `nil` for an epoch with
+  # no clocked satellite.
+  defp clock_datum_by_epoch(diffs) do
+    diffs
+    |> Enum.group_by(& &1.epoch)
+    |> Map.new(fn {epoch, epoch_diffs} ->
+      clocks = epoch_diffs |> Enum.map(& &1.clock_m) |> Enum.reject(&is_nil/1)
+      {epoch, median(clocks)}
+    end)
+  end
+
+  # Attach the datum-removed clock residual to a diff: raw clock difference minus
+  # the epoch's common offset. `nil` when this diff has no clock or the epoch had
+  # no datum estimate.
+  defp put_clock_residual(diff, datum_by_epoch) do
+    datum = Map.get(datum_by_epoch, diff.epoch)
+
+    residual =
+      if is_float(diff.clock_m) and is_float(datum), do: diff.clock_m - datum
+
+    Map.put(diff, :clock_residual_m, residual)
+  end
+
+  defp median([]), do: nil
+
+  defp median(values) do
+    sorted = Enum.sort(values)
+    n = length(sorted)
+    mid = div(n, 2)
+
+    if rem(n, 2) == 1 do
+      Enum.at(sorted, mid)
+    else
+      (Enum.at(sorted, mid - 1) + Enum.at(sorted, mid)) / 2.0
+    end
   end
 
   defp rms([]), do: nil

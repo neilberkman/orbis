@@ -16,7 +16,10 @@
 //!   file or probing interpolation.
 
 use astrodynamics::time::model::{Instant, JulianDateSplit, TimeScale};
-use astrodynamics_gnss::ephemeris::Sp3;
+use astrodynamics_gnss::ephemeris::{
+    align_clock_reference, clock_reference_offset, merge as crate_merge, MergeCombine, MergeFlag,
+    MergeOptions, Sp3,
+};
 use astrodynamics_gnss::{GnssSatelliteId, GnssSystem};
 use rustler::{Encoder, Env, Error, NifResult, ResourceArc, Term};
 
@@ -137,4 +140,112 @@ fn sp3_position<'a>(
         clock_term,
     )
         .encode(env))
+}
+
+/// Split a flagged cell's epoch into a `(jd_whole, jd_fraction)` pair in the
+/// product's own time scale (the same split convention `sp3_position/6` accepts).
+/// Encoded as a 4-tuple `{sat_token, jd_whole, jd_fraction, [source_index]}` so
+/// the Elixir wrapper can build a structured report.
+fn flag_to_tuple(flag: &MergeFlag) -> (String, f64, f64, Vec<u64>) {
+    let (jd_whole, jd_fraction) = flag
+        .epoch
+        .julian_date()
+        .map(|jd| (jd.jd_whole, jd.fraction))
+        .unwrap_or((0.0, 0.0));
+    (
+        flag.satellite.to_string(),
+        jd_whole,
+        jd_fraction,
+        flag.sources.iter().map(|&s| s as u64).collect(),
+    )
+}
+
+/// Estimate the per-epoch reference-clock offset of `other` relative to
+/// `reference` (the clock-datum primitive).
+///
+/// Returns a list of `{jd_whole, jd_fraction, offset_s, satellites}` tuples, one
+/// per epoch where at least `min_common` common clocked satellites let the
+/// (robust median) offset be estimated. Dirty-CPU: a full IGS day is unbounded
+/// relative to the 1 ms NIF budget.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn sp3_clock_reference_offset(
+    reference: ResourceArc<Sp3Resource>,
+    other: ResourceArc<Sp3Resource>,
+    min_common: usize,
+) -> NifResult<Vec<(f64, f64, f64, u64)>> {
+    Ok(clock_reference_offset(&reference.sp3, &other.sp3, min_common)
+        .iter()
+        .map(|o| {
+            let (jd_whole, jd_fraction) = o
+                .epoch
+                .julian_date()
+                .map(|jd| (jd.jd_whole, jd.fraction))
+                .unwrap_or((0.0, 0.0));
+            (jd_whole, jd_fraction, o.offset_s, o.satellites as u64)
+        })
+        .collect())
+}
+
+/// Return a new handle to a copy of `other` with its clocks shifted onto
+/// `reference`'s clock datum (the clock-datum primitive, applied).
+///
+/// Dirty-CPU: clones and rewrites a full product.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn sp3_align_clock_reference(
+    reference: ResourceArc<Sp3Resource>,
+    other: ResourceArc<Sp3Resource>,
+    min_common: usize,
+) -> NifResult<ResourceArc<Sp3Resource>> {
+    let aligned = align_clock_reference(&reference.sp3, &other.sp3, min_common);
+    Ok(ResourceArc::new(Sp3Resource { sp3: aligned }))
+}
+
+/// Merge several SP3 products into one consistent precise-ephemeris dataset.
+///
+/// `handles` are the source products in **precedence order**. `combine` is one
+/// of `"mean"`, `"median"`, `"precedence"`. Returns
+/// `{merged_handle, {quarantined, single_source, position_outliers}}` where each
+/// report list is a list of `flag_to_tuple` 4-tuples. Dirty-CPU: combines full
+/// products.
+#[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::too_many_arguments)]
+fn sp3_merge<'a>(
+    env: Env<'a>,
+    handles: Vec<ResourceArc<Sp3Resource>>,
+    position_tolerance_m: f64,
+    clock_tolerance_s: f64,
+    min_agree: usize,
+    clock_min_common: usize,
+    combine: String,
+) -> NifResult<Term<'a>> {
+    let combine = match combine.as_str() {
+        "mean" => MergeCombine::Mean,
+        "median" => MergeCombine::Median,
+        "precedence" => MergeCombine::Precedence,
+        other => {
+            return Err(Error::Term(Box::new(format!(
+                "unknown combine strategy {other:?}"
+            ))))
+        }
+    };
+    let opts = MergeOptions {
+        position_tolerance_m,
+        clock_tolerance_s,
+        min_agree,
+        clock_min_common,
+        combine,
+    };
+
+    // The crate merge takes owned products; the handles are shared/immutable, so
+    // clone each into the merge input.
+    let sources: Vec<Sp3> = handles.iter().map(|h| h.sp3.clone()).collect();
+    let (merged, report) =
+        crate_merge(&sources, &opts).map_err(|e| Error::Term(Box::new(e.to_string())))?;
+
+    let handle = ResourceArc::new(Sp3Resource { sp3: merged });
+    let quarantined: Vec<_> = report.quarantined.iter().map(flag_to_tuple).collect();
+    let single_source: Vec<_> = report.single_source.iter().map(flag_to_tuple).collect();
+    let position_outliers: Vec<_> = report.position_outliers.iter().map(flag_to_tuple).collect();
+
+    Ok((handle, (quarantined, single_source, position_outliers)).encode(env))
 }

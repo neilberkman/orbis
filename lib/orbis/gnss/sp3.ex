@@ -153,7 +153,148 @@ defmodule Orbis.GNSS.SP3 do
     e in ErlangError -> {:error, e.original}
   end
 
+  @doc """
+  Merge several SP3 products from different analysis centers into one consistent
+  precise-ephemeris dataset.
+
+  `sources` is a list of loaded products **in precedence order** (earlier wins
+  ties). This is orthogonal to time-stitching: it combines providers at the same
+  epochs. For every `(epoch, satellite)` cell in the union of the inputs:
+
+    * **Union coverage** — a satellite present in any input is present in the
+      merged product for that epoch (filling a single center's dropouts).
+    * **Consensus** — the largest subset of sources agreeing within tolerance is
+      combined; sources outside it are recorded as outliers. A cell with no
+      agreeing subset of `:min_agree` is *quarantined* (omitted), never averaged
+      across disagreeing centers. A lone source is carried through.
+
+  Returns `{:ok, %Orbis.GNSS.SP3{}, report}` or `{:error, reason}`, where
+  `report` is a map with `:quarantined`, `:single_source`, and
+  `:position_outliers` lists. Each entry is a map
+  `%{satellite: "G03", jd_whole: float, jd_fraction: float, sources: [0, 2]}`
+  (`sources` are zero-based indices into `sources`).
+
+  ## Options
+
+    * `:position_tolerance_m` — position agreement tolerance, meters (default `0.5`)
+    * `:clock_tolerance_s` — clock agreement tolerance, seconds (default `5.0e-9`)
+    * `:min_agree` — agreeing sources required to accept a contested cell (default `2`)
+    * `:clock_min_common` — common clocked satellites for the clock-datum estimate (default `5`)
+    * `:combine` — `:mean` (default), `:median`, or `:precedence`
+  """
+  @spec merge([t()], keyword()) :: {:ok, t(), map()} | {:error, term()}
+  def merge(sources, opts \\ []) when is_list(sources) do
+    handles = Enum.map(sources, fn %__MODULE__{handle: handle} -> handle end)
+    position_tolerance_m = Keyword.get(opts, :position_tolerance_m, 0.5)
+    clock_tolerance_s = Keyword.get(opts, :clock_tolerance_s, 5.0e-9)
+    min_agree = Keyword.get(opts, :min_agree, 2)
+    clock_min_common = Keyword.get(opts, :clock_min_common, 5)
+    combine = opts |> Keyword.get(:combine, :mean) |> to_string()
+
+    case NIF.sp3_merge(
+           handles,
+           position_tolerance_m,
+           clock_tolerance_s,
+           min_agree,
+           clock_min_common,
+           combine
+         ) do
+      {handle, {quarantined, single_source, position_outliers}} when is_reference(handle) ->
+        report = %{
+          quarantined: Enum.map(quarantined, &to_flag/1),
+          single_source: Enum.map(single_source, &to_flag/1),
+          position_outliers: Enum.map(position_outliers, &to_flag/1)
+        }
+
+        {:ok, %__MODULE__{handle: handle, time_scale: NIF.sp3_time_scale(handle)}, report}
+
+      {:error, _} = err ->
+        err
+
+      other ->
+        {:error, other}
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Estimate the per-epoch reference-clock offset of `other` relative to
+  `reference` (the clock-datum primitive).
+
+  Precise clock products from different centers are referenced to different
+  station/ensemble clocks, so their raw clocks differ by a per-epoch common
+  offset that drifts over the day. This returns that datum: a list of maps
+  `%{jd_whole: float, jd_fraction: float, offset_s: float, satellites: integer}`,
+  one per epoch where at least `:min_common` common clocked satellites let the
+  (robust median) offset be estimated. Subtract `offset_s` from `other`'s clocks
+  to put both products on `reference`'s datum. Orbit positions need no such
+  treatment — every center reports ITRF center-of-mass coordinates.
+
+  ## Options
+
+    * `:min_common` — minimum common clocked satellites per epoch (default `5`)
+  """
+  @spec clock_reference_offset(t(), t(), keyword()) :: [map()]
+  def clock_reference_offset(
+        %__MODULE__{handle: reference},
+        %__MODULE__{handle: other},
+        opts \\ []
+      ) do
+    min_common = Keyword.get(opts, :min_common, 5)
+
+    reference
+    |> NIF.sp3_clock_reference_offset(other, min_common)
+    |> Enum.map(fn {jd_whole, jd_fraction, offset_s, satellites} ->
+      %{jd_whole: jd_whole, jd_fraction: jd_fraction, offset_s: offset_s, satellites: satellites}
+    end)
+  rescue
+    e in ErlangError ->
+      raise ArgumentError, "could not estimate clock reference offset: #{inspect(e.original)}"
+  end
+
+  @doc """
+  Return a copy of `other` with its clocks shifted onto `reference`'s clock datum
+  (the clock-datum primitive, applied).
+
+  At every epoch the offset could be estimated, each clocked satellite's offset
+  has the datum subtracted, so the result's clocks are directly comparable to
+  `reference`'s. Positions are untouched. Epochs without an estimate are left
+  unchanged. The returned product interpolates like any other SP3.
+
+  Returns `{:ok, %Orbis.GNSS.SP3{}}` or `{:error, reason}`.
+
+  ## Options
+
+    * `:min_common` — minimum common clocked satellites per epoch (default `5`)
+  """
+  @spec align_clock_reference(t(), t(), keyword()) :: {:ok, t()} | {:error, term()}
+  def align_clock_reference(
+        %__MODULE__{handle: reference},
+        %__MODULE__{handle: other},
+        opts \\ []
+      ) do
+    min_common = Keyword.get(opts, :min_common, 5)
+
+    case NIF.sp3_align_clock_reference(reference, other, min_common) do
+      handle when is_reference(handle) ->
+        {:ok, %__MODULE__{handle: handle, time_scale: NIF.sp3_time_scale(handle)}}
+
+      {:error, _} = err ->
+        err
+
+      other_result ->
+        {:error, other_result}
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
   # --- helpers -------------------------------------------------------------
+
+  defp to_flag({satellite, jd_whole, jd_fraction, sources}) do
+    %{satellite: satellite, jd_whole: jd_whole, jd_fraction: jd_fraction, sources: sources}
+  end
 
   defp parse_sat_id(<<letter::binary-size(1), rest::binary>>) do
     case Integer.parse(rest) do

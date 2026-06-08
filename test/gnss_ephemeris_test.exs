@@ -135,6 +135,13 @@ defmodule Orbis.GNSS.EphemerisTest do
       # precise), so it is larger than the orbit term but must stay bounded.
       assert is_float(overall.clock_rms_m)
       assert overall.clock_rms_m > 0.0 and overall.clock_rms_m < 50.0
+
+      # Removing the per-epoch common reference-clock offset (the median over all
+      # satellites) leaves the true signal-in-space clock error, which is finite
+      # and strictly smaller than the raw, datum-laden value.
+      assert is_float(overall.clock_datum_removed_rms_m)
+      assert overall.clock_datum_removed_rms_m > 0.0
+      assert overall.clock_datum_removed_rms_m < overall.clock_rms_m
     end
 
     test "per-satellite stats are populated and gaps are reported explicitly", %{report: report} do
