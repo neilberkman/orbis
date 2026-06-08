@@ -14,33 +14,33 @@ SGP4/SDP4, coordinate transforms, GNSS positioning, orbit determination, and the
 
 ## Features
 
-| Category                   | What it does                                                                                                                                                                                                                                     |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Propagation**            | SGP4/SDP4 via the [`sgp4`](https://crates.io/crates/sgp4) Rust crate (Rust NIF)                                                                                                                                                                  |
-| **Coordinate transforms**  | TEME, GCRS, ITRS, geodetic, topocentric — 0 ULP Skyfield parity (Rust NIF)                                                                                                                                                                       |
-| **Ground station**         | Pass prediction, look angles, Doppler shift, RF link budget                                                                                                                                                                                      |
-| **Orbit determination**    | Gibbs, Herrick-Gibbs, Gauss angles-only, Lambert/Battin (Rust NIF)                                                                                                                                                                               |
-| **Conjunction assessment** | Closest approach finder validated against the Iridium 33 / Cosmos 2251 collision                                                                                                                                                                 |
-| **Eclipse prediction**     | Sunlit / penumbra / umbra with shadow fraction                                                                                                                                                                                                   |
-| **Atmospheric density**    | NRLMSISE-00 model, surface to ~1000 km (Rust NIF)                                                                                                                                                                                                |
-| **JPL ephemeris**          | SPK/BSP reader for Sun, Moon, planets (Rust NIF)                                                                                                                                                                                                 |
-| **GNSS positioning**       | Single-point positioning from SP3 or broadcast ephemeris — GPS, Galileo, BeiDou, GLONASS — plus single/multi-epoch carrier-phase positioning, integer ambiguity fixing, partial ambiguity resolution, and RTK baseline primitives |
-| **GNSS ephemeris & data**  | SP3 precise products, RINEX 3.x/4.xx broadcast navigation, GNSS constellation catalogs, and optional SP3/CLK/NAV/IONEX fetch/cache from public archives                                                                                          |
-| **GNSS observations**      | RINEX 3 observation parsing with Hatanaka (CRINEX) decoding — raw observation values, carrier phases, pseudoranges, and station positioning from `.crx`/`.rnx` files (Rust NIF)                                                                    |
-| **Reduced orbit**          | Compact fitted mean-element model (circular or eccentric) for fast approximate position, caching, and transport — with source-backed drift reporting (Rust NIF)                                                                                  |
+| Category                   | What it does                                                                                                                                                                                                                                                                                                    |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Propagation**            | SGP4/SDP4 via the [`sgp4`](https://crates.io/crates/sgp4) Rust crate (Rust NIF)                                                                                                                                                                                                                                 |
+| **Coordinate transforms**  | TEME, GCRS, ITRS, geodetic, topocentric — 0 ULP Skyfield parity (Rust NIF)                                                                                                                                                                                                                                      |
+| **Ground station**         | Pass prediction, look angles, Doppler shift, RF link budget                                                                                                                                                                                                                                                     |
+| **Orbit determination**    | Gibbs, Herrick-Gibbs, Gauss angles-only, Lambert/Battin (Rust NIF)                                                                                                                                                                                                                                              |
+| **Conjunction assessment** | Closest approach finder validated against the Iridium 33 / Cosmos 2251 collision                                                                                                                                                                                                                                |
+| **Eclipse prediction**     | Sunlit / penumbra / umbra with shadow fraction                                                                                                                                                                                                                                                                  |
+| **Atmospheric density**    | NRLMSISE-00 model, surface to ~1000 km (Rust NIF)                                                                                                                                                                                                                                                               |
+| **JPL ephemeris**          | SPK/BSP reader for Sun, Moon, planets (Rust NIF)                                                                                                                                                                                                                                                                |
+| **GNSS positioning**       | Single-point positioning from SP3 or broadcast ephemeris — GPS, Galileo, BeiDou, GLONASS — plus single/multi-epoch carrier-phase positioning, integer ambiguity fixing, partial ambiguity resolution, and RTK baseline primitives                                                                               |
+| **GNSS ephemeris & data**  | SP3 precise products (including multi-source merge across analysis centers) and broadcast-vs-precise orbit/clock accuracy checks, RINEX 3.x/4.xx broadcast navigation, GNSS constellation catalogs, and optional SP3/CLK/NAV/IONEX fetch/cache from public archives                                             |
+| **GNSS observations**      | RINEX 3 observation parsing with Hatanaka (CRINEX) decoding — raw observation values, carrier phases, pseudoranges, and station positioning from `.crx`/`.rnx` files (Rust NIF)                                                                                                                                 |
+| **Reduced orbit**          | Compact fitted mean-element model (circular or eccentric) for fast approximate position, caching, and transport — with source-backed drift reporting (Rust NIF)                                                                                                                                                 |
 | **GNSS measurements & QC** | Predicted observables (range, range-rate, Doppler, az/el), receiver velocity from Doppler, RAIM fault detection + FDE, dilution of precision & visibility, carrier-phase combinations / slip detection / Hatch smoothing, dual-frequency ionosphere-free combination, and code-differential (DGNSS) positioning |
-| **GNSS signals**           | GPS L1 C/A Gold-code generation, correlation, and acquisition; coherent-integration loss; LNAV navigation-message subframe synthesis and decoding                                                                                                |
-| **Live data**              | CelesTrak TLE/OMM fetching, constellation loading, name search                                                                                                                                                                                   |
-| **Real-time tracking**     | GenServer with PubSub-compatible broadcasts                                                                                                                                                                                                      |
-| **RF primitives**          | FSPL, EIRP, C/N₀, link margin, dish gain                                                                                                                                                                                                         |
-| **Batch analysis**         | Nx-powered tensorized geometry, visibility, and RF (GPU-ready via EXLA/Torchx)                                                                                                                                                                   |
-| **Formats**                | `Orbis.Elements` with TLE and OMM parsers/encoders                                                                                                                                                                                               |
+| **GNSS signals**           | GPS L1 C/A Gold-code generation, correlation, and acquisition; coherent-integration loss; LNAV navigation-message subframe synthesis and decoding                                                                                                                                                               |
+| **Live data**              | CelesTrak TLE/OMM fetching, constellation loading, name search                                                                                                                                                                                                                                                  |
+| **Real-time tracking**     | GenServer with PubSub-compatible broadcasts                                                                                                                                                                                                                                                                     |
+| **RF primitives**          | FSPL, EIRP, C/N₀, link margin, dish gain                                                                                                                                                                                                                                                                        |
+| **Batch analysis**         | Nx-powered tensorized geometry, visibility, and RF (GPU-ready via EXLA/Torchx)                                                                                                                                                                                                                                  |
+| **Formats**                | `Orbis.Elements` with TLE and OMM parsers/encoders                                                                                                                                                                                                                                                              |
 
 ## Installation
 
 ```elixir
 def deps do
-  [{:orbis, "~> 0.11.0"}]
+  [{:orbis, "~> 0.12.0"}]
 end
 ```
 
@@ -197,6 +197,11 @@ sp3 = Orbis.GNSS.SP3.load!("GBM0MGXRAP_20201760000_01D_05M_ORB.SP3")
 {:ok, state} = Orbis.GNSS.SP3.position(sp3, "G01", ~N[2020-06-24 00:00:00])
 # %Orbis.GNSS.SP3.State{x_m: ..., y_m: ..., z_m: ..., clock_s: ...}
 
+# Merge SP3 products from several analysis centers into one consistent dataset:
+# union coverage, robust per-(sat, epoch) consensus, outliers quarantined
+# rather than silently averaged.
+{:ok, merged, _report} = Orbis.GNSS.SP3.merge([sp3_cod, sp3_gfz, sp3_grg])
+
 # Or broadcast navigation — GPS, Galileo, BeiDou, GLONASS (RINEX 3.x/4.xx)
 eph = Orbis.GNSS.Broadcast.load!("BRDC00IGS_20201770000_01D_MN.rnx")
 
@@ -308,21 +313,21 @@ Orbis.GNSS.Constellation.valid?(report)
 
 ## Accuracy
 
-| Component              | Reference                       | Accuracy                        |
-| ---------------------- | ------------------------------- | ------------------------------- |
-| TEME→GCRS→ITRS         | Skyfield                        | 0 ULP (bit-identical)           |
-| SGP4 propagation       | Skyfield                        | < 1 mm (via sgp4 crate)         |
-| Gibbs / Herrick-Gibbs  | Vallado Python                  | 0 ULP                           |
-| Gauss IOD              | Vallado Python                  | 1e-12 relative                  |
-| Lambert (Battin)       | Vallado Python                  | 1e-12 relative                  |
-| Conjunction            | Iridium/Cosmos 2251             | < 2 km miss, < 1 min timing     |
-| RF (FSPL)              | Analytical (inverse square law) | Exact                           |
-| SP3 interpolation      | gnssanalysis                    | 0 ULP                           |
-| Broadcast orbit/clock  | pinned IS-GPS-200 recipe        | 0 ULP (recipe); ~m vs SP3       |
-| Ionosphere/troposphere | Klobuchar / Saastamoinen–Niell  | 0 ULP                           |
-| GNSS DOP               | cofactor inverse                | 0 ULP                           |
-| Single-point position  | scipy least squares             | sub-micron agreement            |
-| RINEX / CRINEX decode  | RNXCMP `crx2rnx`                | byte-exact                      |
+| Component              | Reference                       | Accuracy                         |
+| ---------------------- | ------------------------------- | -------------------------------- |
+| TEME→GCRS→ITRS         | Skyfield                        | 0 ULP (bit-identical)            |
+| SGP4 propagation       | Skyfield                        | < 1 mm (via sgp4 crate)          |
+| Gibbs / Herrick-Gibbs  | Vallado Python                  | 0 ULP                            |
+| Gauss IOD              | Vallado Python                  | 1e-12 relative                   |
+| Lambert (Battin)       | Vallado Python                  | 1e-12 relative                   |
+| Conjunction            | Iridium/Cosmos 2251             | < 2 km miss, < 1 min timing      |
+| RF (FSPL)              | Analytical (inverse square law) | Exact                            |
+| SP3 interpolation      | gnssanalysis                    | 0 ULP                            |
+| Broadcast orbit/clock  | pinned IS-GPS-200 recipe        | 0 ULP (recipe); ~m vs SP3        |
+| Ionosphere/troposphere | Klobuchar / Saastamoinen–Niell  | 0 ULP                            |
+| GNSS DOP               | cofactor inverse                | 0 ULP                            |
+| Single-point position  | scipy least squares             | sub-micron agreement             |
+| RINEX / CRINEX decode  | RNXCMP `crx2rnx`                | byte-exact                       |
 | Reduced orbit          | SP3 / SGP4 (drift-checked)      | approximate, source-backed drift |
 
 ## License
