@@ -88,6 +88,9 @@ defmodule Orbis.NIF do
 
   def broadcast_parse(_text), do: :erlang.nif_error(:nif_not_loaded)
 
+  def broadcast_position(_handle, _system_letter, _prn, _t_j2000_s),
+    do: :erlang.nif_error(:nif_not_loaded)
+
   def sp3_position(_handle, _system_letter, _prn, _scale, _jd_whole, _jd_fraction),
     do: :erlang.nif_error(:nif_not_loaded)
 
