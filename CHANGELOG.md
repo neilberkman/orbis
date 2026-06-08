@@ -21,6 +21,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   dropping a satellite from the entire arc when it is absent from one epoch. The
   reference satellite is still required across the arc.
 
+### Fixed
+
+- `Orbis.GNSS.Core.IntegerLeastSquares` no longer treats a missing runner-up
+  lattice candidate as infinite ratio confidence; one-candidate searches now
+  return `integer_status: :not_fixed`.
+
 ## [0.11.0] - 2026-06-08
 
 ### Added

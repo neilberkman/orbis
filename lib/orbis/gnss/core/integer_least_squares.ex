@@ -371,7 +371,11 @@ defmodule Orbis.GNSS.Core.IntegerLeastSquares do
     |> Enum.sort_by(fn value -> {abs(value - center), value} end)
   end
 
-  defp integer_ratio(_best_score, nil), do: :infinity
+  # A ratio test requires both a best and a runner-up candidate. If the search
+  # bound yields only one lattice point, the fix is not independently validated;
+  # report a non-passing ratio rather than treating the missing runner-up as
+  # infinite confidence.
+  defp integer_ratio(_best_score, nil), do: 0.0
 
   defp integer_ratio(best_score, second_best_score) do
     cond do

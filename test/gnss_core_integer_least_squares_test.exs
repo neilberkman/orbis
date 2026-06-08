@@ -21,6 +21,17 @@ defmodule Orbis.GNSS.Core.IntegerLeastSquaresTest do
     assert meta.ambiguity_search.order == ["A", "B"]
   end
 
+  test "a missing runner-up candidate cannot pass the ratio test" do
+    float_cycles = %{"A" => 0.2}
+    covariance = [[0.0001]]
+    opts = %{radius_cycles: 0, ratio_threshold: 3.0, candidate_limit: 100}
+
+    assert {:ok, %{"A" => 0}, meta} = IntegerLeastSquares.search(float_cycles, covariance, opts)
+    assert meta.integer_second_best_score == nil
+    assert meta.integer_ratio == 0.0
+    assert meta.integer_status == :not_fixed
+  end
+
   defp coordinate_round(float_cycles) do
     Map.new(float_cycles, fn {id, value} -> {id, round(value)} end)
   end
