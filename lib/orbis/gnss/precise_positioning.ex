@@ -29,8 +29,8 @@ defmodule Orbis.GNSS.PrecisePositioning do
   then re-solves position and per-epoch clocks with those ambiguities held
   fixed. `solve_widelane_fixed_epochs/3` is the dual-frequency convenience path:
   it fixes the Melbourne-Wubbena wide-lane integer first, subtracts that known
-  contribution from the ionosphere-free phase ambiguity, then uses LAMBDA on the
-  remaining narrow-lane integer.
+  contribution from the ionosphere-free phase ambiguity, then runs the bounded
+  integer least-squares search on the remaining narrow-lane integer.
 
   ## Observation shape
 
@@ -78,7 +78,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
   @default_ztd_tolerance_m 1.0e-4
   @default_integer_search_radius_cycles 1
   @default_integer_ratio_threshold 3.0
-  @default_integer_candidate_limit 50_000
+  @default_integer_candidate_limit 200_000
   @default_cycle_slip_policy :error
   @min_elevation_weight_scale 1.0e-3
 
@@ -264,7 +264,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
               required(:phase_rms_m) => float(),
               required(:weighted_rms_m) => float(),
               required(:integer_status) => :fixed | :not_fixed,
-              required(:integer_method) => :lambda | :widelane_narrowlane_lambda,
+              required(:integer_method) => :bounded_ils | :widelane_narrowlane_bounded_ils,
               required(:integer_ratio) => float() | :infinity,
               required(:integer_best_score) => float(),
               required(:integer_second_best_score) => float() | nil,
@@ -448,16 +448,14 @@ defmodule Orbis.GNSS.PrecisePositioning do
 
   ## Additional options
 
-    * `:integer_search_radius_cycles` - initial search sphere is large enough
-      to contain this half-window around each rounded float ambiguity (default
+    * `:integer_search_radius_cycles` - half-window around each rounded float
+      ambiguity for the complete bounded integer least-squares search (default
       `1`).
     * `:integer_ratio_threshold` - minimum second-best / best weighted-score
       ratio for `metadata.integer_status == :fixed` (default `3.0`).
     * `:integer_candidate_limit` - maximum candidates to evaluate before
       returning `{:error, {:too_many_integer_candidates, count, limit}}`
-      (default `50_000`). If the decorrelated sphere search finds no integer
-      point inside the search bound, the function returns
-      `{:error, {:no_integer_candidates, count}}`.
+      (default `#{@default_integer_candidate_limit}`).
     * `:ambiguity_offset_m` - optional scalar or `%{"G05" => offset_m, ...}` map
       subtracted from each float ambiguity before converting to cycles and added
       back after fixing (default `0.0`). This is mainly for affine carrier-phase
@@ -538,7 +536,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
   For each satellite the function first estimates the Melbourne-Wubbena
   wide-lane integer `Nw = N1 - N2` over the arc. It then forms ionosphere-free
   code/phase observations and fixes the remaining band-1 narrow-lane integer
-  with LAMBDA using `lambda_NL = c / (f1 + f2)`. The returned
+  with bounded integer least-squares using `lambda_NL = c / (f1 + f2)`. The returned
   `fixed_ambiguities_cycles` are those band-1 narrow-lane integers; the
   wide-lane integers are exposed as `wide_lane_ambiguities_cycles`.
 
@@ -590,7 +588,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
          | wide_lane_ambiguities_cycles: wide_lane_cycles,
            metadata:
              Map.merge(sol.metadata, %{
-               integer_method: :widelane_narrowlane_lambda,
+               integer_method: :widelane_narrowlane_bounded_ils,
                wide_lane_fixed: true,
                dropped_cycle_slip_sats: slip_meta.dropped_sats,
                split_cycle_slip_arcs: slip_meta.split_arcs

@@ -298,9 +298,9 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
       assert sol.epochs == @epochs
       assert sol.used_sats == ctx.multi_sats |> Enum.map(&elem(&1, 0)) |> Enum.sort()
       assert sol.metadata.integer_status == :fixed
-      assert sol.metadata.integer_method == :lambda
+      assert sol.metadata.integer_method == :bounded_ils
       assert sol.metadata.integer_ratio > 1.0e6
-      assert sol.metadata.integer_candidates == 7
+      assert sol.metadata.integer_candidates == 6_561
 
       for {clock, expected} <- Enum.zip(sol.epoch_clocks, @epoch_clocks_m) do
         assert abs(clock.rx_clock_m - expected) < 1.0e-4
@@ -473,7 +473,7 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
 
       assert position_error(sol.position, @truth) < 1.0e-3
       assert sol.metadata.integer_status == :fixed
-      assert sol.metadata.integer_method == :widelane_narrowlane_lambda
+      assert sol.metadata.integer_method == :widelane_narrowlane_bounded_ils
       assert sol.metadata.wide_lane_fixed
       assert sol.metadata.integer_ratio > 1.0e6
 

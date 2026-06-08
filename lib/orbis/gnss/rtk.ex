@@ -22,9 +22,9 @@ defmodule Orbis.GNSS.RTK do
   use the physical satellite id (for example `"G05"`) as the ambiguity id; split
   arcs use explicit ids so a cycle slip resets the ambiguity without pretending
   the satellite disappeared.
-  `solve_fixed_baseline_epochs/3` adds LAMBDA integer ambiguity fixing on top of
-  the same correlated double-difference covariance and re-solves the baseline
-  with the selected integers held fixed.
+  `solve_fixed_baseline_epochs/3` adds bounded integer least-squares ambiguity
+  fixing on top of the same correlated double-difference covariance and
+  re-solves the baseline with the selected integers held fixed.
 
   ## Example
 
@@ -66,7 +66,7 @@ defmodule Orbis.GNSS.RTK do
   @default_phase_sigma_m 0.02
   @default_integer_search_radius_cycles 1
   @default_integer_ratio_threshold 3.0
-  @default_integer_candidate_limit 50_000
+  @default_integer_candidate_limit 200_000
   @default_cycle_slip_policy :error
   @default_hatch_window_cap 100
   @min_elevation_sin 0.05
@@ -190,7 +190,7 @@ defmodule Orbis.GNSS.RTK do
               required(:converged) => boolean(),
               required(:status) => :state_tolerance | :max_iterations,
               required(:integer_status) => :fixed | :not_fixed,
-              required(:integer_method) => :lambda | :widelane_narrowlane_lambda,
+              required(:integer_method) => :bounded_ils | :widelane_narrowlane_bounded_ils,
               required(:integer_ratio) => float() | :infinity,
               required(:integer_best_score) => float(),
               required(:integer_second_best_score) => float() | nil,
@@ -434,8 +434,8 @@ defmodule Orbis.GNSS.RTK do
 
   The function first runs `solve_float_baseline_epochs/3`, converts the float
   double-difference ambiguities from metres to cycles using
-  `:ambiguity_wavelength_m`, runs the shared LAMBDA integer least-squares search
-  with the correlated float ambiguity covariance, and then re-solves the
+  `:ambiguity_wavelength_m`, runs the shared bounded integer least-squares
+  search with the correlated float ambiguity covariance, and then re-solves the
   baseline with the selected integer ambiguities held fixed.
 
   Required option:
@@ -533,8 +533,9 @@ defmodule Orbis.GNSS.RTK do
   For every non-reference double-difference arc the function estimates the
   Melbourne-Wubbena wide-lane integer first. It then forms ionosphere-free code
   and phase double differences and fixes the remaining narrow-lane integer with
-  LAMBDA. The returned `fixed_ambiguities_cycles` are the narrow-lane integers;
-  `wide_lane_ambiguities_cycles` reports the fixed wide-lane integers.
+  bounded integer least-squares. The returned `fixed_ambiguities_cycles` are the
+  narrow-lane integers; `wide_lane_ambiguities_cycles` reports the fixed
+  wide-lane integers.
 
   Options are the same as `solve_fixed_baseline_epochs/3`, except
   `:ambiguity_wavelength_m` and `:ambiguity_offset_m` are derived internally.
@@ -591,7 +592,7 @@ defmodule Orbis.GNSS.RTK do
          | wide_lane_ambiguities_cycles: used_wide_lane_cycles,
            metadata:
              Map.merge(sol.metadata, %{
-               integer_method: :widelane_narrowlane_lambda,
+               integer_method: :widelane_narrowlane_bounded_ils,
                wide_lane_fixed: true,
                wide_lane_ambiguities_cycles: used_wide_lane_cycles,
                dropped_cycle_slip_sats: slip_meta.dropped_sats,

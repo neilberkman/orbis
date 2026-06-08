@@ -97,7 +97,7 @@ defmodule Orbis.GNSS.RTKRealArcTest do
 
     # The limiting term is the code-pinned integer level on a short
     # single-frequency arc, not the carrier-phase scatter. The best integer
-    # candidate is worse than the float baseline, so LAMBDA must refuse the
+    # candidate is worse than the float baseline, so the integer search must refuse the
     # unsafe fix instead of reporting false centimetre confidence.
     assert fixed_antenna_error_m > float_antenna_error_m
     assert fixed_antenna_error_m < 0.2
@@ -117,7 +117,7 @@ defmodule Orbis.GNSS.RTKRealArcTest do
              )
 
     assert wide_lane_fixed.wide_lane_ambiguities_cycles != nil
-    assert wide_lane_fixed.metadata.integer_method == :widelane_narrowlane_lambda
+    assert wide_lane_fixed.metadata.integer_method == :widelane_narrowlane_bounded_ils
     assert wide_lane_fixed.metadata.integer_status == :not_fixed
     assert wide_lane_fixed.metadata.integer_ratio < 3.0
 

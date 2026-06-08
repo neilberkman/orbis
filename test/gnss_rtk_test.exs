@@ -468,7 +468,7 @@ defmodule Orbis.GNSS.RTKTest do
       assert sol.reference_satellite_id == "G01"
       assert sol.used_sats == ["G02", "G03", "G04", "G05"]
       assert sol.metadata.integer_status == :fixed
-      assert sol.metadata.integer_method == :lambda
+      assert sol.metadata.integer_method == :bounded_ils
       assert sol.metadata.integer_ratio > 1.0e6
       assert sol.metadata.ambiguity_search.order == sol.used_sats
       assert position_error(sol.baseline_m, @truth_baseline) < 1.0e-5
@@ -626,7 +626,7 @@ defmodule Orbis.GNSS.RTKTest do
                )
 
       assert sol.metadata.integer_status == :fixed
-      assert sol.metadata.integer_method == :widelane_narrowlane_lambda
+      assert sol.metadata.integer_method == :widelane_narrowlane_bounded_ils
       assert sol.metadata.wide_lane_fixed
       assert sol.wide_lane_ambiguities_cycles == Map.delete(@wide_lane_cycles, "G01")
       assert sol.metadata.wide_lane_ambiguities_cycles == sol.wide_lane_ambiguities_cycles

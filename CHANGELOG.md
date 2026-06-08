@@ -16,6 +16,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- GNSS integer ambiguity fixing now uses a complete bounded integer
+  least-squares scan over the caller's `integer_search_radius_cycles`, scored by
+  the exact ambiguity covariance inverse. Fixed-solution metadata reports
+  `integer_method: :bounded_ils` (or
+  `:widelane_narrowlane_bounded_ils`) for this path.
+- The default integer candidate cap for precise positioning and RTK fixed
+  solvers is now `200_000`, enough for the default radius-1 search with up to 11
+  ambiguities.
 - `Orbis.GNSS.RTK.solve_float_baseline_epochs/3` and fixed RTK solvers now use
   non-reference satellites on the epochs where they are available instead of
   dropping a satellite from the entire arc when it is absent from one epoch. The

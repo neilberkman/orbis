@@ -87,7 +87,7 @@ defmodule Orbis.GNSS.PreciseRealArcTest do
     {x0, y0, z0} = Observations.approx_position(obs)
 
     # G21 has a detected slip on this arc; exclude it so this test exercises the
-    # noisy narrow-lane LAMBDA path rather than the slip hard-abort.
+    # noisy narrow-lane integer-search path rather than the slip hard-abort.
     epoch_observations = real_gps_iono_free_arc(obs, 120, exclude: ["G21"])
 
     {:ok, f1} = IonosphereFree.frequency("G", :l1)
@@ -103,7 +103,7 @@ defmodule Orbis.GNSS.PreciseRealArcTest do
 
     assert fixed.metadata.integer_status == :not_fixed
     assert fixed.metadata.integer_ratio < 3.0
-    assert fixed.metadata.integer_candidates == 23
+    assert fixed.metadata.integer_candidates == 177_147
     assert position_error(fixed.position, {x0, y0, z0}) < 6.0
   end
 
@@ -140,7 +140,7 @@ defmodule Orbis.GNSS.PreciseRealArcTest do
     assert unweighted.metadata.integer_status == :not_fixed
     assert weighted.metadata.integer_status == :not_fixed
     assert weighted.metadata.integer_ratio < 3.0
-    assert weighted.metadata.integer_candidates == 16
+    assert weighted.metadata.integer_candidates == 177_147
 
     assert position_error(weighted.position, truth) <
              position_error(unweighted.position, truth) / 2.0
@@ -167,12 +167,12 @@ defmodule Orbis.GNSS.PreciseRealArcTest do
                troposphere: true,
                on_cycle_slip: :split_arc,
                wide_lane_tolerance_cycles: 2.0,
-               integer_candidate_limit: 5_000
+               integer_candidate_limit: 2_000_000
              )
 
     assert fixed.metadata.integer_status == :not_fixed
     assert fixed.metadata.integer_ratio < 3.0
-    assert fixed.metadata.integer_candidates == 5
+    assert fixed.metadata.integer_candidates == 531_441
     assert length(fixed.metadata.split_cycle_slip_arcs) == 2
     assert position_error(fixed.position, {x0, y0, z0}) < 9.0
   end
