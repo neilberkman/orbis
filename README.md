@@ -24,7 +24,7 @@ SGP4/SDP4, coordinate transforms, GNSS positioning, orbit determination, and the
 | **Eclipse prediction**     | Sunlit / penumbra / umbra with shadow fraction                                                                                                                                                                                                   |
 | **Atmospheric density**    | NRLMSISE-00 model, surface to ~1000 km (Rust NIF)                                                                                                                                                                                                |
 | **JPL ephemeris**          | SPK/BSP reader for Sun, Moon, planets (Rust NIF)                                                                                                                                                                                                 |
-| **GNSS positioning**       | Single-point positioning from SP3 or broadcast ephemeris — GPS, Galileo, BeiDou, GLONASS — plus single-epoch float, multi-epoch float, and integer-fixed carrier-phase positioning from SP3-backed code/phase observations                            |
+| **GNSS positioning**       | Single-point positioning from SP3 or broadcast ephemeris — GPS, Galileo, BeiDou, GLONASS — plus single/multi-epoch carrier-phase positioning, LAMBDA fixing, and RTK baseline primitives                            |
 | **GNSS ephemeris & data**  | SP3 precise products, RINEX 3.x/4.xx broadcast navigation, GNSS constellation catalogs, and optional SP3/CLK/NAV/IONEX fetch/cache from public archives                                                                                          |
 | **GNSS observations**      | RINEX 3 observation parsing with Hatanaka (CRINEX) decoding — raw observation values, carrier phases, pseudoranges, and station positioning from `.crx`/`.rnx` files (Rust NIF)                                                                    |
 | **Reduced orbit**          | Compact fitted mean-element model (circular or eccentric) for fast approximate position, caching, and transport — with source-backed drift reporting (Rust NIF)                                                                                  |
@@ -40,7 +40,7 @@ SGP4/SDP4, coordinate transforms, GNSS positioning, orbit determination, and the
 
 ```elixir
 def deps do
-  [{:orbis, "~> 0.10.0"}]
+  [{:orbis, "~> 0.11.0"}]
 end
 ```
 
@@ -48,11 +48,7 @@ Release packages that include matching GitHub precompiled-NIF assets and
 `checksum-Elixir.Orbis.NIF.exs` download the Rust NIF for common Linux, macOS,
 and Windows targets. Development builds, source releases without a checksum, and
 `ORBIS_BUILD=1` builds compile the NIF locally from Rust. GNSS product fetching
-(`Orbis.GNSS.Data`) additionally needs the optional `:req` dependency:
-
-```elixir
-{:req, "~> 0.5"}
-```
+(`Orbis.GNSS.Data`) uses Orbis's built-in `Req` dependency.
 
 ## Quick Start
 
@@ -220,7 +216,7 @@ sol.dop.pdop          # position dilution of precision
 sol.system_clocks_s   # %{"G" => ..., "E" => ...} — one receiver clock per GNSS
 ```
 
-Products can be fetched and cached (needs the optional `:req` dependency):
+Products can be fetched and cached:
 
 ```elixir
 product = Orbis.GNSS.Data.mgex_sp3(:gfz, ~D[2020-06-24])

@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-06-08
+
 ### Added
 
 - `Orbis.GNSS.PrecisePositioning.solve_fixed_epochs/3` now reports
