@@ -2,3 +2,4 @@
 resolver = "2"
 
 members = ["native/orbis_nif"]
+exclude = ["deps/astrodynamics/native/astrodynamics_native"]
