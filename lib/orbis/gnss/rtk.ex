@@ -569,15 +569,17 @@ defmodule Orbis.GNSS.RTK do
            |> Keyword.put(:ambiguity_offset_m, offsets),
          {:ok, %FixedBaselineSolution{} = sol} <-
            solve_fixed_baseline_epochs(base_position, if_epochs, fixed_opts) do
+      used_wide_lane_cycles = Map.take(wide_lane_cycles, sol.used_sats)
+
       {:ok,
        %{
          sol
-         | wide_lane_ambiguities_cycles: wide_lane_cycles,
+         | wide_lane_ambiguities_cycles: used_wide_lane_cycles,
            metadata:
              Map.merge(sol.metadata, %{
                integer_method: :widelane_narrowlane_lambda,
                wide_lane_fixed: true,
-               wide_lane_ambiguities_cycles: wide_lane_cycles,
+               wide_lane_ambiguities_cycles: used_wide_lane_cycles,
                dropped_cycle_slip_sats: slip_meta.dropped_sats,
                split_cycle_slip_arcs: slip_meta.split_arcs
              })
@@ -995,6 +997,8 @@ defmodule Orbis.GNSS.RTK do
   defp estimate_dual_baseline_wide_lanes(epochs, reference_sat, opts) do
     with {:ok, wl_opts} <- dual_wide_lane_options(opts),
          {:ok, samples} <- dual_wide_lane_samples(epochs, reference_sat) do
+      split_arc? = Keyword.get(opts, :on_cycle_slip, @default_cycle_slip_policy) == :split_arc
+
       samples
       |> Enum.group_by(& &1.ambiguity_id)
       |> Enum.sort_by(fn {ambiguity_id, _samples} -> ambiguity_id end)
@@ -1002,8 +1006,14 @@ defmodule Orbis.GNSS.RTK do
         cycles = Enum.map(grouped, & &1.cycles)
 
         case estimate_dual_wide_lane_integer(ambiguity_id, cycles, wl_opts) do
-          {:ok, fixed} -> {:cont, {:ok, Map.put(acc, ambiguity_id, fixed)}}
-          {:error, _} = err -> {:halt, err}
+          {:ok, fixed} ->
+            {:cont, {:ok, Map.put(acc, ambiguity_id, fixed)}}
+
+          {:error, {:too_few_wide_lane_epochs, _id, _got, _required}} when split_arc? ->
+            {:cont, {:ok, acc}}
+
+          {:error, _} = err ->
+            {:halt, err}
         end
       end)
     end

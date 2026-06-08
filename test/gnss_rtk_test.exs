@@ -652,6 +652,47 @@ defmodule Orbis.GNSS.RTKTest do
       assert position_error(sol.baseline_m, @truth_baseline) < 1.0e-5
     end
 
+    test "split-arc dual-frequency solve drops sats with too-short wide-lane fragments" do
+      epochs =
+        @sat_positions
+        |> Enum.with_index()
+        |> Enum.map(fn {positions, idx} ->
+          {n1_cycles, wide_lane_cycles} =
+            if idx == 0 do
+              {@fixed_cycles, @wide_lane_cycles}
+            else
+              {
+                Map.put(@fixed_cycles, "G02", 9),
+                Map.put(@wide_lane_cycles, "G02", 6)
+              }
+            end
+
+          epoch =
+            synthetic_dual_baseline_epoch(@base, @truth_baseline, positions,
+              epoch: idx,
+              n1_cycles: n1_cycles,
+              wide_lane_cycles: wide_lane_cycles
+            )
+
+          if idx == 1, do: mark_dual_rover_lli(epoch, "G02", 1), else: epoch
+        end)
+
+      assert {:ok, sol} =
+               RTK.solve_widelane_fixed_baseline_epochs(@base, epochs,
+                 reference_satellite_id: "G01",
+                 on_cycle_slip: :split_arc,
+                 wide_lane_min_epochs: 2,
+                 wide_lane_tolerance_cycles: 0.01,
+                 initial_baseline_m: {-40.0, 35.0, 12.0}
+               )
+
+      g02_ids = Enum.filter(sol.used_sats, &String.contains?(&1, "G02"))
+      assert g02_ids == []
+      assert sol.metadata.integer_status == :fixed
+      refute Enum.any?(Map.keys(sol.wide_lane_ambiguities_cycles), &String.contains?(&1, "G02"))
+      assert position_error(sol.baseline_m, @truth_baseline) < 1.0e-5
+    end
+
     test "bad dual-frequency inputs are tagged" do
       epoch =
         synthetic_dual_baseline_epoch(@base, @truth_baseline, hd(@sat_positions),
