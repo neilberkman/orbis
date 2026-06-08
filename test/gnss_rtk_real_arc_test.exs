@@ -54,6 +54,13 @@ defmodule Orbis.GNSS.RTKRealArcTest do
 
     assert {:ok, float} = RTK.solve_float_baseline_epochs(base_arp, epochs, opts)
 
+    assert {:ok, smoothed_float} =
+             RTK.solve_float_baseline_epochs(
+               base_arp,
+               epochs,
+               Keyword.put(opts, :code_smoothing, true)
+             )
+
     float_antenna_error_m = position_error(float.baseline_m, antenna_baseline)
     float_marker_error_m = position_error(float.baseline_m, marker_baseline)
 
@@ -69,6 +76,9 @@ defmodule Orbis.GNSS.RTKRealArcTest do
     # centimetre-scale, while the residual gate records that this is still a
     # batch float solution rather than a production RTK filter.
     assert float.metadata.phase_rms_m < 0.03
+    assert smoothed_float.metadata.code_smoothing
+    assert smoothed_float.metadata.code_rms_m < float.metadata.code_rms_m * 0.5
+    assert position_error(smoothed_float.baseline_m, antenna_baseline) < 0.08
 
     # The SSC coordinates are marker coordinates; the observations are tied to
     # the antenna reference points. Applying the RINEX antenna-height deltas is

@@ -68,6 +68,7 @@ defmodule Orbis.GNSS.RTK do
   @default_integer_ratio_threshold 3.0
   @default_integer_candidate_limit 50_000
   @default_cycle_slip_policy :error
+  @default_hatch_window_cap 100
   @min_elevation_sin 0.05
 
   defmodule FloatBaselineSolution do
@@ -363,6 +364,11 @@ defmodule Orbis.GNSS.RTK do
       measurement sigma by `1 / max(sin(elevation), #{@min_elevation_sin})`
       before propagating the double-difference covariance. Default `false`
       preserves the constant-sigma, transcendental-free solve path.
+    * `:code_smoothing` - when `true`, applies per-receiver/per-ambiguity-arc
+      Hatch carrier smoothing to code observations before forming double
+      differences. Default `false`.
+    * `:hatch_window_cap` - maximum Hatch smoothing window when
+      `:code_smoothing` is enabled (default `#{@default_hatch_window_cap}`).
     * `:max_iterations`, `:position_tolerance_m`,
       `:ambiguity_tolerance_m`.
 
@@ -378,6 +384,8 @@ defmodule Orbis.GNSS.RTK do
          {:ok, normalized_epochs} <- normalize_epochs(epochs),
          {:ok, normalized_epochs, slip_meta} <-
            prepare_epochs_for_cycle_slips(normalized_epochs, opts),
+         {:ok, normalized_epochs, smoothing_meta} <-
+           prepare_epochs_for_code_smoothing(normalized_epochs, opts),
          {:ok, common_sats, _not_common_sats} <- common_epoch_sats(normalized_epochs),
          {:ok, all_sats} <- all_epoch_sats(normalized_epochs),
          :ok <- ensure_baseline_satellites(all_sats),
@@ -412,7 +420,7 @@ defmodule Orbis.GNSS.RTK do
           weights,
           solve_opts,
           [],
-          slip_meta,
+          Map.merge(slip_meta, smoothing_meta),
           1
         )
       end
@@ -1395,6 +1403,88 @@ defmodule Orbis.GNSS.RTK do
 
   defp empty_cycle_slip_meta, do: %{dropped_sats: [], split_arcs: []}
 
+  defp prepare_epochs_for_code_smoothing(epochs, opts) do
+    with {:ok, smoothing} <- rtk_code_smoothing(opts) do
+      case smoothing do
+        :none ->
+          {:ok, epochs, %{code_smoothing: false, code_smoothing_window_cap: nil}}
+
+        {:hatch, cap} ->
+          epochs =
+            epochs
+            |> smooth_receiver_codes(:base, cap)
+            |> smooth_receiver_codes(:rover, cap)
+
+          {:ok, epochs, %{code_smoothing: true, code_smoothing_window_cap: cap}}
+      end
+    end
+  end
+
+  defp rtk_code_smoothing(opts) do
+    case Keyword.get(opts, :code_smoothing, false) do
+      value when value in [false, nil] ->
+        {:ok, :none}
+
+      value when value in [true, :hatch] ->
+        cap = Keyword.get(opts, :hatch_window_cap, @default_hatch_window_cap)
+
+        if is_integer(cap) and cap >= 1 do
+          {:ok, {:hatch, cap}}
+        else
+          {:error, {:invalid_option, :hatch_window_cap}}
+        end
+
+      _other ->
+        {:error, {:invalid_option, :code_smoothing}}
+    end
+  end
+
+  defp smooth_receiver_codes(epochs, receiver, cap) do
+    {smoothed, _states} =
+      Enum.map_reduce(epochs, %{}, fn epoch, states ->
+        {observations, states} =
+          epoch
+          |> receiver_observations(receiver)
+          |> Enum.sort_by(fn {sat, _obs} -> sat end)
+          |> Enum.map_reduce(states, fn {sat, obs}, state_acc ->
+            key = {receiver, obs.ambiguity_id}
+            state = Map.get(state_acc, key)
+            {obs, next_state} = smooth_observation_code(obs, state, cap)
+
+            state_acc =
+              if is_nil(next_state),
+                do: Map.delete(state_acc, key),
+                else: Map.put(state_acc, key, next_state)
+
+            {{sat, obs}, state_acc}
+          end)
+
+        {put_receiver_observations(epoch, receiver, Map.new(observations)), states}
+      end)
+
+    smoothed
+  end
+
+  defp receiver_observations(epoch, :base), do: epoch.base
+  defp receiver_observations(epoch, :rover), do: epoch.rover
+
+  defp put_receiver_observations(epoch, :base, observations), do: %{epoch | base: observations}
+  defp put_receiver_observations(epoch, :rover, observations), do: %{epoch | rover: observations}
+
+  defp smooth_observation_code(%{code_m: code_m, phase_m: phase_m} = obs, state, cap)
+       when is_number(code_m) and is_number(phase_m) do
+    if is_nil(state) or lli_set?(obs.lli) do
+      {%{obs | code_m: code_m}, %{p_smooth: code_m, phase_m: phase_m, window: 1}}
+    else
+      %{p_smooth: prev_smooth, phase_m: prev_phase, window: prev_window} = state
+      n = min(prev_window + 1, cap)
+      p_smooth = code_m / n + (n - 1) / n * (prev_smooth + (phase_m - prev_phase))
+      {%{obs | code_m: p_smooth}, %{p_smooth: p_smooth, phase_m: phase_m, window: n}}
+    end
+  end
+
+  defp smooth_observation_code(obs, _state, _cap), do: {obs, nil}
+
   defp rtk_cycle_slip_policy(opts) do
     case Keyword.get(opts, :on_cycle_slip, @default_cycle_slip_policy) do
       :error -> {:ok, :error}
@@ -2158,7 +2248,9 @@ defmodule Orbis.GNSS.RTK do
            n_observations: length(rows),
            dropped_sats: Enum.uniq(dropped_sats ++ slip_meta.dropped_sats) |> Enum.sort(),
            dropped_cycle_slip_sats: slip_meta.dropped_sats,
-           split_cycle_slip_arcs: slip_meta.split_arcs
+           split_cycle_slip_arcs: slip_meta.split_arcs,
+           code_smoothing: Map.get(slip_meta, :code_smoothing, false),
+           code_smoothing_window_cap: Map.get(slip_meta, :code_smoothing_window_cap)
          }
        }}
     end

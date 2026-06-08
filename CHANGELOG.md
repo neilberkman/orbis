@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `Orbis.GNSS.RTK.solve_float_baseline_epochs/3` and fixed RTK solvers now
+  accept `code_smoothing: true` to apply per-receiver/per-ambiguity-arc Hatch
+  carrier smoothing to code observations before forming double differences.
+  The real Wettzell RTK gate verifies the smoothing reduces code residual RMS
+  while still refusing unsafe integer fixes.
+
 ### Changed
 
 - `Orbis.GNSS.RTK.solve_float_baseline_epochs/3` and fixed RTK solvers now use

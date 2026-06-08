@@ -271,6 +271,39 @@ defmodule Orbis.GNSS.RTKTest do
       assert position_error(weighted.baseline_m, @truth_baseline) < 1.0e-5
     end
 
+    test "can Hatch-smooth code observations before forming double differences" do
+      epochs =
+        @sat_positions
+        |> Enum.with_index()
+        |> Enum.map(fn {positions, idx} ->
+          synthetic_baseline_epoch(@base, @truth_baseline, positions,
+            epoch: idx,
+            ambiguities_m: @ambiguities
+          )
+        end)
+        |> add_rover_code_noise(%{"G02" => [0.6, -0.3, 0.2], "G04" => [-0.5, 0.4, -0.1]})
+
+      assert {:ok, raw} =
+               RTK.solve_float_baseline_epochs(@base, epochs,
+                 reference_satellite_id: "G01",
+                 initial_baseline_m: {-40.0, 35.0, 12.0},
+                 code_sigma_m: 100.0
+               )
+
+      assert {:ok, smoothed} =
+               RTK.solve_float_baseline_epochs(@base, epochs,
+                 reference_satellite_id: "G01",
+                 initial_baseline_m: {-40.0, 35.0, 12.0},
+                 code_sigma_m: 100.0,
+                 code_smoothing: true,
+                 hatch_window_cap: 2
+               )
+
+      assert smoothed.metadata.code_smoothing
+      assert smoothed.metadata.code_smoothing_window_cap == 2
+      assert smoothed.metadata.code_rms_m < raw.metadata.code_rms_m
+    end
+
     test "defaults to an error on LLI cycle slips" do
       [first, second | _] = @sat_positions
 
@@ -390,6 +423,14 @@ defmodule Orbis.GNSS.RTKTest do
 
       assert RTK.solve_float_baseline_epochs(@base, [epoch], elevation_weighting: :bad) ==
                {:error, {:invalid_option, :elevation_weighting}}
+
+      assert RTK.solve_float_baseline_epochs(@base, [epoch], code_smoothing: :bad) ==
+               {:error, {:invalid_option, :code_smoothing}}
+
+      assert RTK.solve_float_baseline_epochs(@base, [epoch],
+               code_smoothing: true,
+               hatch_window_cap: 0
+             ) == {:error, {:invalid_option, :hatch_window_cap}}
     end
   end
 
@@ -785,6 +826,30 @@ defmodule Orbis.GNSS.RTKTest do
       %{satellite_id: ^sat} = obs -> Map.put(obs, :lli, lli)
       obs -> obs
     end)
+  end
+
+  defp add_rover_code_noise(epochs, noise_by_sat) do
+    epochs
+    |> Enum.with_index()
+    |> Enum.map(fn {epoch, idx} ->
+      rover =
+        Enum.map(epoch.rover_observations, fn
+          {sat, code, phase} ->
+            {sat, code + noise_at(noise_by_sat, sat, idx), phase}
+
+          %{satellite_id: sat, code_m: code} = obs ->
+            %{obs | code_m: code + noise_at(noise_by_sat, sat, idx)}
+        end)
+
+      %{epoch | rover_observations: rover}
+    end)
+  end
+
+  defp noise_at(noise_by_sat, sat, idx) do
+    case Map.fetch(noise_by_sat, sat) do
+      {:ok, values} -> Enum.at(values, idx, 0.0)
+      :error -> 0.0
+    end
   end
 
   defp synthetic_baseline_epoch(base, baseline, satellite_positions_m, opts \\ []) do
