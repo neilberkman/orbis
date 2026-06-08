@@ -182,16 +182,13 @@ defmodule Orbis.GNSS.ObservablesTest do
       assert {:error, _reason} = Observables.predict(sp3, "G23", @rx, @epoch)
     end
 
-    # NOTE: the SP3 spline primitive extrapolates rather than reporting a
-    # coverage error, so an out-of-coverage epoch does not produce a tagged
-    # error from `Orbis.GNSS.SP3.position/3`. It instead yields an obviously
-    # non-physical geometry (range far beyond the MEO shell). We assert that
-    # property here honestly; a true coverage gate is a primitive-level
-    # follow-up (would need a crate accessor).
-    test "out-of-coverage epoch extrapolates to a non-physical range (no coverage gate)",
+    # The SP3 primitive gates its node coverage: an epoch well beyond the product
+    # is refused with a tagged error rather than extrapolating the spline to a
+    # non-physical range. Edge epochs within one sampling step still interpolate.
+    test "out-of-coverage epoch is refused instead of extrapolating",
          %{sp3: sp3, high_id: id} do
-      assert {:ok, obs} = Observables.predict(sp3, id, @rx, ~N[2020-06-26 12:00:00])
-      assert obs.geometric_range_m > 2.7e7
+      assert {:error, "epoch out of range"} =
+               Observables.predict(sp3, id, @rx, ~N[2020-06-26 12:00:00])
     end
 
     test "malformed satellite token -> tagged error", %{sp3: sp3} do

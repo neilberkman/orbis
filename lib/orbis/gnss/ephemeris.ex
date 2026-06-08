@@ -118,7 +118,7 @@ defmodule Orbis.GNSS.Ephemeris do
   @spec sample(source(), [String.t()], window()) :: [Row.t()]
   def sample(source, sat_ids, %{from: from, to: to, step_s: step_s})
       when is_list(sat_ids) and is_integer(step_s) and step_s > 0 do
-    if NaiveDateTime.compare(to, from) == :lt do
+    if NaiveDateTime.before?(to, from) do
       raise ArgumentError, "window `to` (#{to}) precedes `from` (#{from})"
     end
 

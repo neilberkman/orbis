@@ -6,12 +6,36 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `Orbis.GNSS.Ephemeris.sample/3` samples a precise (`Orbis.GNSS.SP3`) or
+  broadcast (`Orbis.GNSS.Broadcast`) ephemeris over an epoch window into a
+  unified per-satellite, per-epoch table of ECEF position and clock bias — the
+  same call shape for either source, with out-of-coverage cells reported as an
+  explicit `:no_ephemeris` gap rather than extrapolated.
+- `Orbis.GNSS.Broadcast.position/3` evaluates a single satellite's broadcast
+  ECEF position and clock at an epoch (IS-GPS-200 LNAV, Galileo OS-SIS-ICD,
+  BeiDou BDS-SIS-ICD).
+- `Orbis.GNSS.BroadcastComparison.compare/4` computes per-satellite
+  broadcast-vs-precise orbit and clock differences (3D plus radial/along/cross
+  RMS and max) over a window — the standard broadcast ephemeris accuracy check.
+  GPS LNAV agrees with the IGS precise product at ~1-2 m orbit RMS.
+
 ### Changed
 
 - `Orbis.GNSS.RTK.solve_float_baseline_epochs/3` and fixed RTK solvers now use
   non-reference satellites on the epochs where they are available instead of
   dropping a satellite from the entire arc when it is absent from one epoch. The
   reference satellite is still required across the arc.
+
+### Fixed
+
+- `Orbis.GNSS.SP3.position/3` (and everything built on it, including
+  `Orbis.GNSS.Observables` and the ephemeris sampler) now refuses an epoch
+  beyond the product's node coverage with an `epoch out of range` error instead
+  of silently extrapolating the interpolation spline to a non-physical position.
+  Queries within one sampling step of the ends still interpolate; in-coverage
+  results are bit-for-bit unchanged.
 
 ## [0.11.0] - 2026-06-08
 
