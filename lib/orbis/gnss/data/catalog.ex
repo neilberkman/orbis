@@ -19,11 +19,12 @@ defmodule Orbis.GNSS.Data.Catalog do
 
   | Code   | Center                          | Protocol | Host                |
   |--------|---------------------------------|----------|---------------------|
-  | `:gfz` | GFZ Potsdam (operational rapid) | HTTPS    | `isdc-data.gfz.de`  |
-  | `:cod` | CODE / University of Bern (MGEX)| FTP      | `gssc.esa.int`      |
-  | `:grg` | CNES/CLS (MGEX, final)          | FTP      | `gssc.esa.int`      |
-  | `:wum` | Wuhan University (MGEX, final)  | FTP      | `gssc.esa.int`      |
-  | `:igs` | IGS combined (broadcast / IONEX)| FTP      | `gssc.esa.int`      |
+  | `:gfz`     | GFZ Potsdam (operational rapid) | HTTPS | `isdc-data.gfz.de` |
+  | `:cod`     | CODE / University of Bern (MGEX)| FTP   | `gssc.esa.int`     |
+  | `:grg`     | CNES/CLS (MGEX, final)          | FTP   | `gssc.esa.int`     |
+  | `:wum`     | Wuhan University (MGEX, final)  | FTP   | `gssc.esa.int`     |
+  | `:igs`     | IGS combined (broadcast / IONEX)| FTP   | `gssc.esa.int`     |
+  | `:*_ult`   | IGS/COD/ESA/GFZ/GRG ultra-rapid | FTP   | `gssc.esa.int`     |
 
   The ESA Galileo Science Support Centre (`gssc.esa.int`) mirrors the IGS/MGEX
   archive over anonymous FTP and is the source for the MGEX precise products,
@@ -33,8 +34,11 @@ defmodule Orbis.GNSS.Data.Catalog do
   ## Content types and what each center serves
 
     * `:sp3`, `:clk` — precise orbits and clocks. `:gfz` (operational rapid),
-      `:cod`, `:grg`, `:wum` (MGEX). The GFZ token is `GFZ0OPSRAP`; the MGEX
-      tokens are `COD0MGXFIN`, `GRG0MGXFIN`, `WUM0MGXFIN`.
+      `:cod`, `:grg`, `:wum` (MGEX final), and the ultra-rapid center aliases
+      `:igs_ult`, `:cod_ult`, `:esa_ult`, `:gfz_ult`, `:grg_ult`. The GFZ rapid
+      token is `GFZ0OPSRAP`; the MGEX final tokens are `COD0MGXFIN`,
+      `GRG0MGXFIN`, `WUM0MGXFIN`; the ultra-rapid tokens are `IGS0OPSULT`,
+      `COD0OPSULT`, `ESA0OPSULT`, `GFZ0OPSULT`, and `GRG0OPSULT`.
     * `:nav` — the IGS merged multi-GNSS broadcast navigation file
       (`BRDC00IGS_R_..._MN.rnx`). Only `:igs` publishes it.
     * `:ionex` — the global ionosphere TEC map (`..._GIM.INX`). `:igs` serves the
@@ -45,13 +49,16 @@ defmodule Orbis.GNSS.Data.Catalog do
 
   Precise products and IONEX follow the IGS long-name convention
   `AAAVPPPTTT_YYYYDDDHHMM_LEN_SMP_CNT.EXT` (e.g.
-  `GFZ0OPSRAP_20201760000_01D_15M_ORB.SP3`). Broadcast navigation uses the
+  `GFZ0OPSRAP_20201760000_01D_15M_ORB.SP3`). Ultra-rapid SP3 uses the same
+  shape with a sub-daily issue time and a two-day span, e.g.
+  `IGS0OPSULT_20242470600_02D_15M_ORB.SP3`. Broadcast navigation uses the
   RINEX long-name `SSSSMRCCC_R_YYYYDDDHHMM_LEN_CNT.fmt` with **no** sampling
   field and a lowercase extension (e.g. `BRDC00IGS_R_20201770000_01D_MN.rnx`).
   """
 
   @gps_epoch_jdn 2_444_245
   @seconds_per_day 86_400
+  @opsult_issues ~w(0000 0600 1200 1800)
 
   # Each center definition:
   #   :name      human-readable name
@@ -61,6 +68,9 @@ defmodule Orbis.GNSS.Data.Catalog do
   #   :tokens    %{content => token_prefix} where the token already includes the
   #              solution code (e.g. "GFZ0OPSRAP", "COD0MGXFIN", "BRDC00IGS").
   #   :layouts   %{content => layout} describing the directory tree per content.
+  #   :spans     optional %{content => span}; defaults to "01D".
+  #   :samples   optional default samples per content for convenience builders.
+  #   :issues    optional valid issue-time list for sub-daily products.
   @centers %{
     gfz: %{
       name: "GFZ (Deutsches GeoForschungsZentrum Potsdam) operational AC",
@@ -68,7 +78,8 @@ defmodule Orbis.GNSS.Data.Catalog do
       host: "isdc-data.gfz.de",
       root: "https://isdc-data.gfz.de/gnss/products",
       tokens: %{sp3: "GFZ0OPSRAP", clk: "GFZ0OPSRAP"},
-      layouts: %{sp3: :gfz_class_week, clk: :gfz_class_week}
+      layouts: %{sp3: :gfz_class_week, clk: :gfz_class_week},
+      samples: %{sp3: "15M", clk: "30S"}
     },
     cod: %{
       name: "Center for Orbit Determination in Europe (CODE), University of Bern",
@@ -76,7 +87,8 @@ defmodule Orbis.GNSS.Data.Catalog do
       host: "gssc.esa.int",
       root: "ftp://gssc.esa.int/gnss",
       tokens: %{sp3: "COD0MGXFIN", clk: "COD0MGXFIN", ionex: "COD0OPSFIN"},
-      layouts: %{sp3: :products_week, clk: :products_week, ionex: :ionex_year_doy}
+      layouts: %{sp3: :products_week, clk: :products_week, ionex: :ionex_year_doy},
+      samples: %{sp3: "05M", clk: "30S", ionex: "01H"}
     },
     grg: %{
       name: "CNES/CLS Analysis Center (MGEX)",
@@ -84,7 +96,8 @@ defmodule Orbis.GNSS.Data.Catalog do
       host: "gssc.esa.int",
       root: "ftp://gssc.esa.int/gnss",
       tokens: %{sp3: "GRG0MGXFIN", clk: "GRG0MGXFIN"},
-      layouts: %{sp3: :products_week, clk: :products_week}
+      layouts: %{sp3: :products_week, clk: :products_week},
+      samples: %{sp3: "05M", clk: "30S"}
     },
     wum: %{
       name: "Wuhan University GNSS Analysis Center (MGEX)",
@@ -92,7 +105,63 @@ defmodule Orbis.GNSS.Data.Catalog do
       host: "gssc.esa.int",
       root: "ftp://gssc.esa.int/gnss",
       tokens: %{sp3: "WUM0MGXFIN", clk: "WUM0MGXFIN"},
-      layouts: %{sp3: :products_week, clk: :products_week}
+      layouts: %{sp3: :products_week, clk: :products_week},
+      samples: %{sp3: "05M", clk: "30S"}
+    },
+    igs_ult: %{
+      name: "IGS combined ultra-rapid precise products",
+      protocol: :ftp,
+      host: "gssc.esa.int",
+      root: "ftp://gssc.esa.int/gnss",
+      tokens: %{sp3: "IGS0OPSULT"},
+      layouts: %{sp3: :products_week},
+      spans: %{sp3: "02D"},
+      samples: %{sp3: "15M"},
+      issues: @opsult_issues
+    },
+    cod_ult: %{
+      name: "CODE ultra-rapid precise products",
+      protocol: :ftp,
+      host: "gssc.esa.int",
+      root: "ftp://gssc.esa.int/gnss",
+      tokens: %{sp3: "COD0OPSULT"},
+      layouts: %{sp3: :products_week},
+      spans: %{sp3: "02D"},
+      samples: %{sp3: "05M"},
+      issues: @opsult_issues
+    },
+    esa_ult: %{
+      name: "ESA ultra-rapid precise products",
+      protocol: :ftp,
+      host: "gssc.esa.int",
+      root: "ftp://gssc.esa.int/gnss",
+      tokens: %{sp3: "ESA0OPSULT"},
+      layouts: %{sp3: :products_week},
+      spans: %{sp3: "02D"},
+      samples: %{sp3: "15M"},
+      issues: @opsult_issues
+    },
+    gfz_ult: %{
+      name: "GFZ ultra-rapid precise products",
+      protocol: :ftp,
+      host: "gssc.esa.int",
+      root: "ftp://gssc.esa.int/gnss",
+      tokens: %{sp3: "GFZ0OPSULT"},
+      layouts: %{sp3: :products_week},
+      spans: %{sp3: "02D"},
+      samples: %{sp3: "05M"},
+      issues: @opsult_issues
+    },
+    grg_ult: %{
+      name: "CNES/CLS ultra-rapid precise products",
+      protocol: :ftp,
+      host: "gssc.esa.int",
+      root: "ftp://gssc.esa.int/gnss",
+      tokens: %{sp3: "GRG0OPSULT", clk: "GRG0OPSULT"},
+      layouts: %{sp3: :products_week, clk: :products_week},
+      spans: %{sp3: "02D", clk: "02D"},
+      samples: %{sp3: "05M", clk: "05M"},
+      issues: @opsult_issues
     },
     igs: %{
       name: "IGS Combined Analysis Center",
@@ -100,7 +169,8 @@ defmodule Orbis.GNSS.Data.Catalog do
       host: "gssc.esa.int",
       root: "ftp://gssc.esa.int/gnss",
       tokens: %{nav: "BRDC00IGS", ionex: "IGS0OPSFIN"},
-      layouts: %{nav: :data_daily_year_doy, ionex: :ionex_year_doy}
+      layouts: %{nav: :data_daily_year_doy, ionex: :ionex_year_doy},
+      samples: %{nav: "01D", ionex: "01H"}
     }
   }
 
@@ -152,6 +222,34 @@ defmodule Orbis.GNSS.Data.Catalog do
     case center(code) do
       {:ok, def} -> def.name
       _ -> nil
+    end
+  end
+
+  @doc """
+  The catalog default sampling code for a center/content pair, when one is known.
+
+  Ultra-rapid centers publish different native orbit cadences (`IGS`/`ESA` at
+  15 minutes, several analysis-center products at 5 minutes), so callers should
+  prefer this over a global default when building live-latency products.
+
+  ## Examples
+
+      iex> Orbis.GNSS.Data.Catalog.default_sample(:igs_ult, :sp3)
+      {:ok, "15M"}
+
+      iex> Orbis.GNSS.Data.Catalog.default_sample(:cod_ult, :sp3)
+      {:ok, "05M"}
+  """
+  @spec default_sample(atom(), atom()) ::
+          {:ok, String.t()} | {:error, {:unsupported_product, term()}}
+  def default_sample(center, content) do
+    with {:ok, cdef} <- center(center),
+         {:ok, samples} <- Map.fetch(cdef, :samples),
+         {:ok, sample} <- Map.fetch(samples, content) do
+      {:ok, sample}
+    else
+      :error -> {:error, {:unsupported_product, {:default_sample, {center, content}}}}
+      {:error, _} = err -> err
     end
   end
 
@@ -234,16 +332,104 @@ defmodule Orbis.GNSS.Data.Catalog do
           {:ok, String.t()} | {:error, {:unsupported_product, term()}}
   def canonical_filename(center, content, %Date{} = date, sample)
       when is_atom(center) and is_atom(content) and is_binary(sample) do
-    with {:ok, cdef} <- center(center),
-         {:ok, descriptor} <- content(content),
-         {:ok, token} <- token_for(cdef, content),
-         :ok <- validate_sample(sample) do
-      {:ok, build_filename(descriptor, token, date, sample)}
-    end
+    canonical_filename(center, content, date, sample, nil)
   end
 
   def canonical_filename(_center, _content, _date, _sample),
     do: {:error, {:unsupported_product, :bad_arguments}}
+
+  @doc """
+  Build the canonical filename for a product with an optional sub-daily issue.
+
+  `issue` is `nil` for daily products and an `HHMM` string for ultra-rapid
+  products. Ultra-rapid centers reject unsupported issue times instead of
+  silently rounding.
+
+  ## Examples
+
+      iex> Orbis.GNSS.Data.Catalog.canonical_filename(:igs_ult, :sp3, ~D[2024-09-03], "15M", "0600")
+      {:ok, "IGS0OPSULT_20242470600_02D_15M_ORB.SP3"}
+  """
+  @spec canonical_filename(atom(), atom(), Date.t(), String.t(), String.t() | nil) ::
+          {:ok, String.t()} | {:error, {:unsupported_product, term()}}
+  def canonical_filename(center, content, %Date{} = date, sample, issue)
+      when is_atom(center) and is_atom(content) and is_binary(sample) do
+    with {:ok, cdef} <- center(center),
+         {:ok, descriptor} <- content(content),
+         {:ok, token} <- token_for(cdef, content),
+         :ok <- validate_sample(sample),
+         {:ok, issue} <- issue_for(cdef, issue),
+         {:ok, span} <- span_for(cdef, content) do
+      {:ok, build_filename(descriptor, token, date, sample, issue, span)}
+    end
+  end
+
+  def canonical_filename(_center, _content, _date, _sample, _issue),
+    do: {:error, {:unsupported_product, :bad_arguments}}
+
+  @doc """
+  Return candidate ultra-rapid issues at or before a target epoch, newest first.
+
+  The returned entries are maps with `:date` and `:issue` keys. A previous-day
+  issue is included when it is the newest product not after the target; this is
+  required for early UTC hours when the current-day file has not landed yet.
+
+  ## Examples
+
+      iex> Orbis.GNSS.Data.Catalog.ultra_issue_candidates(:igs_ult, ~N[2024-09-03 13:15:00]) |> Enum.take(3)
+      [%{date: ~D[2024-09-03], issue: "1200"}, %{date: ~D[2024-09-03], issue: "0600"}, %{date: ~D[2024-09-03], issue: "0000"}]
+  """
+  @spec ultra_issue_candidates(atom(), NaiveDateTime.t() | DateTime.t()) ::
+          [%{date: Date.t(), issue: String.t()}] | {:error, {:unsupported_product, term()}}
+  def ultra_issue_candidates(center, target) do
+    with {:ok, cdef} <- center(center),
+         {:ok, issues} <- issues_for(cdef),
+         {:ok, target_ndt} <- normalize_target(target) do
+      target_date = NaiveDateTime.to_date(target_ndt)
+
+      [target_date, Date.add(target_date, -1)]
+      |> Enum.flat_map(fn date ->
+        Enum.map(issues, fn issue ->
+          %{date: date, issue: issue, epoch: issue_epoch(date, issue)}
+        end)
+      end)
+      |> Enum.filter(&(NaiveDateTime.compare(&1.epoch, target_ndt) != :gt))
+      |> Enum.sort_by(& &1.epoch, {:desc, NaiveDateTime})
+      |> Enum.map(&Map.take(&1, [:date, :issue]))
+    end
+  end
+
+  @doc """
+  Resolve the latest available ultra-rapid issue at or before `target`.
+
+  `available` is optional. When provided, it is a list of `%{date:, issue:}` maps
+  or `{date, issue}` tuples representing archive entries known to exist; the
+  resolver picks the newest candidate present in that set. This keeps network
+  probing outside the pure catalog while letting the fetch layer fall back from
+  a missing latest issue to an older one.
+
+  ## Examples
+
+      iex> available = [{~D[2024-09-03], "0000"}, {~D[2024-09-03], "0600"}]
+      iex> Orbis.GNSS.Data.Catalog.latest_ultra_issue(:igs_ult, ~N[2024-09-03 13:00:00], available)
+      {:ok, %{date: ~D[2024-09-03], issue: "0600"}}
+  """
+  @spec latest_ultra_issue(
+          atom(),
+          NaiveDateTime.t() | DateTime.t(),
+          nil | [%{date: Date.t(), issue: String.t()} | {Date.t(), String.t()}]
+        ) ::
+          {:ok, %{date: Date.t(), issue: String.t()}}
+          | {:error, {:unsupported_product, term()}}
+  def latest_ultra_issue(center, target, available \\ nil) do
+    with candidates when is_list(candidates) <- ultra_issue_candidates(center, target),
+         {:ok, available_set} <- available_issue_set(available) do
+      case Enum.find(candidates, &available?(&1, available_set)) do
+        nil -> {:error, {:unsupported_product, :no_available_issue}}
+        issue -> {:ok, issue}
+      end
+    end
+  end
 
   @doc """
   Build the canonical IGS long-name filename for a daily station observation
@@ -311,14 +497,32 @@ defmodule Orbis.GNSS.Data.Catalog do
   @spec archive_url(atom(), atom(), Date.t(), String.t()) ::
           {:ok, String.t()} | {:error, {:unsupported_product, term()}}
   def archive_url(center, content, %Date{} = date, sample) do
+    archive_url(center, content, date, sample, nil)
+  end
+
+  def archive_url(_center, _content, _date, _sample),
+    do: {:error, {:unsupported_product, :bad_arguments}}
+
+  @doc """
+  Build the full, compressed (`.gz`) archive URL for a product with an optional
+  issue time.
+
+  ## Examples
+
+      iex> Orbis.GNSS.Data.Catalog.archive_url(:cod_ult, :sp3, ~D[2024-09-03], "05M", "0600")
+      {:ok, "ftp://gssc.esa.int/gnss/products/2330/COD0OPSULT_20242470600_02D_05M_ORB.SP3.gz"}
+  """
+  @spec archive_url(atom(), atom(), Date.t(), String.t(), String.t() | nil) ::
+          {:ok, String.t()} | {:error, {:unsupported_product, term()}}
+  def archive_url(center, content, %Date{} = date, sample, issue) do
     with {:ok, cdef} <- center(center),
-         {:ok, filename} <- canonical_filename(center, content, date, sample),
+         {:ok, filename} <- canonical_filename(center, content, date, sample, issue),
          {:ok, layout} <- layout_for(cdef, content) do
       {:ok, "#{cdef.root}/#{dir_path(layout, date)}/#{filename}.gz"}
     end
   end
 
-  def archive_url(_center, _content, _date, _sample),
+  def archive_url(_center, _content, _date, _sample, _issue),
     do: {:error, {:unsupported_product, :bad_arguments}}
 
   @doc """
@@ -342,15 +546,17 @@ defmodule Orbis.GNSS.Data.Catalog do
 
   # --- filename construction -----------------------------------------------
 
-  defp build_filename(%{kind: :sampled, code: code, ext: ext}, token, date, sample) do
-    "#{token}_#{date_block(date)}_01D_#{sample}_#{code}.#{ext}"
+  defp build_filename(%{kind: :sampled, code: code, ext: ext}, token, date, sample, issue, span) do
+    "#{token}_#{date_block(date, issue)}_#{span}_#{sample}_#{code}.#{ext}"
   end
 
-  defp build_filename(%{kind: :nav, code: code, ext: ext}, token, date, _sample) do
-    "#{token}_R_#{date_block(date)}_01D_#{code}.#{ext}"
+  defp build_filename(%{kind: :nav, code: code, ext: ext}, token, date, _sample, _issue, span) do
+    "#{token}_R_#{date_block(date, nil)}_#{span}_#{code}.#{ext}"
   end
 
-  defp date_block(%Date{} = date), do: "#{date.year}#{pad3(day_of_year(date))}0000"
+  defp date_block(%Date{} = date), do: date_block(date, nil)
+  defp date_block(%Date{} = date, nil), do: date_block(date, "0000")
+  defp date_block(%Date{} = date, issue), do: "#{date.year}#{pad3(day_of_year(date))}#{issue}"
 
   defp token_for(%{tokens: tokens}, content) do
     case Map.fetch(tokens, content) do
@@ -365,6 +571,67 @@ defmodule Orbis.GNSS.Data.Catalog do
       :error -> {:error, {:unsupported_product, {:content_not_served, content}}}
     end
   end
+
+  defp span_for(cdef, content) do
+    {:ok, get_in(cdef, [:spans, content]) || "01D"}
+  end
+
+  defp issue_for(%{issues: issues}, issue) when is_binary(issue) do
+    with :ok <- validate_issue(issue) do
+      if issue in issues do
+        {:ok, issue}
+      else
+        {:error, {:unsupported_product, {:issue, issue}}}
+      end
+    end
+  end
+
+  defp issue_for(%{issues: _issues}, nil), do: {:error, {:unsupported_product, :missing_issue}}
+
+  defp issue_for(_cdef, nil), do: {:ok, nil}
+
+  defp issue_for(_cdef, issue), do: {:error, {:unsupported_product, {:issue, issue}}}
+
+  defp issues_for(%{issues: issues}), do: {:ok, issues}
+  defp issues_for(_cdef), do: {:error, {:unsupported_product, :not_ultra_rapid}}
+
+  defp normalize_target(%DateTime{} = target), do: {:ok, DateTime.to_naive(target)}
+  defp normalize_target(%NaiveDateTime{} = target), do: {:ok, target}
+  defp normalize_target(_target), do: {:error, {:unsupported_product, :bad_target}}
+
+  defp issue_epoch(date, issue) do
+    {hour, minute} = parse_issue!(issue)
+    NaiveDateTime.new!(date, Time.new!(hour, minute, 0))
+  end
+
+  defp available_issue_set(nil), do: {:ok, nil}
+
+  defp available_issue_set(available) when is_list(available) do
+    available
+    |> Enum.reduce_while({:ok, MapSet.new()}, fn entry, {:ok, acc} ->
+      case normalize_available_issue(entry) do
+        {:ok, key} -> {:cont, {:ok, MapSet.put(acc, key)}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
+
+  defp available_issue_set(_available),
+    do: {:error, {:unsupported_product, :bad_available_issues}}
+
+  defp normalize_available_issue({%Date{} = date, issue}) when is_binary(issue) do
+    with :ok <- validate_issue(issue), do: {:ok, {date, issue}}
+  end
+
+  defp normalize_available_issue(%{date: %Date{} = date, issue: issue}) when is_binary(issue) do
+    with :ok <- validate_issue(issue), do: {:ok, {date, issue}}
+  end
+
+  defp normalize_available_issue(_entry),
+    do: {:error, {:unsupported_product, :bad_available_issue}}
+
+  defp available?(_candidate, nil), do: true
+  defp available?(%{date: date, issue: issue}, set), do: MapSet.member?(set, {date, issue})
 
   # --- directory layouts ---------------------------------------------------
 
@@ -391,6 +658,29 @@ defmodule Orbis.GNSS.Data.Catalog do
   defp validate_sample(s), do: bad_sample(s)
 
   defp bad_sample(s), do: {:error, {:unsupported_product, {:sample, s}}}
+
+  defp validate_issue(<<_::binary-size(4)>> = issue) do
+    if String.match?(issue, ~r/\A[0-9]{4}\z/) do
+      {hour, minute} = parse_issue!(issue)
+
+      if hour in 0..23 and minute in 0..59 do
+        :ok
+      else
+        bad_issue(issue)
+      end
+    else
+      bad_issue(issue)
+    end
+  end
+
+  defp validate_issue(issue), do: bad_issue(issue)
+
+  defp bad_issue(issue), do: {:error, {:unsupported_product, {:issue, issue}}}
+
+  defp parse_issue!(issue) do
+    <<hh::binary-size(2), mm::binary-size(2)>> = issue
+    {String.to_integer(hh), String.to_integer(mm)}
+  end
 
   # A RINEX 3 site id is a 9-character SSSSMRCCC token (4-char monument, marker,
   # receiver, 3-char ISO country), upper-case alphanumeric. Validating it keeps

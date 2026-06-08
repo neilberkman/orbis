@@ -63,8 +63,51 @@ defmodule Orbis.GNSS.Data.ProductTest do
       assert Data.mgex_ionex(:igs, ~D[2024-06-24]).sample == "01H"
     end
 
+    test "ops_ultra_sp3/3 uses issue time and per-center sample defaults" do
+      igs = Data.ops_ultra_sp3(:igs_ult, ~D[2024-09-03], issue: "0600")
+      cod = Data.ops_ultra_sp3(:cod_ult, ~D[2024-09-03], issue: "0600")
+
+      assert igs.sample == "15M"
+      assert igs.issue == "0600"
+      assert cod.sample == "05M"
+
+      assert {:ok, "IGS0OPSULT_20242470600_02D_15M_ORB.SP3"} =
+               Product.canonical_filename(igs)
+
+      assert {:ok, "COD0OPSULT_20242470600_02D_05M_ORB.SP3"} =
+               Product.canonical_filename(cod)
+    end
+
+    test "ops_ultra_sp3/3 resolves latest available issue for a target timestamp" do
+      available = [{~D[2024-09-03], "0000"}, {~D[2024-09-03], "0600"}]
+      p = Data.ops_ultra_sp3(:cod_ult, ~N[2024-09-03 13:00:00], available_issues: available)
+
+      assert p.date == ~D[2024-09-03]
+      assert p.issue == "0600"
+
+      assert {:ok, "COD0OPSULT_20242470600_02D_05M_ORB.SP3"} =
+               Product.canonical_filename(p)
+    end
+
+    test "ops_ultra_clk/3 builds the cataloged ultra clock product" do
+      p = Data.ops_ultra_clk(:grg_ult, ~D[2024-09-03], issue: "0600")
+
+      assert p.content == :clk
+      assert p.sample == "05M"
+      assert {:ok, "GRG0OPSULT_20242470600_02D_05M_CLK.CLK"} = Product.canonical_filename(p)
+    end
+
+    test "product/5 accepts product-specific issue options" do
+      assert {:ok, p} = Data.product(:igs_ult, :sp3, ~D[2024-09-03], "15M", issue: "0600")
+      assert p.issue == "0600"
+      assert {:ok, "IGS0OPSULT_20242470600_02D_15M_ORB.SP3"} = Product.canonical_filename(p)
+    end
+
     test "the sample override is honored" do
       assert Data.mgex_sp3(:cod, ~D[2020-06-24], sample: "15M").sample == "15M"
+
+      assert Data.ops_ultra_sp3(:igs_ult, ~D[2024-09-03], issue: "0600", sample: "05M").sample ==
+               "05M"
     end
 
     test "a bang builder raises on an invalid product" do

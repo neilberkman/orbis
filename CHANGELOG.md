@@ -6,6 +6,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-06-08
+
+### Added
+
+- `Orbis.GNSS.Data.ops_ultra_sp3/3` and `ops_ultra_clk/3` add the ultra-rapid
+  precise-product tier to the offline-safe catalog/fetch layer. The catalog now
+  derives anonymous GSSC archive names and URLs for `IGS0OPSULT`, `COD0OPSULT`,
+  `ESA0OPSULT`, `GFZ0OPSULT`, and `GRG0OPSULT` SP3 products (plus `GRG0OPSULT`
+  clocks), including sub-daily issue times, `02D` spans, per-center sampling,
+  and latest-available issue fallback before a target epoch.
+- `Orbis.GNSS.Data.fetch_merged_sp3/3` fetches the same SP3 product from several
+  centers in precedence order, tolerates not-yet-published or missing centers,
+  and returns one merged `Orbis.GNSS.SP3` plus provenance and merge-audit
+  metadata. One available center is returned as a flagged single-source result;
+  zero available centers returns `{:error, {:no_products, reasons}}`; centers
+  that cannot be combined (mismatched time scale / coordinate-system frame)
+  return `{:error, {:incompatible_sources, %{centers:, reason:}}}` rather than
+  leaking a raw merge error.
+
 ## [0.12.0] - 2026-06-08
 
 ### Added

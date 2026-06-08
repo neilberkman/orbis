@@ -31,6 +31,9 @@ defmodule Orbis.GNSS.Data do
     * `:gfz` — GFZ operational rapid SP3/CLK over HTTPS (`isdc-data.gfz.de`)
     * `:cod`, `:grg`, `:wum` — CODE / CNES-CLS / Wuhan MGEX precise SP3/CLK over
       anonymous FTP (ESA GSSC mirror, `gssc.esa.int`); `:cod` also serves IONEX
+    * `:igs_ult`, `:cod_ult`, `:esa_ult`, `:gfz_ult`, `:grg_ult` — ultra-rapid
+      `OPSULT` SP3 products over anonymous FTP for current-day/live-latency use
+      (`:grg_ult` also serves ultra clocks)
     * `:igs` — the IGS merged broadcast navigation file (`:nav`) and the combined
       global ionosphere map (`:ionex`), over FTP
 
@@ -123,6 +126,13 @@ defmodule Orbis.GNSS.Data do
 
   @typedoc "A fetch error, always a tagged tuple. See the module docs."
   @type error :: {:error, term()}
+  @merge_opts ~w(
+    position_tolerance_m
+    clock_tolerance_s
+    min_agree
+    clock_min_common
+    combine
+  )a
 
   # --- product builders ----------------------------------------------------
 
@@ -149,6 +159,43 @@ defmodule Orbis.GNSS.Data do
   @spec mgex_clk(atom(), Date.t(), keyword()) :: Product.t()
   def mgex_clk(center, %Date{} = date, opts \\ []),
     do: build!(center, :clk, date, Keyword.get(opts, :sample, "30S"))
+
+  @doc """
+  Build an ultra-rapid OPS SP3 product.
+
+  Ultra-rapid products are two-day (`02D`) files issued several times per day,
+  with roughly one observed day and one predicted day. Pass a `Date` with an
+  explicit `issue:` (defaults to `"0000"`), or pass a `NaiveDateTime` /
+  `DateTime` target and Orbis will select the latest issue not after that time.
+  If `:available_issues` is supplied, selection falls back to the newest issue
+  present in that list.
+
+  ## Examples
+
+      iex> p = Orbis.GNSS.Data.ops_ultra_sp3(:igs_ult, ~D[2024-09-03], issue: "0600")
+      iex> Orbis.GNSS.Data.Product.canonical_filename(p)
+      {:ok, "IGS0OPSULT_20242470600_02D_15M_ORB.SP3"}
+
+      iex> available = [{~D[2024-09-03], "0000"}, {~D[2024-09-03], "0600"}]
+      iex> p = Orbis.GNSS.Data.ops_ultra_sp3(:cod_ult, ~N[2024-09-03 13:00:00], available_issues: available)
+      iex> Orbis.GNSS.Data.Product.canonical_filename(p)
+      {:ok, "COD0OPSULT_20242470600_02D_05M_ORB.SP3"}
+  """
+  @spec ops_ultra_sp3(atom(), Date.t() | NaiveDateTime.t() | DateTime.t(), keyword()) ::
+          Product.t()
+  def ops_ultra_sp3(center, date_or_target, opts \\ []),
+    do: ultra_product!(center, :sp3, date_or_target, opts)
+
+  @doc """
+  Build an ultra-rapid OPS clock product.
+
+  The anonymous GSSC ultra clock line currently covered by the catalog is
+  `:grg_ult` (`GRG0OPSULT`). Issue-time behavior matches `ops_ultra_sp3/3`.
+  """
+  @spec ops_ultra_clk(atom(), Date.t() | NaiveDateTime.t() | DateTime.t(), keyword()) ::
+          Product.t()
+  def ops_ultra_clk(center, date_or_target, opts \\ []),
+    do: ultra_product!(center, :clk, date_or_target, opts)
 
   @doc """
   Build a broadcast-navigation (merged multi-GNSS RINEX NAV) product.
@@ -217,8 +264,17 @@ defmodule Orbis.GNSS.Data do
   def product(center, content, %Date{} = date, sample),
     do: Product.new(center, content, date, sample)
 
-  defp build!(center, content, date, sample) do
-    case Product.new(center, content, date, sample) do
+  @doc """
+  Build a `Product` for any center/content/date/sample with product-specific
+  options such as `issue: "0600"` for ultra-rapid products.
+  """
+  @spec product(atom(), atom(), Date.t(), String.t(), keyword()) ::
+          {:ok, Product.t()} | {:error, {:unsupported_product, term()}}
+  def product(center, content, %Date{} = date, sample, opts),
+    do: Product.new(center, content, date, sample, opts)
+
+  defp build!(center, content, date, sample, opts \\ []) do
+    case Product.new(center, content, date, sample, opts) do
       {:ok, p} ->
         p
 
@@ -226,6 +282,57 @@ defmodule Orbis.GNSS.Data do
         raise ArgumentError, "invalid GNSS product: #{inspect(reason)}"
     end
   end
+
+  defp ultra_product!(center, content, %Date{} = date, opts) do
+    sample = Keyword.get(opts, :sample) || default_sample!(center, content)
+    issue = Keyword.get(opts, :issue, "0000")
+    build!(center, content, date, sample, issue: issue)
+  end
+
+  defp ultra_product!(center, content, %NaiveDateTime{} = target, opts) do
+    sample = Keyword.get(opts, :sample) || default_sample!(center, content)
+    {date, issue} = resolve_ultra_issue!(center, target, opts)
+    build!(center, content, date, sample, issue: issue)
+  end
+
+  defp ultra_product!(center, content, %DateTime{} = target, opts) do
+    sample = Keyword.get(opts, :sample) || default_sample!(center, content)
+    {date, issue} = resolve_ultra_issue!(center, target, opts)
+    build!(center, content, date, sample, issue: issue)
+  end
+
+  defp ultra_product!(center, content, _target, _opts) do
+    raise ArgumentError,
+          "invalid ultra GNSS product: #{inspect({:bad_target, center, content})}"
+  end
+
+  defp resolve_ultra_issue!(center, target, opts) do
+    case Keyword.fetch(opts, :issue) do
+      {:ok, issue} ->
+        {target_date(target), issue}
+
+      :error ->
+        available = Keyword.get(opts, :available_issues)
+
+        case Catalog.latest_ultra_issue(center, target, available) do
+          {:ok, %{date: date, issue: issue}} ->
+            {date, issue}
+
+          {:error, reason} ->
+            raise ArgumentError, "invalid ultra GNSS product: #{inspect(reason)}"
+        end
+    end
+  end
+
+  defp default_sample!(center, content) do
+    case Catalog.default_sample(center, content) do
+      {:ok, sample} -> sample
+      {:error, reason} -> raise ArgumentError, "invalid GNSS product: #{inspect(reason)}"
+    end
+  end
+
+  defp target_date(%DateTime{} = target), do: target |> DateTime.to_date()
+  defp target_date(%NaiveDateTime{} = target), do: NaiveDateTime.to_date(target)
 
   # --- fetch ---------------------------------------------------------------
 
@@ -362,6 +469,290 @@ defmodule Orbis.GNSS.Data do
   def observations(%Product{content: :obs} = product, opts \\ []) do
     with {:ok, path} <- fetch(product, opts), do: Observations.load(path)
   end
+
+  @doc """
+  Fetch SP3 products from several centers and merge the available ones.
+
+  `centers` are tried in precedence order. A missing or not-yet-published center
+  is recorded in the returned report and does not abort the call. For
+  ultra-rapid centers and timestamp targets, Orbis tries issue candidates newest
+  to oldest until it finds a cached/downloadable product, so callers near the
+  publication frontier can fall back from a not-yet-landed latest issue.
+
+  Returns:
+
+    * `{:ok, merged, report}` when at least one center contributes. With one
+      contributor, `merged` is that source SP3 and `report.single_product?` is
+      `true`.
+    * `{:error, {:no_products, reasons}}` when every center is absent or fails.
+    * `{:error, {:incompatible_sources, %{centers:, reason:}}}` when the fetched
+      centers exist but cannot be combined (their SP3 headers disagree on time
+      scale or coordinate system, which the merge refuses rather than mixing
+      frames).
+
+  The report includes `:contributors`, `:absent`, `:source_count`,
+  `:single_product?`, and the normal SP3 merge audit keys (`:quarantined`,
+  `:single_source`, `:position_outliers`).
+
+  ## Examples
+
+      iex> cache = System.tmp_dir!()
+      iex> {:error, {:no_products, reasons}} =
+      ...>   Orbis.GNSS.Data.fetch_merged_sp3(~D[2024-09-03], [:igs_ult], offline: true, cache_dir: cache)
+      iex> [%{center: :igs_ult, reason: :offline_miss}] = reasons
+  """
+  @spec fetch_merged_sp3(Date.t() | NaiveDateTime.t() | DateTime.t(), [atom()], keyword()) ::
+          {:ok, SP3.t(), map()}
+          | {:error, {:no_products, [map()]}}
+          | {:error, {:incompatible_sources, map()}}
+          | error()
+  def fetch_merged_sp3(target, centers, opts \\ []) when is_list(centers) do
+    centers
+    |> Enum.map(&fetch_center_sp3(&1, target, opts))
+    |> merge_available_sp3(opts)
+  end
+
+  defp fetch_center_sp3(center, target, opts) do
+    case sp3_candidates(center, target, opts) do
+      {:ok, candidates} ->
+        fetch_first_sp3_candidate(center, candidates, opts, [])
+
+      {:error, reason} ->
+        {:absent, absence(center, nil, reason, [])}
+    end
+  end
+
+  defp fetch_first_sp3_candidate(center, [], _opts, attempts) do
+    attempts = Enum.reverse(attempts)
+    final_attempt = List.last(attempts)
+
+    {:absent,
+     %{
+       center: center,
+       filename: if(final_attempt, do: final_attempt.filename),
+       reason: if(final_attempt, do: final_attempt.reason, else: :no_candidate),
+       attempts: attempts
+     }}
+  end
+
+  defp fetch_first_sp3_candidate(center, [product | rest], opts, attempts) do
+    filename = product_filename(product)
+
+    case sp3(product, opts) do
+      {:ok, sp3} ->
+        {:ok,
+         %{
+           center: center,
+           product: product,
+           filename: filename,
+           issue: product.issue,
+           date: product.date,
+           sp3: sp3,
+           attempts: Enum.reverse(attempts)
+         }}
+
+      {:error, reason} ->
+        attempt = %{filename: filename, reason: normalize_absence_reason(reason)}
+        fetch_first_sp3_candidate(center, rest, opts, [attempt | attempts])
+    end
+  end
+
+  defp sp3_candidates(center, target, opts) do
+    cond do
+      ultra_timestamp_target?(center, target) ->
+        ultra_sp3_candidates(center, target, opts)
+
+      match?(%Date{}, target) ->
+        dated_sp3_candidate(center, target, opts)
+
+      match?(%NaiveDateTime{}, target) or match?(%DateTime{}, target) ->
+        dated_sp3_candidate(center, target_date(target), opts)
+
+      true ->
+        {:error, {:unsupported_product, :bad_target}}
+    end
+  end
+
+  defp ultra_timestamp_target?(center, %DateTime{} = target),
+    do: ultra_timestamp_target?(center, DateTime.to_naive(target))
+
+  defp ultra_timestamp_target?(center, %NaiveDateTime{} = target) do
+    match?(candidates when is_list(candidates), Catalog.ultra_issue_candidates(center, target))
+  end
+
+  defp ultra_timestamp_target?(_center, _target), do: false
+
+  defp ultra_sp3_candidates(center, target, opts) do
+    with candidates when is_list(candidates) <- Catalog.ultra_issue_candidates(center, target),
+         {:ok, available} <- available_issues_for(center, opts) do
+      built =
+        candidates
+        |> Enum.filter(&candidate_available?(&1, available))
+        |> Enum.reduce_while({:ok, []}, fn %{date: date, issue: issue}, {:ok, acc} ->
+          case ultra_product_for_issue(center, date, issue, opts) do
+            {:ok, product} -> {:cont, {:ok, [product | acc]}}
+            {:error, _} = err -> {:halt, err}
+          end
+        end)
+
+      case built do
+        {:ok, products} -> {:ok, Enum.reverse(products)}
+        {:error, _} = err -> err
+      end
+    else
+      {:error, _} = err -> err
+    end
+  end
+
+  defp dated_sp3_candidate(center, %Date{} = date, opts) do
+    with {:ok, sample} <- sample_for(center, :sp3, opts) do
+      issue =
+        cond do
+          Keyword.has_key?(opts, :issue) -> Keyword.fetch!(opts, :issue)
+          ultra_center?(center) -> "0000"
+          true -> nil
+        end
+
+      case Product.new(center, :sp3, date, sample, maybe_issue(issue)) do
+        {:ok, product} -> {:ok, [product]}
+        {:error, _} = err -> err
+      end
+    end
+  end
+
+  defp ultra_product_for_issue(center, date, issue, opts) do
+    with {:ok, sample} <- sample_for(center, :sp3, opts) do
+      Product.new(center, :sp3, date, sample, issue: issue)
+    end
+  end
+
+  defp sample_for(center, content, opts) do
+    case Keyword.fetch(opts, :sample) do
+      {:ok, sample} -> {:ok, sample}
+      :error -> Catalog.default_sample(center, content)
+    end
+  end
+
+  defp maybe_issue(nil), do: []
+  defp maybe_issue(issue), do: [issue: issue]
+
+  defp available_issues_for(center, opts) do
+    case Keyword.fetch(opts, :available_issues) do
+      :error ->
+        {:ok, nil}
+
+      {:ok, available} when is_map(available) ->
+        {:ok, available |> Map.get(center) |> normalize_available_issues()}
+
+      {:ok, available} when is_list(available) ->
+        {:ok, normalize_available_issues(available)}
+
+      {:ok, _bad} ->
+        {:error, {:unsupported_product, :bad_available_issues}}
+    end
+  end
+
+  defp normalize_available_issues(nil), do: nil
+
+  defp normalize_available_issues(available) do
+    Enum.map(available, fn
+      {%Date{} = date, issue} when is_binary(issue) -> {date, issue}
+      %{date: %Date{} = date, issue: issue} when is_binary(issue) -> {date, issue}
+      other -> other
+    end)
+  end
+
+  defp candidate_available?(_candidate, nil), do: true
+
+  defp candidate_available?(candidate, available),
+    do: {candidate.date, candidate.issue} in available
+
+  defp ultra_center?(center) do
+    match?(
+      candidates when is_list(candidates),
+      Catalog.ultra_issue_candidates(center, ~N[2024-01-01 00:00:00])
+    )
+  end
+
+  defp merge_available_sp3(results, opts) do
+    contributors = for {:ok, info} <- results, do: info
+    absent = for {:absent, info} <- results, do: info
+
+    case contributors do
+      [] ->
+        {:error, {:no_products, absent}}
+
+      [one] ->
+        {:ok, one.sp3, report(contributors, absent, false, empty_merge_report())}
+
+      many ->
+        sources = Enum.map(many, & &1.sp3)
+
+        case SP3.merge(sources, Keyword.take(opts, @merge_opts)) do
+          {:ok, merged, merge_report} ->
+            {:ok, merged, report(contributors, absent, true, merge_report)}
+
+          # The fetched centers exist but cannot be combined — e.g. their SP3
+          # headers disagree on time scale or coordinate system, which the merge
+          # refuses rather than mixing frames. Surface a tagged reason with the
+          # involved centers instead of leaking the raw merge error.
+          {:error, reason} ->
+            {:error,
+             {:incompatible_sources,
+              %{centers: Enum.map(contributors, & &1.center), reason: reason}}}
+        end
+    end
+  end
+
+  defp report(contributors, absent, merged?, merge_report) do
+    merge_report
+    |> Map.merge(%{
+      contributors: Enum.map(contributors, &contributor_report/1),
+      absent: absent,
+      source_count: length(contributors),
+      single_product?: length(contributors) == 1,
+      merged?: merged?
+    })
+  end
+
+  defp empty_merge_report do
+    %{quarantined: [], single_source: [], position_outliers: []}
+  end
+
+  defp contributor_report(info) do
+    %{
+      center: info.center,
+      filename: info.filename,
+      date: info.date,
+      issue: info.issue,
+      attempts: info.attempts
+    }
+  end
+
+  defp absence(center, product, reason, attempts) do
+    %{
+      center: center,
+      filename: product_filename(product),
+      reason: normalize_absence_reason(reason),
+      attempts: attempts
+    }
+  end
+
+  defp product_filename(nil), do: nil
+
+  defp product_filename(product) do
+    case Product.canonical_filename(product) do
+      {:ok, filename} -> filename
+      _ -> nil
+    end
+  end
+
+  defp normalize_absence_reason({:file_not_found, _}), do: :not_published
+  defp normalize_absence_reason({:offline_miss, _}), do: :offline_miss
+  defp normalize_absence_reason({:http_status, status}), do: {:http_status, status}
+  defp normalize_absence_reason({:checksum_mismatch, _expected, _got}), do: :checksum
+  defp normalize_absence_reason({:unsupported_product, _} = reason), do: reason
+  defp normalize_absence_reason(reason), do: reason
 
   # --- option resolution ---------------------------------------------------
 

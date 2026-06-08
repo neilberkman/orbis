@@ -1,13 +1,15 @@
 defmodule Orbis.GNSS.SP3MergeTest do
   use ExUnit.Case, async: true
 
+  alias Orbis.GNSS.Data
+  alias Orbis.GNSS.Data.Cache
   alias Orbis.GNSS.SP3
 
   # Build a single-epoch SP3-c buffer from explicit
   # `{satellite_token, [x_km, y_km, z_km], clock_us | nil}` records, so each test
   # controls which satellites a "center" reports and where. Mirrors the crate's
   # `sp3_records` test helper.
-  defp sp3_records(records) do
+  defp sp3_bytes(records, coordinate_system \\ "IGS14") do
     n = length(records)
 
     sats =
@@ -15,7 +17,7 @@ defmodule Orbis.GNSS.SP3MergeTest do
         String.duplicate("  0", 17 - n)
 
     header = [
-      "#cP2020  6 24  0  0  0.00000000       1 ORBIT IGS14 FIT  TST",
+      "#cP2020  6 24  0  0  0.00000000       1 ORBIT #{coordinate_system} FIT  TST",
       "## 2111 432000.00000000   900.00000000 59024 0.0000000000000",
       "+   #{String.pad_leading(Integer.to_string(n), 2)}   #{sats}",
       "++         0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0",
@@ -35,11 +37,23 @@ defmodule Orbis.GNSS.SP3MergeTest do
         "P" <> sat <> fmt(x) <> fmt(y) <> fmt(z) <> fmt(c)
       end)
 
-    {:ok, sp3} = SP3.parse(Enum.join(header ++ recs ++ ["EOF", ""], "\n"))
+    Enum.join(header ++ recs ++ ["EOF", ""], "\n")
+  end
+
+  defp sp3_records(records) do
+    {:ok, sp3} = SP3.parse(sp3_bytes(records))
     sp3
   end
 
   defp fmt(v), do: :io_lib.format(~c"~14.6f", [v]) |> IO.iodata_to_binary()
+
+  defp seed(cache_dir, product, bytes) do
+    {:ok, filename} = Data.Product.canonical_filename(product)
+    {:ok, path} = Cache.path_for(cache_dir, filename)
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, bytes)
+    path
+  end
 
   describe "merge/2" do
     test "union coverage: merged product covers a satellite a center is missing" do
@@ -64,6 +78,45 @@ defmodule Orbis.GNSS.SP3MergeTest do
 
       assert report.quarantined == []
       # G03 had a single source (index 0) -> carried through, recorded.
+      assert [%{satellite: "G03", sources: [0]}] = report.single_source
+    end
+
+    test "ultra-rapid products loaded through the fetch cache compose with merge" do
+      cache_dir =
+        Path.join(
+          System.tmp_dir!(),
+          "orbis_sp3_ultra_merge_#{System.unique_integer([:positive])}"
+        )
+
+      on_exit(fn -> File.rm_rf(cache_dir) end)
+
+      igs = Data.ops_ultra_sp3(:igs_ult, ~D[2024-09-03], issue: "0600")
+      cod = Data.ops_ultra_sp3(:cod_ult, ~D[2024-09-03], issue: "0600")
+
+      seed(
+        cache_dir,
+        igs,
+        sp3_bytes([
+          {"G01", [15000.0, -20000.0, 5000.0], 100.0},
+          {"G02", [16000.0, -21000.0, 6000.0], 200.0},
+          {"G03", [17000.0, -22000.0, 7000.0], 300.0}
+        ])
+      )
+
+      seed(
+        cache_dir,
+        cod,
+        sp3_bytes([
+          {"G01", [15000.0, -20000.0, 5000.0], 100.0},
+          {"G02", [16000.0, -21000.0, 6000.0], 200.0}
+        ])
+      )
+
+      assert {:ok, a} = Data.sp3(igs, offline: true, cache_dir: cache_dir)
+      assert {:ok, b} = Data.sp3(cod, offline: true, cache_dir: cache_dir)
+      assert {:ok, merged, report} = SP3.merge([a, b])
+
+      assert Enum.sort(SP3.satellite_ids(merged)) == ["G01", "G02", "G03"]
       assert [%{satellite: "G03", sources: [0]}] = report.single_source
     end
 
@@ -92,6 +145,159 @@ defmodule Orbis.GNSS.SP3MergeTest do
       assert "G01" in SP3.satellite_ids(merged)
       assert [%{satellite: "G01", sources: [2]}] = report.position_outliers
       assert report.quarantined == []
+    end
+  end
+
+  describe "Data.fetch_merged_sp3/3" do
+    setup do
+      cache_dir =
+        Path.join(
+          System.tmp_dir!(),
+          "orbis_fetch_merged_sp3_#{System.unique_integer([:positive])}"
+        )
+
+      on_exit(fn -> File.rm_rf(cache_dir) end)
+      {:ok, cache_dir: cache_dir}
+    end
+
+    test "all centers present: merges union coverage and reports contributors", %{
+      cache_dir: cache_dir
+    } do
+      igs = Data.ops_ultra_sp3(:igs_ult, ~D[2024-09-03], issue: "0600")
+      cod = Data.ops_ultra_sp3(:cod_ult, ~D[2024-09-03], issue: "0600")
+
+      seed(
+        cache_dir,
+        igs,
+        sp3_bytes([
+          {"G01", [15000.0, -20000.0, 5000.0], 100.0},
+          {"G03", [17000.0, -22000.0, 7000.0], 300.0}
+        ])
+      )
+
+      seed(
+        cache_dir,
+        cod,
+        sp3_bytes([
+          {"G01", [15000.0, -20000.0, 5000.0], 100.0},
+          {"G02", [16000.0, -21000.0, 6000.0], 200.0}
+        ])
+      )
+
+      assert {:ok, merged, report} =
+               Data.fetch_merged_sp3(~D[2024-09-03], [:igs_ult, :cod_ult],
+                 issue: "0600",
+                 offline: true,
+                 cache_dir: cache_dir
+               )
+
+      assert Enum.sort(SP3.satellite_ids(merged)) == ["G01", "G02", "G03"]
+      assert Enum.map(report.contributors, & &1.center) == [:igs_ult, :cod_ult]
+      assert report.absent == []
+      assert report.source_count == 2
+      refute report.single_product?
+    end
+
+    test "missing center is skipped and recorded while merge proceeds", %{cache_dir: cache_dir} do
+      igs = Data.ops_ultra_sp3(:igs_ult, ~D[2024-09-03], issue: "0600")
+      cod = Data.ops_ultra_sp3(:cod_ult, ~D[2024-09-03], issue: "0600")
+
+      seed(cache_dir, igs, sp3_bytes([{"G01", [15000.0, -20000.0, 5000.0], 100.0}]))
+      seed(cache_dir, cod, sp3_bytes([{"G02", [16000.0, -21000.0, 6000.0], 200.0}]))
+
+      assert {:ok, merged, report} =
+               Data.fetch_merged_sp3(~D[2024-09-03], [:igs_ult, :cod_ult, :esa_ult],
+                 issue: "0600",
+                 offline: true,
+                 cache_dir: cache_dir
+               )
+
+      assert Enum.sort(SP3.satellite_ids(merged)) == ["G01", "G02"]
+      assert Enum.map(report.contributors, & &1.center) == [:igs_ult, :cod_ult]
+
+      assert [
+               %{
+                 center: :esa_ult,
+                 filename: "ESA0OPSULT_20242470600_02D_15M_ORB.SP3",
+                 reason: :offline_miss
+               }
+             ] = report.absent
+    end
+
+    test "only one center available returns a single-source result", %{cache_dir: cache_dir} do
+      cod = Data.ops_ultra_sp3(:cod_ult, ~D[2024-09-03], issue: "0600")
+      seed(cache_dir, cod, sp3_bytes([{"G02", [16000.0, -21000.0, 6000.0], 200.0}]))
+
+      assert {:ok, sp3, report} =
+               Data.fetch_merged_sp3(~D[2024-09-03], [:igs_ult, :cod_ult],
+                 issue: "0600",
+                 offline: true,
+                 cache_dir: cache_dir
+               )
+
+      assert SP3.satellite_ids(sp3) == ["G02"]
+      assert Enum.map(report.contributors, & &1.center) == [:cod_ult]
+      assert [%{center: :igs_ult, reason: :offline_miss}] = report.absent
+      assert report.source_count == 1
+      assert report.single_product?
+      refute report.merged?
+    end
+
+    test "zero products available returns per-center reasons", %{cache_dir: cache_dir} do
+      assert {:error, {:no_products, reasons}} =
+               Data.fetch_merged_sp3(~D[2024-09-03], [:igs_ult, :cod_ult],
+                 issue: "0600",
+                 offline: true,
+                 cache_dir: cache_dir
+               )
+
+      assert Enum.map(reasons, & &1.center) == [:igs_ult, :cod_ult]
+
+      assert Enum.map(reasons, & &1.filename) == [
+               "IGS0OPSULT_20242470600_02D_15M_ORB.SP3",
+               "COD0OPSULT_20242470600_02D_05M_ORB.SP3"
+             ]
+
+      assert Enum.all?(reasons, &(&1.reason == :offline_miss))
+    end
+
+    test "timestamp ultra target falls back to an earlier cached issue", %{cache_dir: cache_dir} do
+      cod_0600 = Data.ops_ultra_sp3(:cod_ult, ~D[2024-09-03], issue: "0600")
+      seed(cache_dir, cod_0600, sp3_bytes([{"G02", [16000.0, -21000.0, 6000.0], 200.0}]))
+
+      assert {:ok, sp3, report} =
+               Data.fetch_merged_sp3(~N[2024-09-03 13:00:00], [:cod_ult],
+                 offline: true,
+                 cache_dir: cache_dir
+               )
+
+      assert SP3.satellite_ids(sp3) == ["G02"]
+      assert [%{center: :cod_ult, issue: "0600", attempts: attempts}] = report.contributors
+
+      assert [%{reason: :offline_miss, filename: "COD0OPSULT_20242471200_02D_05M_ORB.SP3"}] =
+               attempts
+    end
+
+    test "incompatible source frames surface a tagged reason, not a raw merge error", %{
+      cache_dir: cache_dir
+    } do
+      igs = Data.ops_ultra_sp3(:igs_ult, ~D[2024-09-03], issue: "0600")
+      cod = Data.ops_ultra_sp3(:cod_ult, ~D[2024-09-03], issue: "0600")
+
+      # Two fetchable centers, but on different coordinate-system realizations,
+      # which the merge refuses rather than mixing frames.
+      seed(cache_dir, igs, sp3_bytes([{"G01", [15000.0, -20000.0, 5000.0], 100.0}], "IGS14"))
+      seed(cache_dir, cod, sp3_bytes([{"G01", [15000.0, -20000.0, 5000.0], 100.0}], "IGS20"))
+
+      assert {:error, {:incompatible_sources, info}} =
+               Data.fetch_merged_sp3(~D[2024-09-03], [:igs_ult, :cod_ult],
+                 issue: "0600",
+                 offline: true,
+                 cache_dir: cache_dir
+               )
+
+      assert info.centers == [:igs_ult, :cod_ult]
+      assert info.reason != nil
     end
   end
 

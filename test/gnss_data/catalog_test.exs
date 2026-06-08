@@ -92,6 +92,87 @@ defmodule Orbis.GNSS.Data.CatalogTest do
     end
   end
 
+  describe "ultra-rapid precise products" do
+    test "encodes the OPSULT SP3 filenames with issue time, 02D span, and native sample" do
+      date = ~D[2024-09-03]
+
+      assert {:ok, "IGS0OPSULT_20242470600_02D_15M_ORB.SP3"} =
+               Catalog.canonical_filename(:igs_ult, :sp3, date, "15M", "0600")
+
+      assert {:ok, "COD0OPSULT_20242470600_02D_05M_ORB.SP3"} =
+               Catalog.canonical_filename(:cod_ult, :sp3, date, "05M", "0600")
+
+      assert {:ok, "ESA0OPSULT_20242470600_02D_15M_ORB.SP3"} =
+               Catalog.canonical_filename(:esa_ult, :sp3, date, "15M", "0600")
+
+      assert {:ok, "GFZ0OPSULT_20242470600_02D_05M_ORB.SP3"} =
+               Catalog.canonical_filename(:gfz_ult, :sp3, date, "05M", "0600")
+
+      assert {:ok, "GRG0OPSULT_20242470600_02D_05M_ORB.SP3"} =
+               Catalog.canonical_filename(:grg_ult, :sp3, date, "05M", "0600")
+    end
+
+    test "encodes an ultra-rapid clock product only for centers that serve it" do
+      assert {:ok, "GRG0OPSULT_20242470600_02D_05M_CLK.CLK"} =
+               Catalog.canonical_filename(:grg_ult, :clk, ~D[2024-09-03], "05M", "0600")
+
+      assert {:error, {:unsupported_product, {:content_not_served, :clk}}} =
+               Catalog.canonical_filename(:igs_ult, :clk, ~D[2024-09-03], "05M", "0600")
+    end
+
+    test "builds GSSC archive URLs for ultra-rapid products" do
+      assert {:ok,
+              "ftp://gssc.esa.int/gnss/products/2330/IGS0OPSULT_20242470600_02D_15M_ORB.SP3.gz"} =
+               Catalog.archive_url(:igs_ult, :sp3, ~D[2024-09-03], "15M", "0600")
+
+      assert {:ok,
+              "ftp://gssc.esa.int/gnss/products/2330/COD0OPSULT_20242470600_02D_05M_ORB.SP3.gz"} =
+               Catalog.archive_url(:cod_ult, :sp3, ~D[2024-09-03], "05M", "0600")
+
+      assert {:ok,
+              "ftp://gssc.esa.int/gnss/products/2330/ESA0OPSULT_20242470600_02D_15M_ORB.SP3.gz"} =
+               Catalog.archive_url(:esa_ult, :sp3, ~D[2024-09-03], "15M", "0600")
+
+      assert {:ok,
+              "ftp://gssc.esa.int/gnss/products/2330/GFZ0OPSULT_20242470600_02D_05M_ORB.SP3.gz"} =
+               Catalog.archive_url(:gfz_ult, :sp3, ~D[2024-09-03], "05M", "0600")
+
+      assert {:ok,
+              "ftp://gssc.esa.int/gnss/products/2330/GRG0OPSULT_20242470600_02D_05M_ORB.SP3.gz"} =
+               Catalog.archive_url(:grg_ult, :sp3, ~D[2024-09-03], "05M", "0600")
+    end
+
+    test "resolves the latest available issue at or before a target time" do
+      target = ~N[2024-09-03 13:00:00]
+
+      assert {:ok, %{date: ~D[2024-09-03], issue: "1200"}} =
+               Catalog.latest_ultra_issue(:igs_ult, target)
+
+      available = [{~D[2024-09-03], "0000"}, {~D[2024-09-03], "0600"}]
+
+      assert {:ok, %{date: ~D[2024-09-03], issue: "0600"}} =
+               Catalog.latest_ultra_issue(:igs_ult, target, available)
+    end
+
+    test "falls back to a previous-day issue when current-day issue is absent" do
+      target = ~N[2024-09-03 01:00:00]
+      available = [{~D[2024-09-02], "1800"}]
+
+      assert {:ok, %{date: ~D[2024-09-02], issue: "1800"}} =
+               Catalog.latest_ultra_issue(:igs_ult, target, available)
+    end
+
+    test "rejects unsupported issue times" do
+      assert {:error, {:unsupported_product, {:issue, "0300"}}} =
+               Catalog.canonical_filename(:igs_ult, :sp3, ~D[2024-09-03], "15M", "0300")
+    end
+
+    test "requires an explicit issue for low-level ultra-rapid filenames" do
+      assert {:error, {:unsupported_product, :missing_issue}} =
+               Catalog.canonical_filename(:igs_ult, :sp3, ~D[2024-09-03], "15M")
+    end
+  end
+
   describe "archive_url/4" do
     test "builds the GFZ HTTPS URL with the class/week directory and .gz suffix" do
       assert {:ok,

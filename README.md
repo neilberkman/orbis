@@ -226,6 +226,14 @@ Products can be fetched and cached:
 ```elixir
 product = Orbis.GNSS.Data.mgex_sp3(:gfz, ~D[2020-06-24])
 {:ok, sp3} = Orbis.GNSS.Data.sp3(product)   # downloads, verifies, caches, loads
+
+# Current-day/live-latency orbit products use the ultra-rapid OPSULT tier.
+ultra = Orbis.GNSS.Data.ops_ultra_sp3(:igs_ult, DateTime.utc_now())
+{:ok, sp3} = Orbis.GNSS.Data.sp3(ultra)
+
+# Or fetch several centers and merge whatever has published so far.
+{:ok, merged, report} =
+  Orbis.GNSS.Data.fetch_merged_sp3(DateTime.utc_now(), [:igs_ult, :cod_ult, :gfz_ult])
 ```
 
 Parse a station's RINEX observation file (Hatanaka `.crx` or plain `.rnx`),

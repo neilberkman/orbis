@@ -106,6 +106,16 @@ defmodule Orbis.GNSS.DataTest do
                Data.fetch(product, offline: true, cache_dir: cache_dir)
     end
 
+    test "returns an offline_miss for a resolved ultra-rapid issue", %{cache_dir: cache_dir} do
+      product =
+        Data.ops_ultra_sp3(:igs_ult, ~N[2024-09-03 13:00:00],
+          available_issues: [{~D[2024-09-03], "0600"}]
+        )
+
+      assert {:error, {:offline_miss, "IGS0OPSULT_20242470600_02D_15M_ORB.SP3"}} =
+               Data.fetch(product, offline: true, cache_dir: cache_dir)
+    end
+
     test "an unsupported product is rejected before any network", %{cache_dir: cache_dir} do
       # Construct a Product struct directly to bypass the validating builder.
       bad = %Data.Product{center: :nope, content: :sp3, date: ~D[2020-06-24], sample: "05M"}
