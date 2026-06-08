@@ -67,6 +67,7 @@ defmodule Orbis.GNSS.RTK do
   @default_integer_search_radius_cycles 1
   @default_integer_ratio_threshold 3.0
   @default_integer_candidate_limit 200_000
+  @default_partial_min_ambiguities 4
   @default_cycle_slip_policy :error
   @default_hatch_window_cap 100
   @min_elevation_sin 0.05
@@ -218,6 +219,11 @@ defmodule Orbis.GNSS.RTK do
               optional(:wide_lane_ambiguities_cycles) => %{String.t() => integer()},
               optional(:physical_sats) => [String.t()],
               optional(:ambiguity_satellites) => %{String.t() => String.t()},
+              optional(:partial_ambiguity_resolution) => boolean(),
+              optional(:partial_fixed) => boolean(),
+              optional(:partial_fixed_ambiguities) => [String.t()],
+              optional(:partial_free_ambiguities) => [String.t()],
+              optional(:partial_full_set) => map(),
               optional(:dropped_cycle_slip_sats) => [String.t()],
               optional(:split_cycle_slip_arcs) => [map()]
             }
@@ -454,6 +460,12 @@ defmodule Orbis.GNSS.RTK do
       `#{@default_integer_search_radius_cycles}`.
     * `:integer_ratio_threshold` - default `#{@default_integer_ratio_threshold}`.
     * `:integer_candidate_limit` - default `#{@default_integer_candidate_limit}`.
+    * `:partial_ambiguity_resolution` - when `true`, a rejected full-set
+      integer fix is followed by confidence-ranked subset searches. A passing
+      subset is held fixed while the remaining ambiguities stay in the re-solve
+      as float states (default `false`).
+    * `:partial_min_ambiguities` - minimum subset size for partial ambiguity
+      resolution (default `#{@default_partial_min_ambiguities}`).
 
   The fixed solution is returned even when the ratio test fails; in that case
   `metadata.integer_status` is `:not_fixed`.
@@ -480,6 +492,7 @@ defmodule Orbis.GNSS.RTK do
          {:ok, fixed_cycles, fixed_meta} <-
            search_baseline_ambiguities(float_sol, wavelengths, offsets, integer_opts),
          fixed_m = fixed_ambiguities_m(fixed_cycles, wavelengths, offsets),
+         free_ambiguity_ids = free_ambiguity_ids(float_sol.used_sats, fixed_cycles),
          {:ok, base} <- Types.normalize_ecef(base_position, :invalid_base_position),
          {:ok, normalized_epochs} <- normalize_epochs(epochs),
          {:ok, normalized_epochs, _slip_meta} <-
@@ -487,7 +500,8 @@ defmodule Orbis.GNSS.RTK do
          {:ok, weights} <- baseline_weights(opts),
          {:ok, solve_opts} <- baseline_solve_options(opts) do
       state = %{
-        baseline: {float_sol.baseline_m.x_m, float_sol.baseline_m.y_m, float_sol.baseline_m.z_m}
+        baseline: {float_sol.baseline_m.x_m, float_sol.baseline_m.y_m, float_sol.baseline_m.z_m},
+        ambiguities: Map.take(float_sol.ambiguities_m, free_ambiguity_ids)
       }
 
       iterate_fixed_baseline(
@@ -496,6 +510,7 @@ defmodule Orbis.GNSS.RTK do
         float_sol.reference_satellite_id,
         Map.fetch!(float_sol.metadata, :physical_sats),
         float_sol.used_sats,
+        free_ambiguity_ids,
         fixed_m,
         state,
         weights,
@@ -1713,6 +1728,8 @@ defmodule Orbis.GNSS.RTK do
 
     ratio = Keyword.get(opts, :integer_ratio_threshold, @default_integer_ratio_threshold)
     limit = Keyword.get(opts, :integer_candidate_limit, @default_integer_candidate_limit)
+    partial? = Keyword.get(opts, :partial_ambiguity_resolution, false)
+    partial_min = Keyword.get(opts, :partial_min_ambiguities, @default_partial_min_ambiguities)
 
     cond do
       not is_integer(radius) or radius < 0 ->
@@ -1724,12 +1741,20 @@ defmodule Orbis.GNSS.RTK do
       not is_integer(limit) or limit < 1 ->
         {:error, {:invalid_option, :integer_candidate_limit}}
 
+      not is_boolean(partial?) ->
+        {:error, {:invalid_option, :partial_ambiguity_resolution}}
+
+      not is_integer(partial_min) or partial_min < 1 ->
+        {:error, {:invalid_option, :partial_min_ambiguities}}
+
       true ->
         {:ok,
          %{
            radius_cycles: radius,
            ratio_threshold: ratio / 1.0,
-           candidate_limit: limit
+           candidate_limit: limit,
+           partial_ambiguity_resolution?: partial?,
+           partial_min_ambiguities: partial_min
          }}
     end
   end
@@ -2274,8 +2299,168 @@ defmodule Orbis.GNSS.RTK do
 
     with {:ok, fixed_cycles, meta} <-
            IntegerLeastSquares.search(float_cycles, covariance_cycles, integer_opts) do
-      {:ok, fixed_cycles, Map.put(meta, :ambiguity_offsets_m, offsets)}
+      meta = Map.put(meta, :ambiguity_offsets_m, offsets)
+
+      if meta.integer_status == :fixed or not integer_opts.partial_ambiguity_resolution? do
+        {:ok, fixed_cycles, Map.merge(meta, partial_meta(false, false, fixed_cycles, []))}
+      else
+        search_partial_baseline_ambiguities(
+          float_sol.used_sats,
+          float_cycles,
+          covariance_cycles,
+          offsets,
+          integer_opts,
+          fixed_cycles,
+          meta
+        )
+      end
     end
+  end
+
+  defp partial_meta(enabled?, fixed?, fixed_cycles, free_ambiguities, extra \\ %{}) do
+    Map.merge(
+      %{
+        partial_ambiguity_resolution: enabled?,
+        partial_fixed: fixed?,
+        partial_fixed_ambiguities: fixed_cycles |> Map.keys() |> Enum.sort(),
+        partial_free_ambiguities: Enum.sort(free_ambiguities)
+      },
+      extra
+    )
+  end
+
+  defp search_partial_baseline_ambiguities(
+         ambiguity_ids,
+         float_cycles,
+         covariance_cycles,
+         offsets,
+         integer_opts,
+         full_fixed_cycles,
+         full_meta
+       ) do
+    ranked_ids =
+      ambiguity_ids_ranked_by_integer_confidence(ambiguity_ids, float_cycles, covariance_cycles)
+
+    min_size = min(integer_opts.partial_min_ambiguities, length(ambiguity_ids) - 1)
+
+    if min_size < 1 do
+      {:ok, full_fixed_cycles,
+       Map.merge(
+         full_meta,
+         partial_meta(true, false, full_fixed_cycles, [], %{
+           ambiguity_offsets_m: offsets,
+           partial_full_set: full_set_integer_summary(full_meta)
+         })
+       )}
+    else
+      (length(ambiguity_ids) - 1)..min_size//-1
+      |> Enum.reduce_while(:not_fixed, fn subset_size, :not_fixed ->
+        subset_ids = ranked_ids |> Enum.take(subset_size) |> Enum.sort()
+
+        case search_ambiguity_subset(
+               subset_ids,
+               ambiguity_ids,
+               float_cycles,
+               covariance_cycles,
+               offsets,
+               integer_opts,
+               full_meta
+             ) do
+          {:ok, _fixed_cycles, %{integer_status: :fixed}} = ok -> {:halt, ok}
+          {:ok, _fixed_cycles, _meta} -> {:cont, :not_fixed}
+          {:error, _reason} = err -> {:halt, err}
+        end
+      end)
+      |> case do
+        {:ok, _fixed_cycles, _meta} = ok ->
+          ok
+
+        :not_fixed ->
+          # Preserve the historical not-fixed behavior by returning the full-set
+          # best candidate from the initial search when no subset passes.
+          {:ok, full_fixed_cycles,
+           Map.merge(
+             full_meta,
+             partial_meta(true, false, full_fixed_cycles, [], %{
+               ambiguity_offsets_m: offsets,
+               partial_full_set: full_set_integer_summary(full_meta)
+             })
+           )}
+      end
+    end
+  end
+
+  defp search_ambiguity_subset(
+         subset_ids,
+         all_ids,
+         float_cycles,
+         covariance_cycles,
+         offsets,
+         integer_opts,
+         full_meta
+       ) do
+    subset_cycles = Map.take(float_cycles, subset_ids)
+    subset_covariance = covariance_submatrix(all_ids, covariance_cycles, subset_ids)
+
+    case IntegerLeastSquares.search(subset_cycles, subset_covariance, integer_opts) do
+      {:ok, fixed_cycles, meta} ->
+        free_ids = all_ids -- subset_ids
+
+        meta =
+          meta
+          |> Map.put(:ambiguity_offsets_m, Map.take(offsets, subset_ids))
+          |> Map.merge(
+            partial_meta(true, meta.integer_status == :fixed, fixed_cycles, free_ids, %{
+              partial_full_set: full_set_integer_summary(full_meta)
+            })
+          )
+
+        {:ok, fixed_cycles, meta}
+
+      {:error, _reason} = err ->
+        err
+    end
+  end
+
+  defp ambiguity_ids_ranked_by_integer_confidence(ambiguity_ids, float_cycles, covariance_cycles) do
+    ambiguity_ids
+    |> Enum.with_index()
+    |> Enum.sort_by(fn {id, idx} ->
+      variance = covariance_cycles |> Enum.at(idx) |> Enum.at(idx)
+
+      distance_to_integer =
+        abs(Map.fetch!(float_cycles, id) - round(Map.fetch!(float_cycles, id)))
+
+      sigma = :math.sqrt(max(variance, 0.0))
+      # Larger margin-to-boundary per sigma is more reliable; sort ascending.
+      normalized_margin = (0.5 - distance_to_integer) / sigma
+      {-normalized_margin, variance, id}
+    end)
+    |> Enum.map(&elem(&1, 0))
+  end
+
+  defp covariance_submatrix(all_ids, covariance, subset_ids) do
+    indices = Enum.map(subset_ids, fn id -> Enum.find_index(all_ids, &(&1 == id)) end)
+
+    for i <- indices do
+      for j <- indices, do: covariance |> Enum.at(i) |> Enum.at(j)
+    end
+  end
+
+  defp full_set_integer_summary(meta) do
+    %{
+      integer_status: meta.integer_status,
+      integer_ratio: meta.integer_ratio,
+      integer_best_score: meta.integer_best_score,
+      integer_second_best_score: meta.integer_second_best_score,
+      integer_candidates: meta.integer_candidates,
+      order: meta.ambiguity_search.order
+    }
+  end
+
+  defp free_ambiguity_ids(ambiguity_ids, fixed_cycles) do
+    fixed = fixed_cycles |> Map.keys() |> MapSet.new()
+    Enum.reject(ambiguity_ids, &MapSet.member?(fixed, &1))
   end
 
   defp covariance_m_to_cycles(covariance_m, sat_ids, wavelengths) do
@@ -2303,6 +2488,7 @@ defmodule Orbis.GNSS.RTK do
          reference_sat,
          physical_sats,
          ambiguity_ids,
+         free_ambiguity_ids,
          fixed_m,
          state,
          weights,
@@ -2319,22 +2505,26 @@ defmodule Orbis.GNSS.RTK do
              reference_sat,
              physical_sats,
              ambiguity_ids,
+             free_ambiguity_ids,
              fixed_m,
              state,
              weights
            ),
-         {:ok, dx} <- solve_baseline_normal_equations(rows, 3) do
-      next = apply_fixed_baseline_delta(state, dx)
-      baseline_step = fixed_baseline_step_norm(dx)
+         {:ok, dx} <-
+           solve_baseline_normal_equations(rows, 3 + length(free_ambiguity_ids)) do
+      next = apply_fixed_baseline_delta(state, free_ambiguity_ids, dx)
+      {baseline_step, ambiguity_step} = fixed_baseline_step_norms(dx)
 
       cond do
-        baseline_step <= opts.position_tolerance_m ->
+        baseline_step <= opts.position_tolerance_m and
+            ambiguity_step <= opts.ambiguity_tolerance_m ->
           finalize_fixed_baseline(
             base,
             epochs,
             reference_sat,
             physical_sats,
             ambiguity_ids,
+            free_ambiguity_ids,
             fixed_m,
             next,
             weights,
@@ -2353,6 +2543,7 @@ defmodule Orbis.GNSS.RTK do
             reference_sat,
             physical_sats,
             ambiguity_ids,
+            free_ambiguity_ids,
             fixed_m,
             next,
             weights,
@@ -2371,6 +2562,7 @@ defmodule Orbis.GNSS.RTK do
             reference_sat,
             physical_sats,
             ambiguity_ids,
+            free_ambiguity_ids,
             fixed_m,
             next,
             weights,
@@ -2390,6 +2582,7 @@ defmodule Orbis.GNSS.RTK do
          reference_sat,
          physical_sats,
          ambiguity_ids,
+         free_ambiguity_ids,
          fixed_m,
          state,
          weights
@@ -2402,6 +2595,7 @@ defmodule Orbis.GNSS.RTK do
              reference_sat,
              physical_sats,
              ambiguity_ids,
+             free_ambiguity_ids,
              fixed_m,
              state,
              weights
@@ -2422,6 +2616,7 @@ defmodule Orbis.GNSS.RTK do
          reference_sat,
          physical_sats,
          _ambiguity_ids,
+         free_ambiguity_ids,
          fixed_m,
          state,
          weights
@@ -2435,9 +2630,19 @@ defmodule Orbis.GNSS.RTK do
       obs_dd = double_difference_measurement(epoch, sat, ref_dd)
       sat_pos = Map.fetch!(epoch.positions, sat)
       {geom_dd, deriv} = geometry_double_difference(base, state.baseline, sat_pos, ref_pos)
-      h = tuple3_to_list(deriv)
       ambiguity_id = obs_dd.ambiguity_id
-      fixed = Map.fetch!(fixed_m, ambiguity_id)
+
+      {phase_ambiguity, phase_h} =
+        case Map.fetch(fixed_m, ambiguity_id) do
+          {:ok, fixed} ->
+            {fixed, fixed_design_baseline_row(deriv, nil, free_ambiguity_ids)}
+
+          :error ->
+            {Map.fetch!(state.ambiguities, ambiguity_id),
+             fixed_design_baseline_row(deriv, ambiguity_id, free_ambiguity_ids)}
+        end
+
+      code_h = fixed_design_baseline_row(deriv, nil, free_ambiguity_ids)
       code_variance = row_variance(weights, :code, base, sat_pos, ref_pos)
       phase_variance = row_variance(weights, :phase, base, sat_pos, ref_pos)
 
@@ -2447,7 +2652,7 @@ defmodule Orbis.GNSS.RTK do
         epoch: epoch.epoch,
         sat: sat,
         ambiguity_id: ambiguity_id,
-        h: h,
+        h: code_h,
         y: obs_dd.code_m - geom_dd,
         sd_variance_m2: code_variance.sd_variance_m2,
         ref_sd_variance_m2: code_variance.ref_sd_variance_m2,
@@ -2460,8 +2665,8 @@ defmodule Orbis.GNSS.RTK do
         epoch: epoch.epoch,
         sat: sat,
         ambiguity_id: ambiguity_id,
-        h: h,
-        y: obs_dd.phase_m - (geom_dd + fixed),
+        h: phase_h,
+        y: obs_dd.phase_m - (geom_dd + phase_ambiguity),
         sd_variance_m2: phase_variance.sd_variance_m2,
         ref_sd_variance_m2: phase_variance.ref_sd_variance_m2,
         weight: phase_variance.weight
@@ -2475,12 +2680,32 @@ defmodule Orbis.GNSS.RTK do
     end
   end
 
-  defp apply_fixed_baseline_delta(state, [dx, dy, dz]) do
-    {bx, by, bz} = state.baseline
-    %{state | baseline: {bx + dx, by + dy, bz + dz}}
+  defp fixed_design_baseline_row({dx, dy, dz}, ambiguity_id, free_ambiguity_ids) do
+    ambiguity_cols =
+      Enum.map(free_ambiguity_ids, &if(&1 == ambiguity_id, do: 1.0, else: 0.0))
+
+    [dx, dy, dz | ambiguity_cols]
   end
 
-  defp fixed_baseline_step_norm([dx, dy, dz]), do: :math.sqrt(dx * dx + dy * dy + dz * dz)
+  defp apply_fixed_baseline_delta(state, free_ambiguity_ids, [dx, dy, dz | ambiguity_deltas]) do
+    {bx, by, bz} = state.baseline
+
+    ambiguities =
+      free_ambiguity_ids
+      |> Enum.with_index()
+      |> Map.new(fn {ambiguity_id, idx} ->
+        {ambiguity_id,
+         Map.fetch!(state.ambiguities, ambiguity_id) + Enum.at(ambiguity_deltas, idx)}
+      end)
+
+    %{state | baseline: {bx + dx, by + dy, bz + dz}, ambiguities: ambiguities}
+  end
+
+  defp fixed_baseline_step_norms([dx, dy, dz | ambiguity_deltas]) do
+    baseline_step = :math.sqrt(dx * dx + dy * dy + dz * dz)
+    ambiguity_step = Enum.map(ambiguity_deltas, &abs/1) |> Enum.max(fn -> 0.0 end)
+    {baseline_step, ambiguity_step}
+  end
 
   defp finalize_fixed_baseline(
          base,
@@ -2488,6 +2713,7 @@ defmodule Orbis.GNSS.RTK do
          reference_sat,
          physical_sats,
          ambiguity_ids,
+         free_ambiguity_ids,
          fixed_m,
          state,
          weights,
@@ -2505,6 +2731,7 @@ defmodule Orbis.GNSS.RTK do
              reference_sat,
              physical_sats,
              ambiguity_ids,
+             free_ambiguity_ids,
              fixed_m,
              state,
              weights
@@ -2686,7 +2913,6 @@ defmodule Orbis.GNSS.RTK do
   defp sub3({ax, ay, az}, {bx, by, bz}), do: {ax - bx, ay - by, az - bz}
   defp scale3({x, y, z}, s), do: {x * s, y * s, z * s}
   defp norm({x, y, z}), do: :math.sqrt(x * x + y * y + z * z)
-  defp tuple3_to_list({x, y, z}), do: [x, y, z]
   defp ecef_map({x, y, z}), do: %{x_m: x, y_m: y, z_m: z}
 
   defp normalize_observations(observations, error_tag) do

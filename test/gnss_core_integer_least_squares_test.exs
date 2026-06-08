@@ -4,7 +4,7 @@ defmodule Orbis.GNSS.Core.IntegerLeastSquaresTest do
   alias Orbis.GNSS.Core.IntegerLeastSquares
   alias Orbis.GNSS.Core.LinearAlgebra
 
-  test "search matches an independent brute-force ILS scan for a non-rounding optimum" do
+  test "bounded search can choose a non-rounded optimum and report the runner-up" do
     float_cycles = %{"A" => 0.49, "B" => -0.49}
 
     covariance = [
@@ -16,7 +16,7 @@ defmodule Orbis.GNSS.Core.IntegerLeastSquaresTest do
 
     assert {:ok, fixed, meta} = IntegerLeastSquares.search(float_cycles, covariance, opts)
     assert fixed != coordinate_round(float_cycles)
-    assert {fixed, meta.integer_best_score} == brute_force_best(float_cycles, covariance, 1)
+    assert {fixed, meta.integer_best_score} == enumerated_best(float_cycles, covariance, 1)
     assert meta.integer_status == :not_fixed
     assert meta.ambiguity_search.order == ["A", "B"]
   end
@@ -36,7 +36,7 @@ defmodule Orbis.GNSS.Core.IntegerLeastSquaresTest do
     Map.new(float_cycles, fn {id, value} -> {id, round(value)} end)
   end
 
-  defp brute_force_best(float_cycles, covariance, radius) do
+  defp enumerated_best(float_cycles, covariance, radius) do
     ids = float_cycles |> Map.keys() |> Enum.sort()
     floats = Enum.map(ids, &Map.fetch!(float_cycles, &1))
     rounded = Enum.map(floats, &round/1)

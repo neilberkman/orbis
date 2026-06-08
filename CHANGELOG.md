@@ -13,6 +13,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   carrier smoothing to code observations before forming double differences.
   The real Wettzell RTK gate verifies the smoothing reduces code residual RMS
   while still refusing unsafe integer fixes.
+- `Orbis.GNSS.RTK.solve_fixed_baseline_epochs/3` now supports opt-in partial
+  ambiguity resolution with `partial_ambiguity_resolution: true`. When the full
+  ambiguity set fails the ratio test, Orbis tries confidence-ranked subsets and
+  re-solves with the accepted subset fixed while rejected ambiguities remain
+  float-estimated. The real Wettzell RTK gate now verifies a safe four-ambiguity
+  partial fix improves the L1 baseline while the unsafe full-set fix remains
+  rejected.
 
 ### Changed
 

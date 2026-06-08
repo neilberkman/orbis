@@ -338,7 +338,7 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
       assert second_score == sol.metadata.integer_second_best_score
     end
 
-    test "independent ILS gate catches non-rounding low-ratio candidates", ctx do
+    test "bounded ILS gate catches non-rounding low-ratio candidates", ctx do
       [sat_a, sat_b | _] = ctx.multi_sats |> Enum.map(&elem(&1, 0)) |> Enum.sort()
 
       biased =

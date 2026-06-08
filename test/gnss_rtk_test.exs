@@ -531,6 +531,56 @@ defmodule Orbis.GNSS.RTKTest do
       assert position_error(sol.baseline_m, @truth_baseline) < 1.0e-5
     end
 
+    test "partial ambiguity resolution fixes a clean subset and keeps weak arcs float" do
+      bad_cycles = Map.put(@fixed_cycles, "G05", -3.49)
+
+      ambiguities_m =
+        Map.new(bad_cycles, fn {sat, cycles} -> {sat, cycles * @l1_wavelength_m} end)
+
+      epochs =
+        @sat_positions
+        |> Enum.with_index()
+        |> Enum.map(fn {positions, idx} ->
+          synthetic_baseline_epoch(@base, @truth_baseline, positions,
+            epoch: idx,
+            ambiguities_m: ambiguities_m
+          )
+        end)
+
+      common_opts = [
+        reference_satellite_id: "G01",
+        ambiguity_wavelength_m: @l1_wavelength_m,
+        initial_baseline_m: {-40.0, 35.0, 12.0}
+      ]
+
+      assert {:ok, full} = RTK.solve_fixed_baseline_epochs(@base, epochs, common_opts)
+      assert full.metadata.integer_status == :not_fixed
+      refute full.metadata.partial_ambiguity_resolution
+
+      assert {:ok, partial} =
+               RTK.solve_fixed_baseline_epochs(
+                 @base,
+                 epochs,
+                 Keyword.merge(common_opts,
+                   partial_ambiguity_resolution: true,
+                   partial_min_ambiguities: 2
+                 )
+               )
+
+      assert partial.metadata.integer_status == :fixed
+      assert partial.metadata.partial_ambiguity_resolution
+      assert partial.metadata.partial_fixed
+      assert length(partial.metadata.partial_fixed_ambiguities) >= 2
+      assert "G05" in partial.metadata.partial_free_ambiguities
+      refute Map.has_key?(partial.fixed_ambiguities_cycles, "G05")
+
+      for sat <- partial.metadata.partial_fixed_ambiguities do
+        assert Map.fetch!(partial.fixed_ambiguities_cycles, sat) == Map.fetch!(@fixed_cycles, sat)
+      end
+
+      assert position_error(partial.baseline_m, @truth_baseline) < 1.0e-5
+    end
+
     test "fixed solve supports per-ambiguity metre offsets" do
       offsets_m = %{"G02" => 0.35, "G03" => -0.22, "G04" => 0.12, "G05" => -0.41}
 
@@ -588,6 +638,16 @@ defmodule Orbis.GNSS.RTKTest do
                ambiguity_wavelength_m: @l1_wavelength_m,
                integer_ratio_threshold: -1.0
              ) == {:error, {:invalid_option, :integer_ratio_threshold}}
+
+      assert RTK.solve_fixed_baseline_epochs(@base, [epoch],
+               ambiguity_wavelength_m: @l1_wavelength_m,
+               partial_ambiguity_resolution: :bad
+             ) == {:error, {:invalid_option, :partial_ambiguity_resolution}}
+
+      assert RTK.solve_fixed_baseline_epochs(@base, [epoch],
+               ambiguity_wavelength_m: @l1_wavelength_m,
+               partial_min_ambiguities: 0
+             ) == {:error, {:invalid_option, :partial_min_ambiguities}}
 
       assert RTK.solve_fixed_baseline_epochs(@base, [epoch],
                reference_satellite_id: "G01",

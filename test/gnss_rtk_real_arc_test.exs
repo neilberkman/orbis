@@ -28,7 +28,7 @@ defmodule Orbis.GNSS.RTKRealArcTest do
   @wtzz_antenna_h_m 0.2840
 
   @tag timeout: 180_000
-  test "real co-located Wettzell L1 RTK solves the antenna baseline and refuses an unsafe fix" do
+  test "real co-located Wettzell L1 RTK solves the antenna baseline and fixes a safe partial subset" do
     sp3 = SP3.load!(@sp3_path)
     base_obs = Observations.load!(@wtzr_obs_path)
     rover_obs = Observations.load!(@wtzz_obs_path)
@@ -101,6 +101,34 @@ defmodule Orbis.GNSS.RTKRealArcTest do
     # unsafe fix instead of reporting false centimetre confidence.
     assert fixed_antenna_error_m > float_antenna_error_m
     assert fixed_antenna_error_m < 0.2
+
+    assert {:ok, partial_fixed} =
+             RTK.solve_fixed_baseline_epochs(
+               base_arp,
+               epochs,
+               Keyword.merge(opts,
+                 partial_ambiguity_resolution: true,
+                 partial_min_ambiguities: 4
+               )
+             )
+
+    partial_antenna_error_m = position_error(partial_fixed.baseline_m, antenna_baseline)
+
+    assert partial_fixed.metadata.partial_ambiguity_resolution
+    assert partial_fixed.metadata.integer_status == :fixed
+    assert partial_fixed.metadata.integer_ratio > 3.0
+    assert partial_fixed.metadata.partial_fixed
+
+    assert partial_fixed.metadata.partial_fixed_ambiguities == [
+             "G05",
+             "G08",
+             "G15@rover#2|ref=G30",
+             "G27@rover#1|ref=G30"
+           ]
+
+    assert partial_fixed.metadata.partial_free_ambiguities != []
+    assert partial_antenna_error_m < float_antenna_error_m
+    assert partial_antenna_error_m < 0.06
 
     dual_epochs = real_gps_l1_l2_rtk_epochs(sp3, base_obs, rover_obs, 120)
     assert length(dual_epochs) == 120
