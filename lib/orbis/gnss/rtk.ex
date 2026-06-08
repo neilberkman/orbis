@@ -337,6 +337,11 @@ defmodule Orbis.GNSS.RTK do
   `metadata.ambiguity_float` contains the resulting float ambiguity covariance
   and inverse covariance in metres.
 
+  The reference satellite must be available in every epoch. Other satellites may
+  appear in only part of the arc; each available non-reference observation
+  contributes a row, and split cycle-slip fragments become independent ambiguity
+  ids.
+
   Options:
 
     * `:reference_satellite_id` - fixed reference satellite. When omitted, the
@@ -373,21 +378,22 @@ defmodule Orbis.GNSS.RTK do
          {:ok, normalized_epochs} <- normalize_epochs(epochs),
          {:ok, normalized_epochs, slip_meta} <-
            prepare_epochs_for_cycle_slips(normalized_epochs, opts),
-         {:ok, common_sats, dropped_sats} <- common_epoch_sats(normalized_epochs),
-         :ok <- ensure_baseline_satellites(common_sats),
+         {:ok, common_sats, _not_common_sats} <- common_epoch_sats(normalized_epochs),
+         {:ok, all_sats} <- all_epoch_sats(normalized_epochs),
+         :ok <- ensure_baseline_satellites(all_sats),
          {:ok, reference_sat} <-
            baseline_reference_satellite(common_sats, opts, base, normalized_epochs),
          {:ok, solve_opts} <- baseline_solve_options(opts),
          {:ok, weights} <- baseline_weights(opts),
          {:ok, initial_baseline} <- initial_baseline(opts),
          {:ok, ambiguity_ids, ambiguity_satellites} <-
-           baseline_ambiguity_index(normalized_epochs, common_sats, reference_sat) do
-      physical_sats = Enum.reject(common_sats, &(&1 == reference_sat))
+           baseline_ambiguity_index(normalized_epochs, all_sats, reference_sat) do
+      physical_sats = Enum.reject(all_sats, &(&1 == reference_sat))
 
-      if baseline_row_count(normalized_epochs, physical_sats) <
+      if baseline_row_count(normalized_epochs, reference_sat) <
            baseline_unknown_count(ambiguity_ids) do
         {:error,
-         {:underdetermined, baseline_row_count(normalized_epochs, physical_sats),
+         {:underdetermined, baseline_row_count(normalized_epochs, reference_sat),
           baseline_unknown_count(ambiguity_ids)}}
       else
         state = %{
@@ -405,7 +411,7 @@ defmodule Orbis.GNSS.RTK do
           state,
           weights,
           solve_opts,
-          dropped_sats,
+          [],
           slip_meta,
           1
         )
@@ -1543,6 +1549,40 @@ defmodule Orbis.GNSS.RTK do
     {:ok, common, dropped}
   end
 
+  defp all_epoch_sats(epochs) do
+    all =
+      epochs
+      |> Enum.reduce(MapSet.new(), fn epoch, acc ->
+        epoch.base
+        |> Map.keys()
+        |> MapSet.new()
+        |> MapSet.intersection(epoch.rover |> Map.keys() |> MapSet.new())
+        |> MapSet.intersection(epoch.positions |> Map.keys() |> MapSet.new())
+        |> MapSet.union(acc)
+      end)
+      |> MapSet.to_list()
+      |> Enum.sort()
+
+    {:ok, all}
+  end
+
+  defp epoch_available_nonrefs(epoch, reference_sat, physical_sats \\ nil) do
+    available =
+      epoch.base
+      |> Map.keys()
+      |> MapSet.new()
+      |> MapSet.intersection(epoch.rover |> Map.keys() |> MapSet.new())
+      |> MapSet.intersection(epoch.positions |> Map.keys() |> MapSet.new())
+      |> MapSet.delete(reference_sat)
+
+    case physical_sats do
+      nil -> available
+      sats -> MapSet.intersection(available, MapSet.new(sats))
+    end
+    |> MapSet.to_list()
+    |> Enum.sort()
+  end
+
   defp ensure_baseline_satellites(common_sats) do
     if length(common_sats) < 4,
       do: {:error, {:too_few_common_satellites, length(common_sats), 4}},
@@ -1644,7 +1684,8 @@ defmodule Orbis.GNSS.RTK do
     |> Enum.reduce_while({:ok, %{}}, fn epoch, {:ok, acc} ->
       ref_dd = single_difference(epoch, reference_sat)
 
-      physical_sats
+      epoch
+      |> epoch_available_nonrefs(reference_sat, physical_sats)
       |> Enum.reduce_while({:ok, acc}, fn sat, {:ok, acc} ->
         ambiguity_id = double_difference_measurement(epoch, sat, ref_dd).ambiguity_id
 
@@ -1746,7 +1787,12 @@ defmodule Orbis.GNSS.RTK do
     end
   end
 
-  defp baseline_row_count(epochs, physical_sats), do: 2 * length(epochs) * length(physical_sats)
+  defp baseline_row_count(epochs, reference_sat) do
+    epochs
+    |> Enum.map(fn epoch -> length(epoch_available_nonrefs(epoch, reference_sat)) end)
+    |> Enum.sum()
+    |> Kernel.*(2)
+  end
 
   defp baseline_unknown_count(ambiguity_ids), do: 3 + length(ambiguity_ids)
 
@@ -1876,7 +1922,8 @@ defmodule Orbis.GNSS.RTK do
     ref_dd = single_difference(epoch, reference_sat)
     ref_pos = Map.fetch!(epoch.positions, reference_sat)
 
-    physical_sats
+    epoch
+    |> epoch_available_nonrefs(reference_sat, physical_sats)
     |> Enum.reduce({:ok, []}, fn sat, {:ok, acc} ->
       obs_dd = double_difference_measurement(epoch, sat, ref_dd)
       sat_pos = Map.fetch!(epoch.positions, sat)
@@ -2289,7 +2336,8 @@ defmodule Orbis.GNSS.RTK do
     ref_dd = single_difference(epoch, reference_sat)
     ref_pos = Map.fetch!(epoch.positions, reference_sat)
 
-    physical_sats
+    epoch
+    |> epoch_available_nonrefs(reference_sat, physical_sats)
     |> Enum.reduce({:ok, []}, fn sat, {:ok, acc} ->
       obs_dd = double_difference_measurement(epoch, sat, ref_dd)
       sat_pos = Map.fetch!(epoch.positions, sat)

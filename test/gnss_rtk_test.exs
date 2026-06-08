@@ -215,7 +215,7 @@ defmodule Orbis.GNSS.RTKTest do
       end
     end
 
-    test "selects the highest-elevation default reference and reports unusable satellites" do
+    test "selects the highest-elevation default reference and uses epoch-local satellites" do
       [first, second | _] = @sat_positions
 
       epoch_a =
@@ -233,8 +233,9 @@ defmodule Orbis.GNSS.RTKTest do
       assert {:ok, sol} = RTK.solve_float_baseline_epochs(@base, [epoch_a, epoch_b])
 
       assert sol.reference_satellite_id == "G03"
-      assert sol.used_sats == ["G01", "G02", "G04"]
-      assert sol.metadata.dropped_sats == ["G05"]
+      assert sol.used_sats == ["G01", "G02", "G04", "G05"]
+      assert sol.metadata.dropped_sats == []
+      assert sol.metadata.n_observations == 14
       assert position_error(sol.baseline_m, @truth_baseline) < 1.0e-4
     end
 
@@ -652,7 +653,7 @@ defmodule Orbis.GNSS.RTKTest do
       assert position_error(sol.baseline_m, @truth_baseline) < 1.0e-5
     end
 
-    test "split-arc dual-frequency solve drops sats with too-short wide-lane fragments" do
+    test "split-arc dual-frequency solve skips short fragments and keeps valid fragments" do
       epochs =
         @sat_positions
         |> Enum.with_index()
@@ -687,9 +688,10 @@ defmodule Orbis.GNSS.RTKTest do
                )
 
       g02_ids = Enum.filter(sol.used_sats, &String.contains?(&1, "G02"))
-      assert g02_ids == []
+      assert g02_ids == ["G02@rover#2|ref=G01"]
       assert sol.metadata.integer_status == :fixed
-      refute Enum.any?(Map.keys(sol.wide_lane_ambiguities_cycles), &String.contains?(&1, "G02"))
+      refute Map.has_key?(sol.wide_lane_ambiguities_cycles, "G02")
+      assert sol.wide_lane_ambiguities_cycles["G02@rover#2|ref=G01"] == 6
       assert position_error(sol.baseline_m, @truth_baseline) < 1.0e-5
     end
 

@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- `Orbis.GNSS.RTK.solve_float_baseline_epochs/3` and fixed RTK solvers now use
+  non-reference satellites on the epochs where they are available instead of
+  dropping a satellite from the entire arc when it is absent from one epoch. The
+  reference satellite is still required across the arc.
+
 ## [0.11.0] - 2026-06-08
 
 ### Added

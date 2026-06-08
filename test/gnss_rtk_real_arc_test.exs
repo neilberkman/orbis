@@ -60,8 +60,15 @@ defmodule Orbis.GNSS.RTKRealArcTest do
     assert float.metadata.n_epochs == 120
     assert float.metadata.measurement_covariance.elevation_weighting
     assert length(float.metadata.split_cycle_slip_arcs) == 4
-    assert float.metadata.dropped_sats == ["G09", "G21", "G27"]
-    assert float.metadata.phase_rms_m < 0.01
+    assert float.metadata.dropped_sats == []
+    assert Enum.any?(float.used_sats, &String.starts_with?(&1, "G09"))
+    assert Enum.any?(float.used_sats, &String.starts_with?(&1, "G21"))
+    assert Enum.any?(float.used_sats, &String.starts_with?(&1, "G27"))
+    # Epoch-local satellite use admits short post-slip fragments that the
+    # previous common-satellite batch solve dropped. The baseline remains
+    # centimetre-scale, while the residual gate records that this is still a
+    # batch float solution rather than a production RTK filter.
+    assert float.metadata.phase_rms_m < 0.03
 
     # The SSC coordinates are marker coordinates; the observations are tied to
     # the antenna reference points. Applying the RINEX antenna-height deltas is
