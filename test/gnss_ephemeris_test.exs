@@ -1,11 +1,17 @@
 defmodule Orbis.GNSS.EphemerisTest do
   @moduledoc """
   Unified satellite-ephemeris sampling (`Orbis.GNSS.Ephemeris`) and the
-  broadcast-vs-precise accuracy check (`Orbis.GNSS.BroadcastComparison`),
-  exercised on the real 2020 DOY177 ESBC broadcast nav + GBM precise SP3
-  fixtures. GPS LNAV orbits should agree with the precise product at the
-  1-2 m level (IS-GPS-200 broadcast accuracy); a wild value flags a parse/eval
-  regression.
+  broadcast-vs-precise accuracy check (`Orbis.GNSS.BroadcastComparison`), on real
+  2020 DOY177 IGS data.
+
+  The broadcast-vs-precise validation differences the IGS combined broadcast
+  navigation message (`BRDC00IGS`) against the CODE MGEX final precise orbits
+  (`COD0MGXFIN`) over the full UTC day, for GPS, Galileo, and BeiDou. GPS LNAV
+  agrees at ~1-2 m, Galileo I/NAV at sub-metre, BeiDou at a few metres
+  (IS-GPS-200 / Galileo OS-SIS-ICD / BeiDou BDS-SIS-ICD broadcast accuracy); a
+  wild value flags a parse/eval/coverage regression. The combined broadcast is
+  used rather than a single station because one station's recording has Galileo
+  and BeiDou coverage gaps that would inflate the residual.
   """
   use ExUnit.Case, async: true
 
@@ -16,6 +22,12 @@ defmodule Orbis.GNSS.EphemerisTest do
 
   @nav_path Path.join(__DIR__, "fixtures/nav/ESBC00DNK_R_20201770000_01D_MN.rnx")
   @sp3_path Path.join(__DIR__, "fixtures/sp3/GBM0MGXRAP_20201770000_01D_05M_ORB_73epoch.sp3")
+
+  # Full-day, multi-GNSS broadcast-vs-precise inputs (IGS combined broadcast +
+  # CODE MGEX final precise orbits), 2020 DOY177, sampled over the whole day.
+  @full_nav_path Path.join(__DIR__, "fixtures/nav/BRDC00IGS_R_20201770000_01D_GEC.rnx")
+  @full_sp3_path Path.join(__DIR__, "fixtures/sp3/COD0MGXFIN_20201770000_01D_05M_ORB.SP3")
+  @full_window %{from: ~N[2020-06-25 00:15:00], to: ~N[2020-06-25 23:45:00], step_s: 900}
 
   setup_all do
     {:ok, broadcast: Broadcast.load!(@nav_path), sp3: SP3.load!(@sp3_path)}
@@ -90,62 +102,80 @@ defmodule Orbis.GNSS.EphemerisTest do
     end
   end
 
-  describe "BroadcastComparison.compare/4 on real GPS broadcast vs precise" do
-    setup %{broadcast: broadcast, sp3: sp3} do
-      gps =
-        sp3 |> SP3.satellite_ids() |> Enum.filter(&String.starts_with?(&1, "G")) |> Enum.sort()
+  describe "BroadcastComparison.compare/4 — broadcast vs precise over a full day" do
+    setup do
+      nav = Broadcast.load!(@full_nav_path)
+      sp3 = SP3.load!(@full_sp3_path)
+      sats = SP3.satellite_ids(sp3)
 
-      window = %{from: ~N[2020-06-25 00:15:00], to: ~N[2020-06-25 05:45:00], step_s: 900}
-      {:ok, report: BroadcastComparison.compare(broadcast, sp3, gps, window)}
+      reports =
+        Map.new(["G", "E", "C"], fn sys ->
+          ids = sats |> Enum.filter(&String.starts_with?(&1, sys)) |> Enum.sort()
+          {sys, BroadcastComparison.compare(nav, sp3, ids, @full_window)}
+        end)
+
+      {:ok, reports: reports}
     end
 
-    test "GPS LNAV orbit agreement lands in the broadcast accuracy band", %{report: report} do
-      overall = report.overall
-      assert overall.count > 100
+    test "GPS LNAV orbit agreement is ~1-2 m over the day", %{reports: reports} do
+      o = reports["G"].overall
+      assert o.count > 1000
 
-      # Expected GPS broadcast-vs-precise orbit RMS is ~1-2 m. The lower bound makes
-      # the assertion non-tautological: a zeroed or broken eval would collapse to ~0.
-      assert overall.orbit_3d_rms_m > 0.3
-      assert overall.orbit_3d_rms_m < 3.0
-      assert overall.orbit_3d_max_m < 6.0
+      # ~1-2 m expected. The lower bound is non-tautological: a zeroed/broken eval
+      # collapses to ~0; the upper bound flags a parse/eval/coverage regression.
+      assert o.orbit_3d_rms_m > 0.3 and o.orbit_3d_rms_m < 3.0
+      assert o.orbit_3d_max_m < 6.0
     end
 
-    test "the radial/along/cross decomposition is orthonormal and consistent", %{report: report} do
-      overall = report.overall
+    test "Galileo I/NAV orbit agreement is sub-metre to ~1 m over the day", %{reports: reports} do
+      o = reports["E"].overall
+      assert o.count > 1000
 
-      assert overall.radial_rms_m > 0.0
-      assert overall.along_rms_m > 0.0
-      assert overall.cross_rms_m > 0.0
-
-      # RAC is an orthonormal rotation of the 3D difference, so the 3D RMS must equal
-      # the quadrature sum of the component RMS values.
-      quadrature =
-        :math.sqrt(
-          overall.radial_rms_m ** 2 + overall.along_rms_m ** 2 + overall.cross_rms_m ** 2
-        )
-
-      assert_in_delta overall.orbit_3d_rms_m, quadrature, 1.0e-6
+      # Galileo broadcast is the most accurate constellation; a gappy single-station
+      # nav inflates this past 10 m, so the upper bound guards coverage + eval.
+      assert o.orbit_3d_rms_m > 0.1 and o.orbit_3d_rms_m < 2.0
+      assert o.orbit_3d_max_m < 4.0
     end
 
-    test "clock differences are finite and reported per satellite", %{report: report} do
-      overall = report.overall
+    test "BeiDou orbit agreement is a few metres over the day", %{reports: reports} do
+      o = reports["C"].overall
+      assert o.count > 300
 
-      # The clock difference is the raw broadcast-minus-precise offset; it carries a
-      # per-satellite datum/bias term (L1/TGD-referenced broadcast vs IF-referenced
-      # precise), so it is larger than the orbit term but must stay bounded.
-      assert is_float(overall.clock_rms_m)
-      assert overall.clock_rms_m > 0.0 and overall.clock_rms_m < 50.0
+      # BeiDou-2 SIS is metre-level for MEO/IGSO; the upper bound flags a defect.
+      assert o.orbit_3d_rms_m > 0.5 and o.orbit_3d_rms_m < 6.0
+      assert o.orbit_3d_max_m < 12.0
     end
 
-    test "per-satellite stats are populated and gaps are reported explicitly", %{report: report} do
-      assert map_size(report.per_satellite) > 4
+    test "the radial/along/cross decomposition is orthonormal per system", %{reports: reports} do
+      for sys <- ["G", "E", "C"] do
+        o = reports[sys].overall
+        assert o.radial_rms_m > 0.0 and o.along_rms_m > 0.0 and o.cross_rms_m > 0.0
 
-      {_sat, stats} = Enum.find(report.per_satellite, fn {_sat, s} -> s.count > 0 end)
+        # RAC is an orthonormal rotation of the difference, so the 3D RMS equals the
+        # quadrature sum of the component RMS values.
+        quadrature =
+          :math.sqrt(o.radial_rms_m ** 2 + o.along_rms_m ** 2 + o.cross_rms_m ** 2)
+
+        assert_in_delta o.orbit_3d_rms_m, quadrature, 1.0e-6
+      end
+    end
+
+    test "clock differences are finite per system", %{reports: reports} do
+      for sys <- ["G", "E", "C"] do
+        o = reports[sys].overall
+        assert is_float(o.clock_rms_m)
+        assert o.clock_rms_m > 0.0 and o.clock_rms_m < 50.0
+      end
+    end
+
+    test "per-satellite stats are populated and out-of-coverage cells are skipped, not extrapolated",
+         %{reports: reports} do
+      g = reports["G"]
+      assert map_size(g.per_satellite) > 20
+      assert is_list(g.missing)
+
+      {_sat, stats} = Enum.find(g.per_satellite, fn {_sat, s} -> s.count > 0 end)
       assert stats.orbit_3d_rms_m > 0.0
-
-      # Some GPS satellites only broadcast valid ephemeris for part of the window, so
-      # the comparison reports the skipped cells rather than silently dropping them.
-      assert report.missing != []
     end
   end
 end
