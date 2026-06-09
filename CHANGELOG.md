@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-06-09
+
 ### Fixed
 
 - `Orbis.GNSS.SP3.merge/2` and `Orbis.GNSS.Data.fetch_merged_sp3/3` now reject
