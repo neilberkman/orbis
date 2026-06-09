@@ -5,7 +5,7 @@
 //! result back. The id<->order mapping and the `ambiguity_search` metadata shape
 //! live on the Elixir side (`Orbis.GNSS.Core.IntegerLeastSquares`).
 
-use astrodynamics_gnss::ils::{bounded_ils_search, IlsError};
+use astrodynamics_gnss::ils::{bounded_ils_search, lambda_ils_search, IlsError};
 use rustler::{Encoder, Env, NifResult, Term};
 
 mod atoms {
@@ -37,13 +37,43 @@ fn ils_search<'a>(
     candidate_limit: usize,
     ratio_threshold: f64,
 ) -> NifResult<Term<'a>> {
-    match bounded_ils_search(
-        &float_cycles,
-        &covariance,
-        radius,
-        candidate_limit,
-        ratio_threshold,
-    ) {
+    encode_ils(
+        env,
+        bounded_ils_search(
+            &float_cycles,
+            &covariance,
+            radius,
+            candidate_limit,
+            ratio_threshold,
+        ),
+    )
+}
+
+/// Correct integer least squares via the LAMBDA method (RTKLIB `lambda()` port).
+///
+/// Same `{:ok, {...}}` / `{:error, ...}` shape as [`ils_search`], but solves any
+/// positive-definite covariance correctly (no search box, no `radius`/
+/// `candidate_limit`). The only failure is a degenerate (non-PD) covariance,
+/// reported as `{:error, :singular_geometry}`.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn ils_lambda_search<'a>(
+    env: Env<'a>,
+    float_cycles: Vec<f64>,
+    covariance: Vec<Vec<f64>>,
+    ratio_threshold: f64,
+) -> NifResult<Term<'a>> {
+    encode_ils(
+        env,
+        lambda_ils_search(&float_cycles, &covariance, ratio_threshold),
+    )
+}
+
+/// Encode an `IlsResult`/`IlsError` into the shared Elixir result shape.
+fn encode_ils<'a>(
+    env: Env<'a>,
+    result: Result<astrodynamics_gnss::ils::IlsResult, IlsError>,
+) -> NifResult<Term<'a>> {
+    match result {
         Ok(r) => {
             let ratio_term: Term<'a> = if r.ratio.is_infinite() {
                 atoms::infinity().encode(env)

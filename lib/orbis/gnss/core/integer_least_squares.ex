@@ -12,20 +12,51 @@ defmodule Orbis.GNSS.Core.IntegerLeastSquares do
     ids = float_cycles_by_id |> Map.keys() |> Enum.sort()
     floats = Enum.map(ids, &Map.fetch!(float_cycles_by_id, &1))
 
-    case NIF.ils_search(
-           floats,
-           covariance_cycles,
-           opts.radius_cycles,
-           opts.candidate_limit,
-           opts.ratio_threshold
-         ) do
+    NIF.ils_search(
+      floats,
+      covariance_cycles,
+      opts.radius_cycles,
+      opts.candidate_limit,
+      opts.ratio_threshold
+    )
+    |> build_result(ids, float_cycles_by_id, :bounded_ils)
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Correct integer least squares via the LAMBDA method (RTKLIB `lambda()` port).
+
+  Unlike `search/3` (a bounded ±radius box that only finds the true ILS optimum
+  when it lies within the box), this solves any positive-definite covariance
+  correctly with no combinatorial blow-up — gated against RTKLIB's own reference
+  vectors (`test/lambda_ils_reference_test.exs`). It ignores `:radius_cycles` and
+  `:candidate_limit`; only `:ratio_threshold` applies.
+  """
+  @spec lambda_search(%{String.t() => number()}, [[number()]], map()) ::
+          {:ok, %{String.t() => integer()}, map()} | {:error, term()}
+  def lambda_search(float_cycles_by_id, covariance_cycles, opts)
+      when is_map(float_cycles_by_id) and is_list(covariance_cycles) do
+    ids = float_cycles_by_id |> Map.keys() |> Enum.sort()
+    floats = Enum.map(ids, &Map.fetch!(float_cycles_by_id, &1))
+
+    NIF.ils_lambda_search(floats, covariance_cycles, opts.ratio_threshold)
+    |> build_result(ids, float_cycles_by_id, :lambda)
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  # Shared decode of the NIF result tuple into the public fixed-cycles + metadata
+  # shape (both the bounded-box and LAMBDA kernels return the same shape).
+  defp build_result(nif_result, ids, float_cycles_by_id, method) do
+    case nif_result do
       {:ok, {fixed_list, status?, ratio, best, second, evaluated, {q_cycles, q_inv}}} ->
         fixed_cycles = ids |> Enum.zip(fixed_list) |> Map.new()
 
         {:ok, fixed_cycles,
          %{
            integer_status: if(status?, do: :fixed, else: :not_fixed),
-           integer_method: :bounded_ils,
+           integer_method: method,
            integer_ratio: ratio,
            integer_best_score: best,
            integer_second_best_score: second,
@@ -41,8 +72,6 @@ defmodule Orbis.GNSS.Core.IntegerLeastSquares do
       {:error, reason} ->
         {:error, reason}
     end
-  rescue
-    e in ErlangError -> {:error, e.original}
   end
 
   # Pure-Elixir reference implementation — the bit-identical parity oracle for the

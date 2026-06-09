@@ -100,4 +100,27 @@ defmodule Orbis.GNSS.Core.LambdaIlsReferenceTest do
                ILS.search(float_map(c["a"]), c["Q"], wide)
     end
   end
+
+  describe "lambda_search/3 (LAMBDA) matches RTKLIB on ALL cases, in- and out-of-regime" do
+    for c <- @golden["cases"] do
+      @case c
+      test "#{c["name"]}: lambda_search reproduces RTKLIB's exact solution" do
+        ids = ids_for(@case["n"])
+        {:ok, fixed_map, meta} = ILS.lambda_search(float_map(@case["a"]), @case["Q"], @opts)
+        fixed_vec = Enum.map(ids, &Map.fetch!(fixed_map, &1))
+
+        # Exact integer match even for the strongly-correlated utest2 the box
+        # cannot solve — this is the whole point of the LAMBDA path.
+        assert fixed_vec == hd(@case["lambda_fixed"]),
+               "lambda_search selected a different integer vector than RTKLIB lambda()"
+
+        [s_best, s_second] = @case["lambda_residuals"]
+        # utest2 residuals are ~1.5e3; hold RTKLIB's own 1e-4 there, tighter elsewhere.
+        tol = max(@score_tol, abs(s_best) * 1.0e-9 + 1.0e-4)
+        assert_in_delta meta.integer_best_score, s_best, tol
+        assert_in_delta meta.integer_second_best_score, s_second, tol
+        assert meta.integer_method == :lambda
+      end
+    end
+  end
 end

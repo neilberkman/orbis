@@ -139,6 +139,9 @@ defmodule Orbis.NIF do
   def ils_search(_float_cycles, _covariance, _radius, _candidate_limit, _ratio_threshold),
     do: :erlang.nif_error(:nif_not_loaded)
 
+  def ils_lambda_search(_float_cycles, _covariance, _ratio_threshold),
+    do: :erlang.nif_error(:nif_not_loaded)
+
   def reduced_orbit_position(_epoch, _scale, _elements, _query, _frame),
     do: :erlang.nif_error(:nif_not_loaded)
 
