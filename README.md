@@ -25,7 +25,7 @@ SGP4/SDP4, coordinate transforms, GNSS positioning, orbit determination, and the
 | **Atmospheric density**    | NRLMSISE-00 model, surface to ~1000 km (Rust NIF)                                                                                                                                                                                                                                                               |
 | **JPL ephemeris**          | SPK/BSP reader for Sun, Moon, planets (Rust NIF)                                                                                                                                                                                                                                                                |
 | **GNSS positioning**       | Single-point positioning from SP3 or broadcast ephemeris — GPS, Galileo, BeiDou, GLONASS — plus single/multi-epoch carrier-phase positioning, integer ambiguity fixing, partial ambiguity resolution, and RTK baseline primitives                                                                               |
-| **GNSS ephemeris & data**  | SP3 precise products (including multi-source merge across analysis centers) and broadcast-vs-precise orbit/clock accuracy checks, RINEX 3.x/4.xx broadcast navigation, GNSS constellation catalogs, and optional SP3/CLK/NAV/IONEX fetch/cache from public archives                                             |
+| **GNSS ephemeris & data**  | SP3 precise products (read, multi-source merge across analysis centers, and write back out) plus broadcast-vs-precise orbit/clock accuracy checks, RINEX 3.x/4.xx broadcast navigation, GNSS constellation catalogs, and optional SP3/CLK/NAV/IONEX fetch/cache from public archives                            |
 | **GNSS observations**      | RINEX 3 observation parsing with Hatanaka (CRINEX) decoding — raw observation values, carrier phases, pseudoranges, and station positioning from `.crx`/`.rnx` files (Rust NIF)                                                                                                                                 |
 | **Reduced orbit**          | Compact fitted mean-element model (circular or eccentric) for fast approximate position, caching, and transport — with source-backed drift reporting (Rust NIF)                                                                                                                                                 |
 | **GNSS measurements & QC** | Predicted observables (range, range-rate, Doppler, az/el), receiver velocity from Doppler, RAIM fault detection + FDE, dilution of precision & visibility, carrier-phase combinations / slip detection / Hatch smoothing, dual-frequency ionosphere-free combination, and code-differential (DGNSS) positioning |
@@ -201,6 +201,10 @@ sp3 = Orbis.GNSS.SP3.load!("GBM0MGXRAP_20201760000_01D_05M_ORB.SP3")
 # union coverage, robust per-(sat, epoch) consensus, outliers quarantined
 # rather than silently averaged.
 {:ok, merged, _report} = Orbis.GNSS.SP3.merge([sp3_cod, sp3_gfz, sp3_grg])
+
+# ...and write the merged product back out as a single standard SP3 file
+# (read → merge → write; atomic, optionally gzipped):
+{:ok, _path} = Orbis.GNSS.Data.write_sp3(merged, "merged.sp3")
 
 # Or broadcast navigation — GPS, Galileo, BeiDou, GLONASS (RINEX 3.x/4.xx)
 eph = Orbis.GNSS.Broadcast.load!("BRDC00IGS_20201770000_01D_MN.rnx")
