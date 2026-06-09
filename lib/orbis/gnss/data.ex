@@ -568,6 +568,68 @@ defmodule Orbis.GNSS.Data do
     |> merge_available_sp3(opts)
   end
 
+  @doc """
+  Fetch the merged current-day SP3 product from several centers **and persist it
+  to `path`** in one call — the live-latency workflow's entry point.
+
+  This composes `fetch_merged_sp3/3` (fetch + merge, in the numeric layer's
+  in-memory form) with `write_sp3/3` (the data layer's atomic file write), so the
+  result is a standard, self-contained SP3 file on disk. That file is exactly
+  what the cache / `Orbis.GNSS.SP3` / `Orbis.GNSS.Positioning` layers consume,
+  which unblocks the end-to-end path:
+
+      merged current-day SP3 -> standard file -> Observables / Positioning
+
+  Because the numeric layer never reaches for I/O, a later solve reads the cached
+  file with no network — fetch once here, then point the solver at `path`.
+
+  `target`, `centers`, and the fetch/merge options behave exactly as in
+  `fetch_merged_sp3/3` (ultra-rapid issue selection, per-center precedence,
+  offline mode, `:cache_dir`, the SP3 `merge/2` tuning keys, …). Write options
+  are shared with `write_sp3/3`:
+
+    * `:gzip` — gzip-compress the written file (default `false`); pair it with a
+      `.gz` extension on `path`.
+
+  Returns:
+
+    * `{:ok, path, report}` — the merged product was written; `report` is the
+      same merge/contributor audit `fetch_merged_sp3/3` returns
+      (`:contributors`, `:absent`, `:source_count`, `:single_product?`,
+      `:quarantined`, …).
+    * `{:error, {:no_products, reasons}}` / `{:error, {:incompatible_sources, _}}`
+      — propagated from the fetch/merge step; nothing is written.
+    * any `write_sp3/3` error (e.g. `{:error, {:write_failed, reason}}`) — the
+      product merged but could not be persisted.
+
+  ## Examples
+
+      iex> cache = System.tmp_dir!()
+      iex> path = Path.join(cache, "no_such_product.sp3")
+      iex> {:error, {:no_products, [%{center: :igs_ult, reason: :offline_miss}]}} =
+      ...>   Orbis.GNSS.Data.fetch_merged_sp3_file(~D[2024-09-03], [:igs_ult], path,
+      ...>     offline: true, cache_dir: cache)
+      iex> File.exists?(path)
+      false
+  """
+  @spec fetch_merged_sp3_file(
+          Date.t() | NaiveDateTime.t() | DateTime.t(),
+          [atom()],
+          Path.t(),
+          keyword()
+        ) ::
+          {:ok, Path.t(), map()}
+          | {:error, {:no_products, [map()]}}
+          | {:error, {:incompatible_sources, map()}}
+          | error()
+  def fetch_merged_sp3_file(target, centers, path, opts \\ [])
+      when is_list(centers) and is_binary(path) do
+    with {:ok, merged, report} <- fetch_merged_sp3(target, centers, opts),
+         {:ok, path} <- write_sp3(merged, path, Keyword.take(opts, [:gzip])) do
+      {:ok, path, report}
+    end
+  end
+
   defp fetch_center_sp3(center, target, opts) do
     case sp3_candidates(center, target, opts) do
       {:ok, candidates} ->
