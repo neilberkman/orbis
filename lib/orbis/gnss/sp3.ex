@@ -122,6 +122,34 @@ defmodule Orbis.GNSS.SP3 do
   end
 
   @doc """
+  Serialize the product to standard SP3-c / SP3-d text as iodata. Pure — no I/O.
+
+  This is the inverse of `load/1` / `parse/1`: a read → (`merge/2`) → write
+  pipeline round-trips to a single standard SP3 file any reader consumes. The
+  output is deterministic (same product → identical bytes). Header fields
+  (version, epoch count, satellite list, time system, week / seconds-of-week /
+  MJD / interval) are derived from the product. A satellite absent at an epoch is
+  written as the SP3 missing-orbit sentinel — so a quarantined `merge/2` cell
+  re-reads as missing, never a fabricated position.
+
+  To write to disk (optionally gzipped, with an atomic commit), use
+  `Orbis.GNSS.Data.write_sp3/3`.
+
+  ## Examples
+
+      {:ok, sp3} = Orbis.GNSS.SP3.load("igs.sp3")
+      iodata = Orbis.GNSS.SP3.to_iodata(sp3)
+      {:ok, ^sp3_equal} = Orbis.GNSS.SP3.parse(IO.iodata_to_binary(iodata))
+  """
+  @spec to_iodata(t(), keyword()) :: iodata()
+  def to_iodata(%__MODULE__{handle: handle}, _opts \\ []) do
+    NIF.sp3_to_iodata(handle)
+  rescue
+    e in ErlangError ->
+      raise ArgumentError, "could not serialize SP3 product: #{inspect(e.original)}"
+  end
+
+  @doc """
   Interpolate the state of satellite `sat_id` at `epoch`.
 
   `sat_id` is the canonical SP3/RINEX token, e.g. `"G01"` (GPS PRN 1), `"E12"`,

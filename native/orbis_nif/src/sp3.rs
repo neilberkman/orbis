@@ -249,3 +249,11 @@ fn sp3_merge<'a>(
 
     Ok((handle, (quarantined, single_source, position_outliers)).encode(env))
 }
+
+/// Serialize a loaded SP3 product to standard SP3-c/-d text (the inverse of
+/// `sp3_parse/1`). Dirty-CPU: a full IGS day serializes many thousands of
+/// records, unbounded relative to the 1 ms NIF budget.
+#[rustler::nif(schedule = "DirtyCpu")]
+fn sp3_to_iodata(handle: ResourceArc<Sp3Resource>) -> NifResult<String> {
+    Ok(handle.sp3.to_sp3_string())
+}

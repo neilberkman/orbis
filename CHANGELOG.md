@@ -6,6 +6,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-06-08
+
+### Added
+
+- `Orbis.GNSS.SP3.to_iodata/2` serializes an `%Orbis.GNSS.SP3{}` product back to
+  standard SP3-c / SP3-d text — the inverse of the reader, so a read → `merge/2`
+  → write pipeline emits a single standard SP3 file any reader consumes. Pure and
+  deterministic; header fields are derived from the product; a satellite absent
+  at an epoch is written as the SP3 missing-orbit sentinel (so a quarantined
+  merge cell re-reads as missing, never a fabricated position). Round-trips to
+  SP3 format precision (mm / sub-ns) for position-only and position+velocity,
+  multi-constellation products.
+- `Orbis.GNSS.Data.write_sp3/3` writes a product to disk with the fetch layer's
+  atomic-commit discipline (same-directory temp file + `File.rename/2`), with an
+  optional `gzip: true` for the gzipped-archive shape. Unblocks persisting a
+  merged product, which was otherwise only an in-memory handle.
+
 ## [0.13.0] - 2026-06-08
 
 ### Added

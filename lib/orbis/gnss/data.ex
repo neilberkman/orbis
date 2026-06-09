@@ -447,6 +447,62 @@ defmodule Orbis.GNSS.Data do
   end
 
   @doc """
+  Write an `Orbis.GNSS.SP3` product to `path` — the inverse of the fetch layer's
+  read.
+
+  The product is serialized with `Orbis.GNSS.SP3.to_iodata/2` (pure) and
+  committed atomically: the bytes are written to a temporary file in the same
+  directory, then `File.rename/2`d into place (atomic on POSIX), so a reader
+  never observes a half-written file. The unblocking case is persisting a
+  `merge/2` product, which is otherwise only an in-memory handle.
+
+  Returns `{:ok, path}` or `{:error, reason}`.
+
+  ## Options
+
+    * `:gzip` — gzip-compress the output, matching the gzipped archive products
+      (default `false`). Pair it with a `.gz` extension on `path`.
+
+  ## Examples
+
+      {:ok, merged, _report} = Orbis.GNSS.Data.fetch_merged_sp3(date, [:igs_ult, :cod_ult])
+      {:ok, _path} = Orbis.GNSS.Data.write_sp3(merged, "/tmp/merged.sp3")
+      {:ok, _path} = Orbis.GNSS.Data.write_sp3(merged, "/tmp/merged.sp3.gz", gzip: true)
+  """
+  @spec write_sp3(SP3.t(), Path.t(), keyword()) :: {:ok, Path.t()} | error()
+  def write_sp3(%SP3{} = sp3, path, opts \\ []) when is_binary(path) do
+    iodata = SP3.to_iodata(sp3)
+
+    bytes =
+      if Keyword.get(opts, :gzip, false) do
+        :zlib.gzip(iodata)
+      else
+        iodata
+      end
+
+    atomic_write(path, bytes)
+  rescue
+    e in ArgumentError -> {:error, {:serialize_failed, e.message}}
+  end
+
+  # Commit `bytes` to `path` via a same-directory temp file + atomic rename, so a
+  # concurrent reader never sees a partial file (mirrors the cache write path).
+  defp atomic_write(path, bytes) do
+    dir = Path.dirname(path)
+    tmp = Path.join(dir, ".tmp-sp3-#{System.unique_integer([:positive])}-#{:os.getpid()}")
+
+    with :ok <- File.mkdir_p(dir),
+         :ok <- File.write(tmp, bytes),
+         :ok <- File.rename(tmp, path) do
+      {:ok, path}
+    else
+      {:error, reason} ->
+        _ = File.rm(tmp)
+        {:error, {:write_failed, reason}}
+    end
+  end
+
+  @doc """
   Fetch a broadcast-navigation product and load it into an
   `Orbis.GNSS.Broadcast` handle.
 
