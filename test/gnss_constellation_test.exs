@@ -299,4 +299,115 @@ defmodule Orbis.GNSS.ConstellationTest do
       end
     end
   end
+
+  describe "health_timeline/2" do
+    test "builds half-open health intervals and transition diffs" do
+      healthy = record(3, usable?: true)
+      unhealthy = record(3, usable?: false)
+
+      assert {:ok, timeline} =
+               Constellation.health_timeline([
+                 {~N[2026-06-09 00:00:00], [healthy]},
+                 {~N[2026-06-09 01:00:00], [unhealthy]}
+               ])
+
+      assert Enum.map(timeline.intervals, &{&1.prn, &1.state, &1.from, &1.to}) == [
+               {3, :healthy, ~N[2026-06-09 00:00:00], ~N[2026-06-09 01:00:00]},
+               {3, :unhealthy, ~N[2026-06-09 01:00:00], nil}
+             ]
+
+      assert [%{epoch: ~N[2026-06-09 01:00:00], diff: diff}] = timeline.changes
+
+      assert diff.usability_changed == [
+               %{system: :gps, prn: 3, from: true, to: false}
+             ]
+
+      assert [%{health_changed: [%{system: :gps, prn: 3, from: :healthy, to: :unhealthy}]}] =
+               timeline.changes
+
+      refute timeline.stale?
+    end
+
+    test "supports explicit health_state source metadata for degraded records" do
+      healthy = record(5, source: %{health_state: :healthy})
+      degraded = record(5, source: %{health_state: :degraded})
+
+      assert Constellation.health_state(degraded) == :degraded
+
+      assert {:ok, timeline} =
+               Constellation.health_timeline([
+                 %{epoch: ~N[2026-06-09 00:00:00], records: [healthy]},
+                 %{epoch: ~N[2026-06-09 00:15:00], records: [degraded]}
+               ])
+
+      assert Enum.map(timeline.intervals, & &1.state) == [:healthy, :degraded]
+
+      assert [
+               %{
+                 diff: diff,
+                 health_changed: [%{system: :gps, prn: 5, from: :healthy, to: :degraded}]
+               }
+             ] = timeline.changes
+
+      refute Constellation.changed?(diff)
+    end
+
+    test "marks a timeline stale when as_of exceeds the configured threshold" do
+      assert {:ok, timeline} =
+               Constellation.health_timeline(
+                 [
+                   {~N[2026-06-09 00:00:00], [record(3)]}
+                 ],
+                 as_of: ~N[2026-06-10 01:00:00],
+                 stale_after_s: 86_400
+               )
+
+      assert timeline.stale?
+      assert timeline.latest_epoch == ~N[2026-06-09 00:00:00]
+      assert [%{to: ~N[2026-06-10 01:00:00]}] = timeline.intervals
+    end
+
+    test "serializes to a versioned map with string keys and ISO8601 epochs" do
+      assert {:ok, timeline} =
+               Constellation.health_timeline([
+                 {~N[2026-06-09 00:00:00],
+                  [record(3, source: %{navcen: %{nanu_type: "UNUSABLE"}})]}
+               ])
+
+      map = Constellation.health_timeline_to_map(timeline)
+
+      assert map["version"] == 1
+      assert map["latest_epoch"] == "2026-06-09T00:00:00"
+
+      assert [%{"state" => "healthy", "source" => %{"navcen" => %{"nanu_type" => "UNUSABLE"}}}] =
+               map["intervals"]
+
+      assert map["changes"] == []
+    end
+
+    test "rejects malformed snapshots and stale thresholds" do
+      assert {:error, :invalid_records} =
+               Constellation.health_timeline([{~N[2026-06-09 00:00:00], [:bad]}])
+
+      assert {:error, {:invalid_stale_after_s, 0}} =
+               Constellation.health_timeline([{~N[2026-06-09 00:00:00], [record(3)]}],
+                 stale_after_s: 0
+               )
+
+      assert {:error, {:duplicate_snapshot_epoch, ~N[2026-06-09 00:00:00]}} =
+               Constellation.health_timeline([
+                 {~N[2026-06-09 00:00:00], [record(3)]},
+                 {~N[2026-06-09 00:00:00], [record(4)]}
+               ])
+
+      assert {:error, {:invalid_as_of, ~N[2026-06-08 23:00:00], ~N[2026-06-09 00:00:00]}} =
+               Constellation.health_timeline([{~N[2026-06-09 00:00:00], [record(3)]}],
+                 as_of: ~N[2026-06-08 23:00:00]
+               )
+
+      assert_raise ArgumentError, ~r/expects a snapshot list/, fn ->
+        Constellation.health_timeline(:bad)
+      end
+    end
+  end
 end

@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `Orbis.GNSS.Constellation.health_timeline/2`, `health_state/1`, and
+  `health_timeline_to_map/1` build deterministic health/outage intervals from
+  timestamped catalog snapshots. The timeline reuses `diff/2` for snapshot
+  transitions, reports derived health-state changes, preserves source metadata
+  (including NAVCEN/NANU fields), supports stale-snapshot detection for catalog
+  watchers, and serializes to a versioned map for notification/state files.
+
 ## [0.14.1] - 2026-06-09
 
 ### Fixed

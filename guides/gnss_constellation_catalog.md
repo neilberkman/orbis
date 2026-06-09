@@ -63,3 +63,34 @@ report.extra_sp3_ids
 The catalog layer only reports data consistency. It does not change solver
 selection, infer cross-correlation, or apply application-specific satellite
 health policy.
+
+## Tracking Health Over Time
+
+Use `health_timeline/2` after validating a sequence of catalog snapshots. It
+turns timestamped catalogs into half-open health intervals and reuses `diff/2`
+for the structural transition audit. Each transition also carries derived
+health-state changes, so a watcher can report what changed without re-deriving
+the comparison.
+
+```elixir
+snapshots = [
+  {~N[2026-06-09 00:00:00], previous_records},
+  {~N[2026-06-09 06:00:00], current_records}
+]
+
+{:ok, timeline} =
+  Orbis.GNSS.Constellation.health_timeline(snapshots,
+    as_of: ~N[2026-06-09 07:00:00],
+    stale_after_s: 6 * 60 * 60
+  )
+
+timeline.intervals
+timeline.changes
+timeline.stale?
+```
+
+`health_state/1` keeps the policy deliberately small: explicit
+`:health_state` metadata wins when present, otherwise active+usable is
+`:healthy`, active+unusable is `:unhealthy`, and inactive records are
+`:unknown`. Serialize watcher state or notifications with
+`health_timeline_to_map/1`.

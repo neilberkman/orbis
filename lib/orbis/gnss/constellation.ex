@@ -179,6 +179,74 @@ defmodule Orbis.GNSS.Constellation do
           }
   end
 
+  defmodule HealthInterval do
+    @moduledoc """
+    One half-open health interval for a satellite identity.
+
+    `from` is inclusive and `to` is exclusive. The final interval in a timeline
+    has `to: nil` unless an `:as_of` option was provided to close it.
+    """
+
+    @enforce_keys [:system, :prn, :sp3_id, :state, :from, :to, :record, :source]
+    defstruct [:system, :prn, :sp3_id, :state, :from, :to, :record, :source]
+
+    @type state :: :healthy | :degraded | :unhealthy | :unknown
+
+    @type t :: %__MODULE__{
+            system: :gps,
+            prn: pos_integer(),
+            sp3_id: String.t(),
+            state: state(),
+            from: NaiveDateTime.t(),
+            to: NaiveDateTime.t() | nil,
+            record: Record.t(),
+            source: map()
+          }
+  end
+
+  defmodule HealthChange do
+    @moduledoc """
+    A catalog/health diff observed at one snapshot epoch.
+    """
+
+    @enforce_keys [:epoch, :diff, :health_changed]
+    defstruct [:epoch, :diff, :health_changed]
+
+    @type health_change :: %{
+            required(:system) => :gps,
+            required(:prn) => pos_integer(),
+            required(:from) => HealthInterval.state(),
+            required(:to) => HealthInterval.state()
+          }
+
+    @type t :: %__MODULE__{
+            epoch: NaiveDateTime.t(),
+            diff: Diff.t(),
+            health_changed: [health_change()]
+          }
+  end
+
+  defmodule HealthTimeline do
+    @moduledoc """
+    Health/outage timeline derived from timestamped constellation snapshots.
+
+    The timeline is an in-memory watcher artifact. It is deterministic and keeps
+    source metadata on every interval, but it does not fetch, infer future NANUs,
+    or mutate positioning policy.
+    """
+
+    @enforce_keys [:intervals, :changes, :latest_epoch, :stale_after_s, :stale?]
+    defstruct [:intervals, :changes, :latest_epoch, :stale_after_s, :stale?]
+
+    @type t :: %__MODULE__{
+            intervals: [HealthInterval.t()],
+            changes: [HealthChange.t()],
+            latest_epoch: NaiveDateTime.t() | nil,
+            stale_after_s: pos_integer() | nil,
+            stale?: boolean()
+          }
+  end
+
   @type error ::
           {:error, {:unsupported_system, term()}}
           | {:error, {:bad_celestrak_record, term(), map()}}
@@ -438,6 +506,133 @@ defmodule Orbis.GNSS.Constellation do
     diff.added != [] or diff.removed != [] or diff.norad_reassigned != [] or
       diff.sp3_id_changed != [] or diff.svn_changed != [] or diff.activity_changed != [] or
       diff.usability_changed != []
+  end
+
+  @doc """
+  Classify one catalog record's health state.
+
+  This is intentionally small policy: explicit `:health_state` metadata wins
+  when present, otherwise active+usable is healthy, active+unusable is unhealthy,
+  and inactive records are unknown.
+
+      iex> r = %Orbis.GNSS.Constellation.Record{
+      ...>   system: :gps,
+      ...>   prn: 3,
+      ...>   svn: nil,
+      ...>   norad_id: 40294,
+      ...>   sp3_id: "G03",
+      ...>   active?: true,
+      ...>   usable?: false,
+      ...>   source: %{}
+      ...> }
+      iex> Orbis.GNSS.Constellation.health_state(r)
+      :unhealthy
+  """
+  @spec health_state(Record.t()) :: HealthInterval.state()
+  def health_state(%Record{source: %{health_state: state}})
+      when state in ~w(healthy degraded unhealthy unknown)a, do: state
+
+  def health_state(%Record{source: %{"health_state" => state}})
+      when state in ["healthy", "degraded", "unhealthy", "unknown"],
+      do: String.to_existing_atom(state)
+
+  def health_state(%Record{active?: true, usable?: true}), do: :healthy
+  def health_state(%Record{active?: true, usable?: false}), do: :unhealthy
+  def health_state(%Record{}), do: :unknown
+
+  @doc """
+  Build a deterministic health timeline from timestamped catalog snapshots.
+
+  Snapshots may be `{epoch, records}` tuples or `%{epoch: epoch, records: records}`
+  maps. Epochs are normalized to UTC `NaiveDateTime`; `DateTime` inputs are
+  shifted to UTC before conversion.
+
+  Options:
+
+    * `:as_of` - close the final intervals at this epoch.
+    * `:stale_after_s` - mark the timeline stale when `as_of - latest_epoch`
+      exceeds this many seconds.
+
+  `changes` contains `diff/2` reports plus derived health-state transitions for
+  each snapshot transition. Duplicate PRNs are still the caller's
+  responsibility: validate snapshots before building a watcher timeline.
+
+      iex> base = %Orbis.GNSS.Constellation.Record{
+      ...>   system: :gps,
+      ...>   prn: 3,
+      ...>   svn: 69,
+      ...>   norad_id: 40294,
+      ...>   sp3_id: "G03",
+      ...>   active?: true,
+      ...>   usable?: true,
+      ...>   source: %{}
+      ...> }
+      iex> {:ok, timeline} =
+      ...>   Orbis.GNSS.Constellation.health_timeline([
+      ...>     {~N[2026-06-09 00:00:00], [base]},
+      ...>     {~N[2026-06-09 01:00:00], [%{base | usable?: false}]}
+      ...>   ])
+      iex> Enum.map(timeline.intervals, &{&1.prn, &1.state, &1.from, &1.to})
+      [
+        {3, :healthy, ~N[2026-06-09 00:00:00], ~N[2026-06-09 01:00:00]},
+        {3, :unhealthy, ~N[2026-06-09 01:00:00], nil}
+      ]
+  """
+  @spec health_timeline([tuple() | map()], keyword()) ::
+          {:ok, HealthTimeline.t()} | {:error, term()}
+  def health_timeline(snapshots, opts \\ [])
+
+  def health_timeline(snapshots, opts) when is_list(snapshots) do
+    with {:ok, normalized} <- normalize_snapshots(snapshots),
+         {:ok, as_of} <- normalize_optional_epoch(Keyword.get(opts, :as_of)),
+         {:ok, stale_after_s} <- normalize_stale_after(Keyword.get(opts, :stale_after_s)),
+         :ok <- validate_timeline_as_of(normalized, as_of) do
+      latest_epoch =
+        normalized
+        |> List.last()
+        |> case do
+          nil -> nil
+          {epoch, _} -> epoch
+        end
+
+      intervals = health_intervals(normalized, as_of)
+      changes = health_changes(normalized)
+
+      stale? =
+        not is_nil(as_of) and not is_nil(latest_epoch) and not is_nil(stale_after_s) and
+          NaiveDateTime.diff(as_of, latest_epoch, :second) > stale_after_s
+
+      {:ok,
+       %HealthTimeline{
+         intervals: intervals,
+         changes: changes,
+         latest_epoch: latest_epoch,
+         stale_after_s: stale_after_s,
+         stale?: stale?
+       }}
+    end
+  end
+
+  def health_timeline(_snapshots, _opts) do
+    raise ArgumentError, "Orbis.GNSS.Constellation.health_timeline/2 expects a snapshot list"
+  end
+
+  @doc """
+  Convert a health timeline to a versioned, JSON-friendly map.
+
+  The map is intended for watcher state files or notifications; rebuild a fresh
+  timeline from source snapshots when possible.
+  """
+  @spec health_timeline_to_map(HealthTimeline.t()) :: map()
+  def health_timeline_to_map(%HealthTimeline{} = timeline) do
+    %{
+      "version" => 1,
+      "latest_epoch" => encode_epoch(timeline.latest_epoch),
+      "stale_after_s" => timeline.stale_after_s,
+      "stale" => timeline.stale?,
+      "intervals" => Enum.map(timeline.intervals, &health_interval_to_map/1),
+      "changes" => Enum.map(timeline.changes, &health_change_to_map/1)
+    }
   end
 
   @doc """
@@ -795,6 +990,233 @@ defmodule Orbis.GNSS.Constellation do
   defp record_key(%Record{} = record), do: {record.system, record.prn}
   defp record_sort_key(%Record{} = record), do: sort_key(record_key(record))
   defp sort_key({system, prn}), do: {system, prn}
+
+  # --- health timeline -----------------------------------------------------
+
+  defp normalize_snapshots(snapshots) do
+    snapshots
+    |> Enum.reduce_while({:ok, []}, fn snapshot, {:ok, acc} ->
+      with {:ok, epoch, records} <- normalize_snapshot(snapshot),
+           :ok <- ensure_record_list(records) do
+        {:cont, {:ok, [{epoch, records} | acc]}}
+      else
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, normalized} ->
+        normalized =
+          normalized
+          |> Enum.reverse()
+          |> Enum.sort_by(fn {epoch, _} -> epoch end, NaiveDateTime)
+
+        with :ok <- unique_snapshot_epochs(normalized), do: {:ok, normalized}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp unique_snapshot_epochs(normalized) do
+    normalized
+    |> Enum.chunk_by(fn {epoch, _records} -> epoch end)
+    |> Enum.find(&(length(&1) > 1))
+    |> case do
+      nil -> :ok
+      [{epoch, _records} | _] -> {:error, {:duplicate_snapshot_epoch, epoch}}
+    end
+  end
+
+  defp normalize_snapshot({epoch, records}) do
+    with {:ok, epoch} <- normalize_epoch(epoch), do: {:ok, epoch, records}
+  end
+
+  defp normalize_snapshot(%{epoch: epoch, records: records}) do
+    with {:ok, epoch} <- normalize_epoch(epoch), do: {:ok, epoch, records}
+  end
+
+  defp normalize_snapshot(%{"epoch" => epoch, "records" => records}) do
+    with {:ok, epoch} <- normalize_epoch(epoch), do: {:ok, epoch, records}
+  end
+
+  defp normalize_snapshot(_), do: {:error, :invalid_snapshot}
+
+  defp normalize_optional_epoch(nil), do: {:ok, nil}
+  defp normalize_optional_epoch(epoch), do: normalize_epoch(epoch)
+
+  defp normalize_epoch(%NaiveDateTime{} = epoch),
+    do: {:ok, NaiveDateTime.truncate(epoch, :second)}
+
+  defp normalize_epoch(%DateTime{} = epoch) do
+    {:ok,
+     epoch
+     |> DateTime.shift_zone!("Etc/UTC")
+     |> DateTime.to_naive()
+     |> NaiveDateTime.truncate(:second)}
+  end
+
+  defp normalize_epoch(value) when is_binary(value) do
+    case NaiveDateTime.from_iso8601(value) do
+      {:ok, epoch} -> normalize_epoch(epoch)
+      {:error, _} -> {:error, {:invalid_epoch, value}}
+    end
+  end
+
+  defp normalize_epoch(value), do: {:error, {:invalid_epoch, value}}
+
+  defp ensure_record_list(records) when is_list(records) do
+    if Enum.all?(records, &match?(%Record{}, &1)), do: :ok, else: {:error, :invalid_records}
+  end
+
+  defp ensure_record_list(_), do: {:error, :invalid_records}
+
+  defp normalize_stale_after(nil), do: {:ok, nil}
+  defp normalize_stale_after(seconds) when is_integer(seconds) and seconds > 0, do: {:ok, seconds}
+  defp normalize_stale_after(seconds), do: {:error, {:invalid_stale_after_s, seconds}}
+
+  defp validate_timeline_as_of(_normalized, nil), do: :ok
+  defp validate_timeline_as_of([], _as_of), do: :ok
+
+  defp validate_timeline_as_of(normalized, as_of) do
+    {latest_epoch, _records} = List.last(normalized)
+
+    case NaiveDateTime.compare(as_of, latest_epoch) do
+      :lt -> {:error, {:invalid_as_of, as_of, latest_epoch}}
+      _ -> :ok
+    end
+  end
+
+  defp health_intervals([], _as_of), do: []
+
+  defp health_intervals(normalized, as_of) do
+    normalized
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {{epoch, records}, idx} ->
+      to =
+        case Enum.at(normalized, idx + 1) do
+          {next_epoch, _} -> next_epoch
+          nil -> as_of
+        end
+
+      records
+      |> Enum.sort_by(&record_sort_key/1)
+      |> Enum.map(&health_interval(&1, epoch, to))
+    end)
+  end
+
+  defp health_interval(%Record{} = record, from, to) do
+    %HealthInterval{
+      system: record.system,
+      prn: record.prn,
+      sp3_id: record.sp3_id,
+      state: health_state(record),
+      from: from,
+      to: to,
+      record: record,
+      source: record.source
+    }
+  end
+
+  defp health_changes(normalized) do
+    normalized
+    |> Enum.chunk_every(2, 1, :discard)
+    |> Enum.flat_map(fn [{_previous_epoch, previous}, {epoch, current}] ->
+      diff = diff(previous, current)
+      health_changed = health_state_changes(previous, current)
+
+      if changed?(diff) or health_changed != [] do
+        [%HealthChange{epoch: epoch, diff: diff, health_changed: health_changed}]
+      else
+        []
+      end
+    end)
+  end
+
+  defp health_state_changes(previous, current) do
+    previous_by_key = Map.new(previous, &{record_key(&1), &1})
+    current_by_key = Map.new(current, &{record_key(&1), &1})
+
+    previous_by_key
+    |> Map.keys()
+    |> MapSet.new()
+    |> MapSet.intersection(MapSet.new(Map.keys(current_by_key)))
+    |> MapSet.to_list()
+    |> Enum.sort_by(&sort_key/1)
+    |> Enum.flat_map(fn key ->
+      previous = Map.fetch!(previous_by_key, key)
+      current = Map.fetch!(current_by_key, key)
+      from = health_state(previous)
+      to = health_state(current)
+
+      if from == to do
+        []
+      else
+        {system, prn} = key
+        [%{system: system, prn: prn, from: from, to: to}]
+      end
+    end)
+  end
+
+  defp health_interval_to_map(%HealthInterval{} = interval) do
+    %{
+      "system" => Atom.to_string(interval.system),
+      "prn" => interval.prn,
+      "sp3_id" => interval.sp3_id,
+      "state" => Atom.to_string(interval.state),
+      "from" => encode_epoch(interval.from),
+      "to" => encode_epoch(interval.to),
+      "record" => record_to_map(interval.record),
+      "source" => stringify_map(interval.source)
+    }
+  end
+
+  defp health_change_to_map(%HealthChange{} = change) do
+    %{
+      "epoch" => encode_epoch(change.epoch),
+      "diff" => diff_to_map(change.diff),
+      "health_changed" => Enum.map(change.health_changed, &stringify_map/1)
+    }
+  end
+
+  defp diff_to_map(%Diff{} = diff) do
+    %{
+      "added" => Enum.map(diff.added, &record_to_map/1),
+      "removed" => Enum.map(diff.removed, &record_to_map/1),
+      "norad_reassigned" => Enum.map(diff.norad_reassigned, &stringify_map/1),
+      "sp3_id_changed" => Enum.map(diff.sp3_id_changed, &stringify_map/1),
+      "svn_changed" => Enum.map(diff.svn_changed, &stringify_map/1),
+      "activity_changed" => Enum.map(diff.activity_changed, &stringify_map/1),
+      "usability_changed" => Enum.map(diff.usability_changed, &stringify_map/1)
+    }
+  end
+
+  defp record_to_map(%Record{} = record) do
+    %{
+      "system" => Atom.to_string(record.system),
+      "prn" => record.prn,
+      "svn" => record.svn,
+      "norad_id" => record.norad_id,
+      "sp3_id" => record.sp3_id,
+      "active" => record.active?,
+      "usable" => record.usable?,
+      "source" => stringify_map(record.source)
+    }
+  end
+
+  defp encode_epoch(nil), do: nil
+  defp encode_epoch(%NaiveDateTime{} = epoch), do: NaiveDateTime.to_iso8601(epoch)
+
+  defp stringify_map(map) when is_map(map) do
+    Map.new(map, fn {key, value} -> {stringify_key(key), stringify_value(value)} end)
+  end
+
+  defp stringify_key(key) when is_atom(key), do: Atom.to_string(key)
+  defp stringify_key(key), do: to_string(key)
+
+  defp stringify_value(value) when is_map(value), do: stringify_map(value)
+  defp stringify_value(value) when is_list(value), do: Enum.map(value, &stringify_value/1)
+  defp stringify_value(value) when is_atom(value), do: Atom.to_string(value)
+  defp stringify_value(value), do: value
 
   # --- scalar helpers ------------------------------------------------------
 
