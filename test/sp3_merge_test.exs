@@ -9,7 +9,7 @@ defmodule Orbis.GNSS.SP3MergeTest do
   # `{satellite_token, [x_km, y_km, z_km], clock_us | nil}` records, so each test
   # controls which satellites a "center" reports and where. Mirrors the crate's
   # `sp3_records` test helper.
-  defp sp3_bytes(records, coordinate_system \\ "IGS14") do
+  defp sp3_bytes(records, coordinate_system \\ "IGS14", interval_s \\ 900.0) do
     n = length(records)
 
     sats =
@@ -18,7 +18,7 @@ defmodule Orbis.GNSS.SP3MergeTest do
 
     header = [
       "#cP2020  6 24  0  0  0.00000000       1 ORBIT #{coordinate_system} FIT  TST",
-      "## 2111 432000.00000000   900.00000000 59024 0.0000000000000",
+      "## 2111 432000.00000000 #{interval(interval_s)} 59024 0.0000000000000",
       "+   #{String.pad_leading(Integer.to_string(n), 2)}   #{sats}",
       "++         0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0",
       "%c G  cc GPS ccc cccc cccc cccc cccc ccccc ccccc ccccc ccccc",
@@ -46,6 +46,7 @@ defmodule Orbis.GNSS.SP3MergeTest do
   end
 
   defp fmt(v), do: :io_lib.format(~c"~14.6f", [v]) |> IO.iodata_to_binary()
+  defp interval(v), do: :io_lib.format(~c"~14.8f", [v]) |> IO.iodata_to_binary()
 
   defp seed(cache_dir, product, bytes) do
     {:ok, filename} = Data.Product.canonical_filename(product)
@@ -147,14 +148,12 @@ defmodule Orbis.GNSS.SP3MergeTest do
       assert report.quarantined == []
     end
 
-    test "merges equivalent IGS frame realizations (IGS20 vs IGc20)" do
-      # IGS20 / IGb20 / IGc20 are the same ITRF2020-based IGS frame — the middle
-      # letter is the product/realization line, not a datum — so they merge.
+    test "rejects differently labeled frames unless an exact transform is applied" do
       {:ok, a} = SP3.parse(sp3_bytes([{"G01", [15000.0, -20000.0, 5000.0], 100.0}], "IGS20"))
       {:ok, b} = SP3.parse(sp3_bytes([{"G01", [15000.0, -20000.0, 5000.0], 100.0}], "IGc20"))
 
-      assert {:ok, merged, _report} = SP3.merge([a, b])
-      assert "G01" in SP3.satellite_ids(merged)
+      assert {:error, reason} = SP3.merge([a, b])
+      assert to_string(reason) =~ "mismatched coordinate systems"
     end
 
     test "still rejects a genuine cross-datum pair (IGS14 vs IGS20)" do
@@ -162,6 +161,33 @@ defmodule Orbis.GNSS.SP3MergeTest do
       {:ok, b} = SP3.parse(sp3_bytes([{"G01", [15000.0, -20000.0, 5000.0], 100.0}], "IGS20"))
 
       assert {:error, _} = SP3.merge([a, b])
+    end
+
+    test "rejects mixed epoch intervals and honors a requested target interval" do
+      {:ok, a} =
+        SP3.parse(sp3_bytes([{"G01", [15000.0, -20000.0, 5000.0], 100.0}], "IGS14", 900.0))
+
+      {:ok, b} =
+        SP3.parse(sp3_bytes([{"G01", [15000.0, -20000.0, 5000.0], 100.0}], "IGS14", 300.0))
+
+      assert {:error, reason} = SP3.merge([a, b])
+      assert to_string(reason) =~ "mismatched epoch intervals"
+
+      assert {:error, reason} = SP3.merge([a], epoch_interval_s: 300.0)
+      assert to_string(reason) =~ "mismatched epoch intervals"
+    end
+
+    test "filters the merged product to requested constellations" do
+      multi =
+        sp3_records([
+          {"G01", [15000.0, -20000.0, 5000.0], 100.0},
+          {"E01", [21000.0, -1000.0, 13000.0], 120.0}
+        ])
+
+      assert {:ok, merged, _report} = SP3.merge([multi], systems: [:gps])
+      assert SP3.satellite_ids(merged) == ["G01"]
+
+      assert {:error, {:unsupported_system, :bad}} = SP3.merge([multi], systems: [:bad])
     end
   end
 
@@ -315,6 +341,36 @@ defmodule Orbis.GNSS.SP3MergeTest do
 
       assert info.centers == [:igs_ult, :cod_ult]
       assert info.reason != nil
+    end
+
+    test "mixed source cadence surfaces a tagged reason instead of unioning grids", %{
+      cache_dir: cache_dir
+    } do
+      igs = Data.ops_ultra_sp3(:igs_ult, ~D[2024-09-03], issue: "0600")
+      cod = Data.ops_ultra_sp3(:cod_ult, ~D[2024-09-03], issue: "0600")
+
+      seed(
+        cache_dir,
+        igs,
+        sp3_bytes([{"G01", [15000.0, -20000.0, 5000.0], 100.0}], "IGS14", 900.0)
+      )
+
+      seed(
+        cache_dir,
+        cod,
+        sp3_bytes([{"G01", [15000.0, -20000.0, 5000.0], 100.0}], "IGS14", 300.0)
+      )
+
+      assert {:error, {:incompatible_sources, info}} =
+               Data.fetch_merged_sp3(~D[2024-09-03], [:igs_ult, :cod_ult],
+                 issue: "0600",
+                 offline: true,
+                 cache_dir: cache_dir,
+                 epoch_interval_s: 900.0
+               )
+
+      assert info.centers == [:igs_ult, :cod_ult]
+      assert to_string(info.reason) =~ "mismatched epoch intervals"
     end
   end
 

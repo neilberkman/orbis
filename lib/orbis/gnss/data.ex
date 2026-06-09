@@ -83,6 +83,11 @@ defmodule Orbis.GNSS.Data do
       else `false`)
     * `:cache_dir` — cache root (default `:filename.basedir(:user_cache,
       "orbis/gnss")`, overridable via `config :orbis, gnss_data_cache_dir:`)
+    * `:systems` — for merged SP3 fetches, restrict the output to constellations
+      such as `[:gps]` or `["G", "E"]`
+    * `:epoch_interval_s` — for merged SP3 fetches, require this exact target
+      epoch interval; mixed-cadence products are rejected rather than unioned
+      onto a corrupt grid
     * `:sha256` — expected SHA-256 (hex) of the **decompressed** file; verified
       on both cache hits and fresh downloads
     * `:max_decompressed_bytes` — gzip-bomb cap (default 500 MiB)
@@ -132,6 +137,8 @@ defmodule Orbis.GNSS.Data do
     min_agree
     clock_min_common
     combine
+    epoch_interval_s
+    systems
   )a
 
   # --- product builders ----------------------------------------------------

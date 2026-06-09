@@ -108,7 +108,9 @@ defmodule Orbis.NIF do
         _clock_tolerance_s,
         _min_agree,
         _clock_min_common,
-        _combine
+        _combine,
+        _target_epoch_interval_s,
+        _system_letters
       ), do: :erlang.nif_error(:nif_not_loaded)
 
   def crinex_decode(_text), do: :erlang.nif_error(:nif_not_loaded)

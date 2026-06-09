@@ -22,6 +22,7 @@ use astrodynamics_gnss::ephemeris::{
 };
 use astrodynamics_gnss::{GnssSatelliteId, GnssSystem};
 use rustler::{Encoder, Env, Error, NifResult, ResourceArc, Term};
+use std::collections::BTreeSet;
 
 /// Resource handle holding a parsed SP3 product across NIF calls.
 ///
@@ -44,6 +45,14 @@ fn system_from_letter(letter: &str) -> NifResult<GnssSystem> {
         .ok_or_else(|| Error::Term(Box::new("empty GNSS system letter")))?;
     GnssSystem::from_letter(c)
         .ok_or_else(|| Error::Term(Box::new(format!("unknown GNSS system letter {letter:?}"))))
+}
+
+fn systems_from_letters(letters: Vec<String>) -> NifResult<BTreeSet<GnssSystem>> {
+    let mut systems = BTreeSet::new();
+    for letter in letters {
+        systems.insert(system_from_letter(&letter)?);
+    }
+    Ok(systems)
 }
 
 /// Map a time-scale abbreviation onto the core [`TimeScale`]. Pure translation;
@@ -173,17 +182,19 @@ fn sp3_clock_reference_offset(
     other: ResourceArc<Sp3Resource>,
     min_common: usize,
 ) -> NifResult<Vec<(f64, f64, f64, u64)>> {
-    Ok(clock_reference_offset(&reference.sp3, &other.sp3, min_common)
-        .iter()
-        .map(|o| {
-            let (jd_whole, jd_fraction) = o
-                .epoch
-                .julian_date()
-                .map(|jd| (jd.jd_whole, jd.fraction))
-                .unwrap_or((0.0, 0.0));
-            (jd_whole, jd_fraction, o.offset_s, o.satellites as u64)
-        })
-        .collect())
+    Ok(
+        clock_reference_offset(&reference.sp3, &other.sp3, min_common)
+            .iter()
+            .map(|o| {
+                let (jd_whole, jd_fraction) = o
+                    .epoch
+                    .julian_date()
+                    .map(|jd| (jd.jd_whole, jd.fraction))
+                    .unwrap_or((0.0, 0.0));
+                (jd_whole, jd_fraction, o.offset_s, o.satellites as u64)
+            })
+            .collect(),
+    )
 }
 
 /// Return a new handle to a copy of `other` with its clocks shifted onto
@@ -217,6 +228,8 @@ fn sp3_merge<'a>(
     min_agree: usize,
     clock_min_common: usize,
     combine: String,
+    target_epoch_interval_s: Option<f64>,
+    system_letters: Vec<String>,
 ) -> NifResult<Term<'a>> {
     let combine = match combine.as_str() {
         "mean" => MergeCombine::Mean,
@@ -234,6 +247,12 @@ fn sp3_merge<'a>(
         min_agree,
         clock_min_common,
         combine,
+        target_epoch_interval_s,
+        systems: if system_letters.is_empty() {
+            None
+        } else {
+            Some(systems_from_letters(system_letters)?)
+        },
     };
 
     // The crate merge takes owned products; the handles are shared/immutable, so

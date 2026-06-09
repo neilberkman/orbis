@@ -189,14 +189,20 @@ defmodule Orbis.GNSS.SP3 do
 
   `sources` is a list of loaded products **in precedence order** (earlier wins
   ties). This is orthogonal to time-stitching: it combines providers at the same
-  epochs. For every `(epoch, satellite)` cell in the union of the inputs:
+  epochs on one shared time grid. Mixed-cadence products are rejected unless
+  callers resample before merging; they are never unioned onto a finer grid.
+  For every `(epoch, satellite)` cell on the shared grid:
 
-    * **Union coverage** — a satellite present in any input is present in the
-      merged product for that epoch (filling a single center's dropouts).
+    * **Union satellite coverage** — a satellite present in any input may appear
+      in the merged product, but only on epochs that keep a coherent arc.
     * **Consensus** — the largest subset of sources agreeing within tolerance is
       combined; sources outside it are recorded as outliers. A cell with no
       agreeing subset of `:min_agree` is *quarantined* (omitted), never averaged
       across disagreeing centers. A lone source is carried through.
+    * **Precedence arcs** — with `combine: :precedence`, source selection is
+      per satellite arc, not per cell. A satellite never alternates centers at
+      adjacent epochs; if the chosen source lacks a cell, that cell is omitted
+      rather than filled from a lower-precedence source.
 
   Returns `{:ok, %Orbis.GNSS.SP3{}, report}` or `{:error, reason}`, where
   `report` is a map with `:quarantined`, `:single_source`, and
@@ -211,38 +217,45 @@ defmodule Orbis.GNSS.SP3 do
     * `:min_agree` — agreeing sources required to accept a contested cell (default `2`)
     * `:clock_min_common` — common clocked satellites for the clock-datum estimate (default `5`)
     * `:combine` — `:mean` (default), `:median`, or `:precedence`
+    * `:epoch_interval_s` — require this target epoch interval, seconds
+    * `:systems` — restrict output to systems such as `[:gps]` or `["G", "E"]`
   """
   @spec merge([t()], keyword()) :: {:ok, t(), map()} | {:error, term()}
   def merge(sources, opts \\ []) when is_list(sources) do
-    handles = Enum.map(sources, fn %__MODULE__{handle: handle} -> handle end)
-    position_tolerance_m = Keyword.get(opts, :position_tolerance_m, 0.5)
-    clock_tolerance_s = Keyword.get(opts, :clock_tolerance_s, 5.0e-9)
-    min_agree = Keyword.get(opts, :min_agree, 2)
-    clock_min_common = Keyword.get(opts, :clock_min_common, 5)
-    combine = opts |> Keyword.get(:combine, :mean) |> to_string()
+    with {:ok, system_letters} <- normalize_merge_systems(Keyword.get(opts, :systems, [])) do
+      handles = Enum.map(sources, fn %__MODULE__{handle: handle} -> handle end)
+      position_tolerance_m = Keyword.get(opts, :position_tolerance_m, 0.5)
+      clock_tolerance_s = Keyword.get(opts, :clock_tolerance_s, 5.0e-9)
+      min_agree = Keyword.get(opts, :min_agree, 2)
+      clock_min_common = Keyword.get(opts, :clock_min_common, 5)
+      combine = opts |> Keyword.get(:combine, :mean) |> to_string()
+      epoch_interval_s = Keyword.get(opts, :epoch_interval_s)
 
-    case NIF.sp3_merge(
-           handles,
-           position_tolerance_m,
-           clock_tolerance_s,
-           min_agree,
-           clock_min_common,
-           combine
-         ) do
-      {handle, {quarantined, single_source, position_outliers}} when is_reference(handle) ->
-        report = %{
-          quarantined: Enum.map(quarantined, &to_flag/1),
-          single_source: Enum.map(single_source, &to_flag/1),
-          position_outliers: Enum.map(position_outliers, &to_flag/1)
-        }
+      case NIF.sp3_merge(
+             handles,
+             position_tolerance_m,
+             clock_tolerance_s,
+             min_agree,
+             clock_min_common,
+             combine,
+             epoch_interval_s,
+             system_letters
+           ) do
+        {handle, {quarantined, single_source, position_outliers}} when is_reference(handle) ->
+          report = %{
+            quarantined: Enum.map(quarantined, &to_flag/1),
+            single_source: Enum.map(single_source, &to_flag/1),
+            position_outliers: Enum.map(position_outliers, &to_flag/1)
+          }
 
-        {:ok, %__MODULE__{handle: handle, time_scale: NIF.sp3_time_scale(handle)}, report}
+          {:ok, %__MODULE__{handle: handle, time_scale: NIF.sp3_time_scale(handle)}, report}
 
-      {:error, _} = err ->
-        err
+        {:error, _} = err ->
+          err
 
-      other ->
-        {:error, other}
+        other ->
+          {:error, other}
+      end
     end
   rescue
     e in ErlangError -> {:error, e.original}
@@ -334,6 +347,46 @@ defmodule Orbis.GNSS.SP3 do
   end
 
   defp parse_sat_id(other), do: {:error, {:bad_sat_id, other}}
+
+  defp normalize_merge_systems(nil), do: {:ok, []}
+
+  defp normalize_merge_systems(systems) when is_list(systems) do
+    systems
+    |> Enum.reduce_while({:ok, []}, fn system, {:ok, acc} ->
+      case normalize_merge_system(system) do
+        {:ok, letter} -> {:cont, {:ok, [letter | acc]}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, letters} -> {:ok, letters |> Enum.reverse() |> Enum.uniq()}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp normalize_merge_systems(system), do: {:error, {:unsupported_systems_filter, system}}
+
+  defp normalize_merge_system(system) when is_atom(system) do
+    case system do
+      :gps -> {:ok, "G"}
+      :glonass -> {:ok, "R"}
+      :galileo -> {:ok, "E"}
+      :beidou -> {:ok, "C"}
+      :qzss -> {:ok, "J"}
+      :navic -> {:ok, "I"}
+      :sbas -> {:ok, "S"}
+      other -> {:error, {:unsupported_system, other}}
+    end
+  end
+
+  defp normalize_merge_system(<<letter::binary-size(1)>>) do
+    case String.upcase(letter) do
+      system when system in ~w(G R E C J I S) -> {:ok, system}
+      other -> {:error, {:unsupported_system, other}}
+    end
+  end
+
+  defp normalize_merge_system(other), do: {:error, {:unsupported_system, other}}
 
   defp epoch_to_split_jd(%NaiveDateTime{} = ndt) do
     {micro, _precision} = ndt.microsecond

@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- `Orbis.GNSS.SP3.merge/2` and `Orbis.GNSS.Data.fetch_merged_sp3/3` now reject
+  heterogeneous SP3 merge inputs conservatively instead of emitting a corrupt
+  union product: mixed epoch intervals must be resampled before merge (or match
+  a requested `:epoch_interval_s`), coordinate-system labels must match exactly,
+  and `combine: :precedence` selects one source per satellite arc rather than
+  switching centers between adjacent epochs. Merge callers can also restrict the
+  output with `:systems` (for example `[:gps]`).
+
 ### Added
 
 - `Orbis.GNSS.Constellation.health_timeline/2`, `health_state/1`, and
