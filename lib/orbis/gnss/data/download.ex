@@ -35,6 +35,15 @@ defmodule Orbis.GNSS.Data.Download do
   @doc false
   @spec get(String.t(), :https | :ftp, keyword()) :: {:ok, binary()} | {:error, term()}
   def get(url, protocol, opts \\ []) when is_binary(url) and protocol in [:https, :ftp] do
+    # The Erlang `:ftp` transport needs its application (and its `:ftp_sup`
+    # supervisor) running. `extra_applications` covers the normal case, but a
+    # consumer that uses Orbis without starting the `:orbis` app tree (an
+    # escript, a bare script, a release that does not start the dep) would hit
+    # `(EXIT) no process: :ftp_sup` on the first fetch. Start it here so the
+    # caller never has to start Erlang transports by hand. Idempotent, and no
+    # outbound connection happens until `check_host` has passed the allow-list.
+    if protocol == :ftp, do: Application.ensure_all_started(:ftp)
+
     with :ok <- check_host(url, protocol) do
       retries = Keyword.get(opts, :retries, @default_retries)
       backoff = Keyword.get(opts, :backoff_ms, @default_backoff_ms)

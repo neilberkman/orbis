@@ -38,6 +38,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   versus the single-frequency 4. The full-set refusal and single-frequency
   behavior are unchanged.
 
+### Fixed
+
+- `Orbis.GNSS.Data` now starts the Erlang `:ftp` transport itself before its
+  first FTP fetch (the GSSC/MGEX archives are FTP). A consumer that used Orbis
+  without starting the `:orbis` application tree (an escript, a bare script, a
+  release that did not start the dep) previously crashed with
+  `(EXIT) no process: :ftp_sup`; it no longer has to start Erlang transports by
+  hand.
+- `Orbis.GNSS.SP3.merge/2` now treats equivalent IGS reference-frame
+  realizations as compatible: `IGS20` / `IGb20` / `IGc20` are the same
+  ITRF2020-based IGS frame (the middle letter is the product/realization line,
+  not a datum), so products labeled differently across centers merge instead of
+  failing with `{:incompatible_sources, "mismatched coordinate systems"}`. A
+  genuinely different datum (e.g. `IGS14` vs `IGS20`) is still rejected.
+
 ## [0.13.0] - 2026-06-08
 
 ### Added

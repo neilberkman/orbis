@@ -146,6 +146,23 @@ defmodule Orbis.GNSS.SP3MergeTest do
       assert [%{satellite: "G01", sources: [2]}] = report.position_outliers
       assert report.quarantined == []
     end
+
+    test "merges equivalent IGS frame realizations (IGS20 vs IGc20)" do
+      # IGS20 / IGb20 / IGc20 are the same ITRF2020-based IGS frame — the middle
+      # letter is the product/realization line, not a datum — so they merge.
+      {:ok, a} = SP3.parse(sp3_bytes([{"G01", [15000.0, -20000.0, 5000.0], 100.0}], "IGS20"))
+      {:ok, b} = SP3.parse(sp3_bytes([{"G01", [15000.0, -20000.0, 5000.0], 100.0}], "IGc20"))
+
+      assert {:ok, merged, _report} = SP3.merge([a, b])
+      assert "G01" in SP3.satellite_ids(merged)
+    end
+
+    test "still rejects a genuine cross-datum pair (IGS14 vs IGS20)" do
+      {:ok, a} = SP3.parse(sp3_bytes([{"G01", [15000.0, -20000.0, 5000.0], 100.0}], "IGS14"))
+      {:ok, b} = SP3.parse(sp3_bytes([{"G01", [15000.0, -20000.0, 5000.0], 100.0}], "IGS20"))
+
+      assert {:error, _} = SP3.merge([a, b])
+    end
   end
 
   describe "Data.fetch_merged_sp3/3" do
