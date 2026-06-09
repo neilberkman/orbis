@@ -152,6 +152,58 @@ defmodule Orbis.GNSS.RTKRealArcTest do
     wide_lane_antenna_error_m = position_error(wide_lane_fixed.baseline_m, antenna_baseline)
 
     assert wide_lane_antenna_error_m < 0.2
+
+    # Dual-frequency partial ambiguity resolution. The full narrow-lane set
+    # fails the ratio test (asserted above as :not_fixed), but holding the
+    # wide-lane integers fixed collapses the per-ambiguity bias for most
+    # satellites. A confidence-ranked subset search therefore fixes a strictly
+    # larger safe subset than the single-frequency partial (4), without
+    # weakening the ratio threshold.
+    assert {:ok, dual_partial} =
+             RTK.solve_widelane_fixed_baseline_epochs(base_arp, dual_epochs,
+               initial_baseline_m: {0.0, 0.0, 0.0},
+               max_iterations: 10,
+               on_cycle_slip: :drop_satellite,
+               elevation_weighting: true,
+               code_sigma_m: 2.0,
+               phase_sigma_m: 0.01,
+               integer_candidate_limit: 200_000,
+               partial_ambiguity_resolution: true,
+               partial_min_ambiguities: 4
+             )
+
+    dual_partial_antenna_error_m = position_error(dual_partial.baseline_m, antenna_baseline)
+
+    assert dual_partial.metadata.integer_method == :widelane_narrowlane_bounded_ils
+    assert dual_partial.metadata.partial_ambiguity_resolution
+    assert dual_partial.metadata.partial_fixed
+    assert dual_partial.metadata.integer_status == :fixed
+    assert dual_partial.metadata.integer_ratio > 3.0
+
+    # Strictly larger than the single-frequency partial subset of 4.
+    assert length(dual_partial.metadata.partial_fixed_ambiguities) > 4
+
+    assert dual_partial.metadata.partial_fixed_ambiguities == [
+             "G05",
+             "G08",
+             "G09",
+             "G13",
+             "G18",
+             "G28"
+           ]
+
+    # G07 is the lone outlier the subset search drops (its narrow-lane float is
+    # several sigma off the integer lattice), so it stays a free ambiguity.
+    assert dual_partial.metadata.partial_free_ambiguities == ["G07"]
+
+    # The accepted dual-frequency partial fix is safe: its baseline error beats
+    # both the narrow-lane float and the refused full wide-lane/narrow-lane fix.
+    float_dual_antenna_error_m =
+      position_error(dual_partial.float_solution.baseline_m, antenna_baseline)
+
+    assert dual_partial_antenna_error_m < float_dual_antenna_error_m
+    assert dual_partial_antenna_error_m < wide_lane_antenna_error_m
+    assert dual_partial_antenna_error_m < 0.06
   end
 
   defp real_gps_l1_rtk_epochs(sp3, base_obs, rover_obs, count) do

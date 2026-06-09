@@ -563,6 +563,15 @@ defmodule Orbis.GNSS.RTK do
       cycles).
     * `:on_cycle_slip` - `:error` (default), `:drop_satellite`, or `:split_arc`.
       Split arcs get fresh ambiguity ids and are fixed independently.
+    * `:partial_ambiguity_resolution` - when `true`, a rejected full narrow-lane
+      integer fix is followed by confidence-ranked subset searches (and, when
+      the greedy ranking finds nothing, a bounded largest-first exhaustive
+      combination search). Holding the wide-lane integers fixed collapses the
+      per-ambiguity bias for most satellites, so the dual-frequency partial fix
+      can safely cover a larger subset than the single-frequency partial. The
+      ratio threshold is never weakened (default `false`).
+    * `:partial_min_ambiguities` - minimum subset size for partial ambiguity
+      resolution (default `#{@default_partial_min_ambiguities}`).
 
   Returns `{:ok, %FixedBaselineSolution{}}` or a tagged error.
   """
@@ -2376,18 +2385,110 @@ defmodule Orbis.GNSS.RTK do
           ok
 
         :not_fixed ->
-          # Preserve the historical not-fixed behavior by returning the full-set
-          # best candidate from the initial search when no subset passes.
-          {:ok, full_fixed_cycles,
-           Map.merge(
-             full_meta,
-             partial_meta(true, false, full_fixed_cycles, [], %{
-               ambiguity_offsets_m: offsets,
-               partial_full_set: full_set_integer_summary(full_meta)
-             })
-           )}
+          # The confidence-ranked nested-take is a greedy strategy: it keeps the
+          # highest-margin ambiguities and only ever drops the worst-ranked
+          # tail. On a dual-frequency narrow-lane arc the highest-margin
+          # ambiguity can be the very one whose inclusion destroys the ratio
+          # test, so the greedy ranking can step over a safe larger subset that
+          # excludes it. When the greedy ranking finds nothing, fall back to a
+          # bounded largest-first exhaustive combination search and accept the
+          # highest-ratio subset of the largest size that passes the (unchanged)
+          # ratio threshold. Single-frequency arcs reach a passing greedy subset
+          # first, so they never enter this fallback and keep their historical
+          # behavior.
+          search_partial_baseline_ambiguities_exhaustive(
+            ambiguity_ids,
+            float_cycles,
+            covariance_cycles,
+            offsets,
+            integer_opts,
+            full_fixed_cycles,
+            full_meta,
+            min_size
+          )
       end
     end
+  end
+
+  # Maximum ambiguity count for which the largest-first exhaustive subset
+  # fallback runs. Above this the combination count grows too large to be worth
+  # the search, and the historical not-fixed result is preserved.
+  @partial_exhaustive_max_ambiguities 14
+
+  defp search_partial_baseline_ambiguities_exhaustive(
+         ambiguity_ids,
+         float_cycles,
+         covariance_cycles,
+         offsets,
+         integer_opts,
+         full_fixed_cycles,
+         full_meta,
+         min_size
+       ) do
+    not_fixed = fn ->
+      {:ok, full_fixed_cycles,
+       Map.merge(
+         full_meta,
+         partial_meta(true, false, full_fixed_cycles, [], %{
+           ambiguity_offsets_m: offsets,
+           partial_full_set: full_set_integer_summary(full_meta)
+         })
+       )}
+    end
+
+    if length(ambiguity_ids) > @partial_exhaustive_max_ambiguities do
+      not_fixed.()
+    else
+      (length(ambiguity_ids) - 1)..min_size//-1
+      |> Enum.reduce_while(:not_fixed, fn subset_size, :not_fixed ->
+        best_passing =
+          ambiguity_ids
+          |> ambiguity_subset_combinations(subset_size)
+          |> Enum.reduce(nil, fn subset_ids, best ->
+            subset_ids = Enum.sort(subset_ids)
+
+            case search_ambiguity_subset(
+                   subset_ids,
+                   ambiguity_ids,
+                   float_cycles,
+                   covariance_cycles,
+                   offsets,
+                   integer_opts,
+                   full_meta
+                 ) do
+              {:ok, _fixed_cycles, %{integer_status: :fixed, integer_ratio: ratio}} = ok ->
+                case best do
+                  {best_ratio, _} when best_ratio >= ratio -> best
+                  _ -> {ratio, ok}
+                end
+
+              _ ->
+                best
+            end
+          end)
+
+        case best_passing do
+          {_ratio, ok} -> {:halt, ok}
+          nil -> {:cont, :not_fixed}
+        end
+      end)
+      |> case do
+        {:ok, _fixed_cycles, _meta} = ok -> ok
+        :not_fixed -> not_fixed.()
+      end
+    end
+  end
+
+  defp ambiguity_subset_combinations(_ids, 0), do: [[]]
+  defp ambiguity_subset_combinations([], _size), do: []
+
+  defp ambiguity_subset_combinations([head | tail], size) do
+    with_head =
+      tail
+      |> ambiguity_subset_combinations(size - 1)
+      |> Enum.map(&[head | &1])
+
+    with_head ++ ambiguity_subset_combinations(tail, size)
   end
 
   defp search_ambiguity_subset(
