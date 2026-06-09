@@ -139,7 +139,9 @@ defmodule Orbis.GNSS.SP3 do
 
       {:ok, sp3} = Orbis.GNSS.SP3.load("igs.sp3")
       iodata = Orbis.GNSS.SP3.to_iodata(sp3)
-      {:ok, ^sp3_equal} = Orbis.GNSS.SP3.parse(IO.iodata_to_binary(iodata))
+      {:ok, reparsed} = Orbis.GNSS.SP3.parse(IO.iodata_to_binary(iodata))
+      Orbis.GNSS.SP3.satellite_ids(reparsed) == Orbis.GNSS.SP3.satellite_ids(sp3)
+      #=> true
   """
   @spec to_iodata(t(), keyword()) :: iodata()
   def to_iodata(%__MODULE__{handle: handle}, _opts \\ []) do

@@ -112,9 +112,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- `Orbis.GNSS.Core.IntegerLeastSquares` no longer treats a missing runner-up
-  lattice candidate as infinite ratio confidence; one-candidate searches now
-  return `integer_status: :not_fixed`.
+- GNSS integer ambiguity fixing no longer treats a missing runner-up lattice
+  candidate as infinite ratio confidence; one-candidate searches now return
+  `integer_status: :not_fixed`.
 - `Orbis.GNSS.SP3.position/3` (and everything built on it, including
   `Orbis.GNSS.Observables` and the ephemeris sampler) now refuses an epoch
   beyond the product's node coverage with an `epoch out of range` error instead
