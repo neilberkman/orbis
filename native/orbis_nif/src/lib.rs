@@ -4,6 +4,7 @@ mod conjunction;
 mod doppler;
 mod ephemeris;
 mod gauss;
+mod ils;
 mod iod;
 mod iono;
 mod lambert;
@@ -13,7 +14,6 @@ mod rinex_obs;
 mod sp3;
 mod spp;
 mod tropo;
-mod ils;
 
 use rustler::{Env, NifResult, Term};
 

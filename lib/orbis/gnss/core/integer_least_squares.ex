@@ -24,8 +24,10 @@ defmodule Orbis.GNSS.Core.IntegerLeastSquares do
     ids = float_cycles_by_id |> Map.keys() |> Enum.sort()
     floats = Enum.map(ids, &Map.fetch!(float_cycles_by_id, &1))
 
-    NIF.ils_lambda_search(floats, covariance_cycles, opts.ratio_threshold)
-    |> build_result(ids, float_cycles_by_id, :lambda)
+    with :ok <- validate_inputs(floats, covariance_cycles) do
+      NIF.ils_lambda_search(floats, covariance_cycles, opts.ratio_threshold)
+      |> build_result(ids, float_cycles_by_id, :lambda)
+    end
   rescue
     e in ErlangError -> {:error, e.original}
   end
@@ -47,16 +49,38 @@ defmodule Orbis.GNSS.Core.IntegerLeastSquares do
     ids = float_cycles_by_id |> Map.keys() |> Enum.sort()
     floats = Enum.map(ids, &Map.fetch!(float_cycles_by_id, &1))
 
-    NIF.ils_search(
-      floats,
-      covariance_cycles,
-      opts.radius_cycles,
-      opts.candidate_limit,
-      opts.ratio_threshold
-    )
-    |> build_result(ids, float_cycles_by_id, :bounded_ils)
+    with :ok <- validate_inputs(floats, covariance_cycles) do
+      NIF.ils_search(
+        floats,
+        covariance_cycles,
+        opts.radius_cycles,
+        opts.candidate_limit,
+        opts.ratio_threshold
+      )
+      |> build_result(ids, float_cycles_by_id, :bounded_ils)
+    end
   rescue
     e in ErlangError -> {:error, e.original}
+  end
+
+  # Reject malformed dimensions BEFORE the NIF: an undersized covariance would
+  # index out of bounds (NIF panic) and an oversized one would be silently
+  # truncated to a wrong-dimension submatrix. Mirrors the Rust kernel's
+  # `validate_inputs` shape check, and also guards orbis against any published
+  # NIF that predates that guard. (Non-finite values are checked in the Rust
+  # kernel; the BEAM cannot represent NaN/Inf float terms, so they cannot arrive
+  # here from Elixir.)
+  defp validate_inputs(floats, covariance) do
+    n = length(floats)
+    bad_row = Enum.find(covariance, fn row -> not is_list(row) or length(row) != n end)
+    bad_row_width = if is_list(bad_row), do: length(bad_row), else: :non_list
+
+    cond do
+      n == 0 -> {:error, {:invalid_dimensions, 0, 0}}
+      length(covariance) != n -> {:error, {:invalid_dimensions, n, length(covariance)}}
+      bad_row -> {:error, {:invalid_dimensions, n, bad_row_width}}
+      true -> :ok
+    end
   end
 
   # Shared decode of the NIF result tuple into the public fixed-cycles + metadata

@@ -15,7 +15,10 @@ mod atoms {
         infinity,
         singular_geometry,
         no_integer_candidates,
-        too_many_integer_candidates
+        too_many_integer_candidates,
+        invalid_dimensions,
+        non_finite_input,
+        search_limit_exceeded
     }
 }
 
@@ -110,5 +113,15 @@ fn encode_ils<'a>(
             (atoms::too_many_integer_candidates(), evaluated, limit),
         )
             .encode(env)),
+
+        Err(IlsError::InvalidDimensions { n, rows }) => {
+            Ok((atoms::error(), (atoms::invalid_dimensions(), n, rows)).encode(env))
+        }
+
+        Err(IlsError::NonFinite) => Ok((atoms::error(), atoms::non_finite_input()).encode(env)),
+
+        Err(IlsError::SearchLimitExceeded) => {
+            Ok((atoms::error(), atoms::search_limit_exceeded()).encode(env))
+        }
     }
 }

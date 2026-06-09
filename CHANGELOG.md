@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- The internal integer least-squares search wrappers now reject malformed
+  covariance dimensions with tagged errors before entering the NIF, and map the
+  Rust kernel's non-finite/search-limit failures explicitly. Undersized matrices
+  no longer panic the NIF, and oversized matrices are no longer silently
+  truncated to a submatrix.
+
 ## [0.15.0] - 2026-06-09
 
 ### Fixed

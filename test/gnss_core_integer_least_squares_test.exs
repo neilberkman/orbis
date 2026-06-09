@@ -34,6 +34,56 @@ defmodule Orbis.GNSS.Core.IntegerLeastSquaresTest do
     assert meta.integer_status == :not_fixed
   end
 
+  describe "malformed-dimension inputs are rejected (no panic, no silent submatrix)" do
+    @opts %{radius_cycles: 1, ratio_threshold: 3.0, candidate_limit: 100}
+
+    test "undersized covariance" do
+      # 2 ambiguities, 1x1 covariance — must not panic / return :nif_panicked.
+      f = %{"A" => 0.1, "B" => 0.2}
+      assert {:error, {:invalid_dimensions, 2, 1}} = IntegerLeastSquares.search(f, [[1.0]], @opts)
+
+      assert {:error, {:invalid_dimensions, 2, 1}} =
+               IntegerLeastSquares.bounded_search(f, [[1.0]], @opts)
+    end
+
+    test "oversized covariance" do
+      # 1 ambiguity, 2x2 covariance — must not silently use a submatrix.
+      f = %{"A" => 0.1}
+      cov = [[1.0, 0.0], [0.0, 1.0]]
+      assert {:error, {:invalid_dimensions, 1, 2}} = IntegerLeastSquares.search(f, cov, @opts)
+
+      assert {:error, {:invalid_dimensions, 1, 2}} =
+               IntegerLeastSquares.bounded_search(f, cov, @opts)
+    end
+
+    test "ragged covariance (square count, wrong row width)" do
+      f = %{"A" => 0.1, "B" => 0.2}
+      cov = [[1.0, 0.0], [0.0]]
+      assert {:error, {:invalid_dimensions, 2, 1}} = IntegerLeastSquares.search(f, cov, @opts)
+
+      assert {:error, {:invalid_dimensions, 2, 1}} =
+               IntegerLeastSquares.bounded_search(f, cov, @opts)
+    end
+
+    test "non-list covariance row" do
+      f = %{"A" => 0.1, "B" => 0.2}
+      cov = [[1.0, 0.0], :bad_row]
+
+      assert {:error, {:invalid_dimensions, 2, :non_list}} =
+               IntegerLeastSquares.search(f, cov, @opts)
+
+      assert {:error, {:invalid_dimensions, 2, :non_list}} =
+               IntegerLeastSquares.bounded_search(f, cov, @opts)
+    end
+
+    test "empty input" do
+      assert {:error, {:invalid_dimensions, 0, 0}} = IntegerLeastSquares.search(%{}, [], @opts)
+
+      assert {:error, {:invalid_dimensions, 0, 0}} =
+               IntegerLeastSquares.bounded_search(%{}, [], @opts)
+    end
+  end
+
   defp coordinate_round(float_cycles) do
     Map.new(float_cycles, fn {id, value} -> {id, round(value)} end)
   end
