@@ -264,7 +264,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
               required(:phase_rms_m) => float(),
               required(:weighted_rms_m) => float(),
               required(:integer_status) => :fixed | :not_fixed,
-              required(:integer_method) => :bounded_ils | :widelane_narrowlane_bounded_ils,
+              required(:integer_method) => :lambda | :widelane_narrowlane_lambda,
               required(:integer_ratio) => float() | :infinity,
               required(:integer_best_score) => float(),
               required(:integer_second_best_score) => float() | nil,
@@ -448,14 +448,14 @@ defmodule Orbis.GNSS.PrecisePositioning do
 
   ## Additional options
 
-    * `:integer_search_radius_cycles` - half-window around each rounded float
-      ambiguity for the complete bounded integer least-squares search (default
-      `1`).
     * `:integer_ratio_threshold` - minimum second-best / best weighted-score
       ratio for `metadata.integer_status == :fixed` (default `3.0`).
-    * `:integer_candidate_limit` - maximum candidates to evaluate before
-      returning `{:error, {:too_many_integer_candidates, count, limit}}`
-      (default `#{@default_integer_candidate_limit}`).
+    * `:integer_search_radius_cycles` / `:integer_candidate_limit` - retained and
+      still validated for backward compatibility, but no longer bound the search:
+      integer resolution uses the LAMBDA method (decorrelation + reduction +
+      mlambda search), which finds the true integer-least-squares optimum for any
+      geometry with no search box, so it cannot return
+      `{:error, {:too_many_integer_candidates, ...}}`.
     * `:ambiguity_offset_m` - optional scalar or `%{"G05" => offset_m, ...}` map
       subtracted from each float ambiguity before converting to cycles and added
       back after fixing (default `0.0`). This is mainly for affine carrier-phase
@@ -588,7 +588,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
          | wide_lane_ambiguities_cycles: wide_lane_cycles,
            metadata:
              Map.merge(sol.metadata, %{
-               integer_method: :widelane_narrowlane_bounded_ils,
+               integer_method: :widelane_narrowlane_lambda,
                wide_lane_fixed: true,
                dropped_cycle_slip_sats: slip_meta.dropped_sats,
                split_cycle_slip_arcs: slip_meta.split_arcs

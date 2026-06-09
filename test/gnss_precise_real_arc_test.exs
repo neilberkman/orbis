@@ -103,7 +103,7 @@ defmodule Orbis.GNSS.PreciseRealArcTest do
 
     assert fixed.metadata.integer_status == :not_fixed
     assert fixed.metadata.integer_ratio < 3.0
-    assert fixed.metadata.integer_candidates == 177_147
+    assert fixed.metadata.integer_candidates == 2
     assert position_error(fixed.position, {x0, y0, z0}) < 6.0
   end
 
@@ -140,7 +140,7 @@ defmodule Orbis.GNSS.PreciseRealArcTest do
     assert unweighted.metadata.integer_status == :not_fixed
     assert weighted.metadata.integer_status == :not_fixed
     assert weighted.metadata.integer_ratio < 3.0
-    assert weighted.metadata.integer_candidates == 177_147
+    assert weighted.metadata.integer_candidates == 2
 
     assert position_error(weighted.position, truth) <
              position_error(unweighted.position, truth) / 2.0
@@ -172,7 +172,7 @@ defmodule Orbis.GNSS.PreciseRealArcTest do
 
     assert fixed.metadata.integer_status == :not_fixed
     assert fixed.metadata.integer_ratio < 3.0
-    assert fixed.metadata.integer_candidates == 531_441
+    assert fixed.metadata.integer_candidates == 2
     assert length(fixed.metadata.split_cycle_slip_arcs) == 2
     assert position_error(fixed.position, {x0, y0, z0}) < 9.0
   end

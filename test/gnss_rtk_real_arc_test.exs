@@ -145,7 +145,7 @@ defmodule Orbis.GNSS.RTKRealArcTest do
              )
 
     assert wide_lane_fixed.wide_lane_ambiguities_cycles != nil
-    assert wide_lane_fixed.metadata.integer_method == :widelane_narrowlane_bounded_ils
+    assert wide_lane_fixed.metadata.integer_method == :widelane_narrowlane_lambda
     assert wide_lane_fixed.metadata.integer_status == :not_fixed
     assert wide_lane_fixed.metadata.integer_ratio < 3.0
 
@@ -174,7 +174,7 @@ defmodule Orbis.GNSS.RTKRealArcTest do
 
     dual_partial_antenna_error_m = position_error(dual_partial.baseline_m, antenna_baseline)
 
-    assert dual_partial.metadata.integer_method == :widelane_narrowlane_bounded_ils
+    assert dual_partial.metadata.integer_method == :widelane_narrowlane_lambda
     assert dual_partial.metadata.partial_ambiguity_resolution
     assert dual_partial.metadata.partial_fixed
     assert dual_partial.metadata.integer_status == :fixed

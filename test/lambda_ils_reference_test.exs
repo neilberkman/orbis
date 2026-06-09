@@ -1,31 +1,29 @@
 defmodule Orbis.GNSS.Core.LambdaIlsReferenceTest do
   @moduledoc """
-  External-reference gate for the bounded integer-least-squares kernel
-  (`IntegerLeastSquares.search/3`) against **RTKLIB's `lambda()`** — the de-facto
-  GNSS reference engine (BSD-2), the Teunissen LAMBDA method.
+  External-reference gate for the ambiguity-resolution kernels against
+  **RTKLIB's `lambda()`** — the de-facto GNSS reference engine (BSD-2), the
+  Teunissen LAMBDA method.
 
-  This is the validation that *matters*: it checks our kernel against an
-  established, widely-used implementation, not against our own Elixir (that is
-  what `ils_parity_test.exs` does, and that is only a no-regression check).
+  This is the validation that *matters*: it checks our kernels against an
+  established, widely-used implementation, not against our own Elixir.
 
   The golden (`test/fixtures/lambda_golden.json`) is produced by compiling
   RTKLIB's vendored, unmodified `lambda()` and running it over a battery — see
   `parity/generator/lambda_ref/`. The first two cases are RTKLIB's OWN committed
   unit-test vectors (`test/utest/t_lambda.c`).
 
-  What it establishes:
+  It pins both kernels:
 
-    * **In-regime** (weakly-correlated geometry, where the ILS solution lies
-      within ±1 cycle of componentwise rounding — the regime the kernel is
-      actually used in, e.g. the Wettzell arc): our bounded ±radius search finds
-      the EXACT same integer vector RTKLIB does, with matching residuals/ratio.
+    * `IntegerLeastSquares.search/3` (**LAMBDA**, the production solver) reproduces
+      RTKLIB's exact integer vector and residuals on EVERY case — including the
+      strongly-correlated `utest2`, where the optimum is up to 14 cycles from
+      componentwise rounding.
 
-    * **Out-of-regime** (strongly-correlated geometry — RTKLIB's `utest2`, where
-      the ILS optimum is up to 14 cycles from rounding): the naive box search
-      provably CANNOT reproduce the gold-standard solution — it either misses the
-      optimum (small radius) or explodes combinatorially (large radius). This is
-      exactly the gap that LAMBDA's Z-transform decorrelation closes, and is the
-      documented motivation for the parked decorrelation work.
+    * `IntegerLeastSquares.bounded_search/3` (the ±radius box) matches RTKLIB only
+      **in-regime** (weakly-correlated geometry, optimum within ±1 of rounding —
+      e.g. the Wettzell arc). Out-of-regime it provably cannot reach the optimum:
+      it misses with a small radius and explodes past the candidate limit with a
+      large one. That gap is exactly why production uses LAMBDA.
   """
   use ExUnit.Case, async: true
 
@@ -33,11 +31,10 @@ defmodule Orbis.GNSS.Core.LambdaIlsReferenceTest do
 
   @golden Path.join(__DIR__, "fixtures/lambda_golden.json") |> File.read!() |> Jason.decode!()
 
-  # Cross-implementation tolerance: RTKLIB inverts Q via its own LU (ludcmp);
-  # we invert via Gaussian elimination with partial pivoting. The residual
-  # metric Δᵀ Q⁻¹ Δ therefore agrees only to floating-point round-off, not
-  # bit-exactly. RTKLIB's own unit test uses 1e-4 on residuals ~3.5e3; we hold
-  # the tighter 1e-6 (our largest residual is ~3.5).
+  # Cross-implementation tolerance: RTKLIB and our kernels invert/factorize Q
+  # differently, so the residual metric Δᵀ Q⁻¹ Δ agrees only to round-off, not
+  # bit-exactly. RTKLIB's own unit test uses 1e-4 on residuals ~1.5e3; scale
+  # accordingly per case.
   @score_tol 1.0e-6
   @opts %{radius_cycles: 1, candidate_limit: 200_000, ratio_threshold: 3.0}
 
@@ -51,41 +48,58 @@ defmodule Orbis.GNSS.Core.LambdaIlsReferenceTest do
 
   defp case_by_name(name), do: Enum.find(@golden["cases"], &(&1["name"] == name))
 
-  defp run(c) do
-    ids = ids_for(c["n"])
-    {:ok, fixed_map, meta} = ILS.search(float_map(c["a"]), c["Q"], @opts)
-    fixed_vec = Enum.map(ids, &Map.fetch!(fixed_map, &1))
-    {fixed_vec, meta}
-  end
+  defp fixed_vector(fixed_map, n), do: Enum.map(ids_for(n), &Map.fetch!(fixed_map, &1))
 
-  describe "in-regime: orbis bounded-ILS matches RTKLIB lambda() exactly" do
-    for c <- @golden["cases"], c["in_regime"] do
+  defp tol_for(s_best), do: max(@score_tol, abs(s_best) * 1.0e-9 + 1.0e-4)
+
+  describe "search/3 (LAMBDA) reproduces RTKLIB lambda() on ALL cases" do
+    for c <- @golden["cases"] do
       @case c
       test "#{c["name"]}: same fixed integers, residuals, and ratio as RTKLIB" do
-        {fixed_vec, meta} = run(@case)
+        {:ok, fixed_map, meta} = ILS.search(float_map(@case["a"]), @case["Q"], @opts)
+        fixed_vec = fixed_vector(fixed_map, @case["n"])
 
-        # The integer vector is the hard assertion — exact, no tolerance.
-        assert fixed_vec == @case["lambda_fixed"] |> hd(),
-               "orbis selected a different integer vector than RTKLIB lambda()"
+        # Exact integer match even for the strongly-correlated utest2 the box
+        # cannot solve — the whole point of the LAMBDA solver.
+        assert fixed_vec == hd(@case["lambda_fixed"]),
+               "LAMBDA selected a different integer vector than RTKLIB lambda()"
+
+        [s_best, s_second] = @case["lambda_residuals"]
+        tol = tol_for(s_best)
+        assert_in_delta meta.integer_best_score, s_best, tol
+        assert_in_delta meta.integer_second_best_score, s_second, tol
+        assert meta.integer_method == :lambda
+      end
+    end
+  end
+
+  describe "bounded_search/3 (box) matches RTKLIB in-regime" do
+    for c <- @golden["cases"], c["in_regime"] do
+      @case c
+      test "#{c["name"]}: box reproduces RTKLIB's exact solution" do
+        {:ok, fixed_map, meta} = ILS.bounded_search(float_map(@case["a"]), @case["Q"], @opts)
+        fixed_vec = fixed_vector(fixed_map, @case["n"])
+
+        assert fixed_vec == hd(@case["lambda_fixed"])
 
         [s_best, s_second] = @case["lambda_residuals"]
         assert_in_delta meta.integer_best_score, s_best, @score_tol
         assert_in_delta meta.integer_second_best_score, s_second, @score_tol
         assert_in_delta meta.integer_ratio, @case["lambda_ratio"], @score_tol
+        assert meta.integer_method == :bounded_ils
       end
     end
   end
 
-  describe "out-of-regime: the naive box search cannot reach RTKLIB's optimum" do
-    test "rtklib_utest2 (strongly correlated): orbis misses the gold-standard solution" do
+  describe "bounded_search/3 (box) cannot reach RTKLIB's optimum out-of-regime" do
+    test "rtklib_utest2 (strongly correlated): the box misses the gold-standard solution" do
       c = case_by_name("rtklib_utest2")
-      {fixed_vec, meta} = run(c)
-      rtklib_best = hd(c["lambda_fixed"])
+      {:ok, fixed_map, meta} = ILS.bounded_search(float_map(c["a"]), c["Q"], @opts)
       [s_best, _] = c["lambda_residuals"]
 
-      # The ±1 box around rounding does not contain RTKLIB's optimum (which is
-      # up to 14 cycles away), so we select a strictly worse integer vector.
-      refute fixed_vec == rtklib_best
+      # The ±1 box around rounding does not contain RTKLIB's optimum (up to 14
+      # cycles away), so the box selects a strictly worse integer vector.
+      refute fixed_vector(fixed_map, c["n"]) == hd(c["lambda_fixed"])
       assert meta.integer_best_score > s_best
     end
 
@@ -93,34 +107,11 @@ defmodule Orbis.GNSS.Core.LambdaIlsReferenceTest do
       c = case_by_name("rtklib_utest2")
       # The optimum is ~14 cycles from rounding; a box wide enough to contain it
       # is 29^10 ≈ 4e14 lattice points — the search aborts at the limit. The
-      # naive enumeration has no way to solve this case; LAMBDA decorrelation does.
+      # naive enumeration has no way to solve this; LAMBDA decorrelation does.
       wide = %{@opts | radius_cycles: 14}
 
       assert {:error, {:too_many_integer_candidates, _evaluated, _limit}} =
-               ILS.search(float_map(c["a"]), c["Q"], wide)
-    end
-  end
-
-  describe "lambda_search/3 (LAMBDA) matches RTKLIB on ALL cases, in- and out-of-regime" do
-    for c <- @golden["cases"] do
-      @case c
-      test "#{c["name"]}: lambda_search reproduces RTKLIB's exact solution" do
-        ids = ids_for(@case["n"])
-        {:ok, fixed_map, meta} = ILS.lambda_search(float_map(@case["a"]), @case["Q"], @opts)
-        fixed_vec = Enum.map(ids, &Map.fetch!(fixed_map, &1))
-
-        # Exact integer match even for the strongly-correlated utest2 the box
-        # cannot solve — this is the whole point of the LAMBDA path.
-        assert fixed_vec == hd(@case["lambda_fixed"]),
-               "lambda_search selected a different integer vector than RTKLIB lambda()"
-
-        [s_best, s_second] = @case["lambda_residuals"]
-        # utest2 residuals are ~1.5e3; hold RTKLIB's own 1e-4 there, tighter elsewhere.
-        tol = max(@score_tol, abs(s_best) * 1.0e-9 + 1.0e-4)
-        assert_in_delta meta.integer_best_score, s_best, tol
-        assert_in_delta meta.integer_second_best_score, s_second, tol
-        assert meta.integer_method == :lambda
-      end
+               ILS.bounded_search(float_map(c["a"]), c["Q"], wide)
     end
   end
 end

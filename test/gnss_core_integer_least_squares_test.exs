@@ -14,7 +14,7 @@ defmodule Orbis.GNSS.Core.IntegerLeastSquaresTest do
 
     opts = %{radius_cycles: 1, ratio_threshold: 3.0, candidate_limit: 100}
 
-    assert {:ok, fixed, meta} = IntegerLeastSquares.search(float_cycles, covariance, opts)
+    assert {:ok, fixed, meta} = IntegerLeastSquares.bounded_search(float_cycles, covariance, opts)
     assert fixed != coordinate_round(float_cycles)
     assert {fixed, meta.integer_best_score} == enumerated_best(float_cycles, covariance, 1)
     assert meta.integer_status == :not_fixed
@@ -26,7 +26,9 @@ defmodule Orbis.GNSS.Core.IntegerLeastSquaresTest do
     covariance = [[0.0001]]
     opts = %{radius_cycles: 0, ratio_threshold: 3.0, candidate_limit: 100}
 
-    assert {:ok, %{"A" => 0}, meta} = IntegerLeastSquares.search(float_cycles, covariance, opts)
+    assert {:ok, %{"A" => 0}, meta} =
+             IntegerLeastSquares.bounded_search(float_cycles, covariance, opts)
+
     assert meta.integer_second_best_score == nil
     assert meta.integer_ratio == 0.0
     assert meta.integer_status == :not_fixed

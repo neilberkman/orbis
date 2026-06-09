@@ -1,6 +1,6 @@
 defmodule Orbis.GNSS.Core.IlsParityTest do
   @moduledoc """
-  Proves the Rust bounded-ILS kernel (`IntegerLeastSquares.search/3`, via the NIF)
+  Proves the Rust bounded-ILS kernel (`IntegerLeastSquares.bounded_search/3`, via the NIF)
   is bit-identical to the pure-Elixir reference (`reference_search/3`): same fixed
   integers, status, ratio, scores, candidate count, and symmetrized covariance /
   inverse. Same IEEE-754 ops in the same order (no FMA) → exact equality, not a
@@ -31,7 +31,7 @@ defmodule Orbis.GNSS.Core.IlsParityTest do
   defp assert_parity(floats, cov, opts) do
     fbi = floats_by_id(floats)
 
-    case {ILS.reference_search(fbi, cov, opts), ILS.search(fbi, cov, opts)} do
+    case {ILS.reference_search(fbi, cov, opts), ILS.bounded_search(fbi, cov, opts)} do
       {{:ok, rf, rm}, {:ok, nf, nm}} ->
         assert rf == nf, "fixed integers differ"
         assert rm.integer_status == nm.integer_status

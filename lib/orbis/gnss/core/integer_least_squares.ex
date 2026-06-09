@@ -5,9 +5,44 @@ defmodule Orbis.GNSS.Core.IntegerLeastSquares do
 
   alias Orbis.NIF
 
+  @doc """
+  Integer least squares via the LAMBDA method (RTKLIB `lambda()` port).
+
+  The production ambiguity-resolution solver: LtDL factorization + integer-Gauss
+  /permutation decorrelation reduction + modified-LAMBDA search. Correct for any
+  positive-definite covariance — it finds the true ILS optimum even on
+  strongly-correlated geometry, with no search box and no combinatorial blow-up.
+  Gated against RTKLIB's own reference vectors (`test/lambda_ils_reference_test.exs`).
+
+  `opts` only needs `:ratio_threshold`; `:radius_cycles`/`:candidate_limit` (used
+  by `bounded_search/3`) are accepted and ignored.
+  """
   @spec search(%{String.t() => number()}, [[number()]], map()) ::
           {:ok, %{String.t() => integer()}, map()} | {:error, term()}
   def search(float_cycles_by_id, covariance_cycles, opts)
+      when is_map(float_cycles_by_id) and is_list(covariance_cycles) do
+    ids = float_cycles_by_id |> Map.keys() |> Enum.sort()
+    floats = Enum.map(ids, &Map.fetch!(float_cycles_by_id, &1))
+
+    NIF.ils_lambda_search(floats, covariance_cycles, opts.ratio_threshold)
+    |> build_result(ids, float_cycles_by_id, :lambda)
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  @doc """
+  Bounded ±radius box integer search (the Rust `bounded_ils_search` kernel).
+
+  Enumerates the lattice within `:radius_cycles` of each rounded float ambiguity,
+  scoring `Δᵀ Q⁻¹ Δ`. Correct ONLY when the ILS optimum lies within that box
+  (weakly-correlated geometry); on strongly-correlated covariance it returns a
+  suboptimal fix — use `search/3` (LAMBDA) for the general case. Kept as a fast
+  in-regime alternative and as the documented box reference. Honors
+  `:radius_cycles`, `:candidate_limit`, and `:ratio_threshold`.
+  """
+  @spec bounded_search(%{String.t() => number()}, [[number()]], map()) ::
+          {:ok, %{String.t() => integer()}, map()} | {:error, term()}
+  def bounded_search(float_cycles_by_id, covariance_cycles, opts)
       when is_map(float_cycles_by_id) and is_list(covariance_cycles) do
     ids = float_cycles_by_id |> Map.keys() |> Enum.sort()
     floats = Enum.map(ids, &Map.fetch!(float_cycles_by_id, &1))
@@ -20,28 +55,6 @@ defmodule Orbis.GNSS.Core.IntegerLeastSquares do
       opts.ratio_threshold
     )
     |> build_result(ids, float_cycles_by_id, :bounded_ils)
-  rescue
-    e in ErlangError -> {:error, e.original}
-  end
-
-  @doc """
-  Correct integer least squares via the LAMBDA method (RTKLIB `lambda()` port).
-
-  Unlike `search/3` (a bounded ±radius box that only finds the true ILS optimum
-  when it lies within the box), this solves any positive-definite covariance
-  correctly with no combinatorial blow-up — gated against RTKLIB's own reference
-  vectors (`test/lambda_ils_reference_test.exs`). It ignores `:radius_cycles` and
-  `:candidate_limit`; only `:ratio_threshold` applies.
-  """
-  @spec lambda_search(%{String.t() => number()}, [[number()]], map()) ::
-          {:ok, %{String.t() => integer()}, map()} | {:error, term()}
-  def lambda_search(float_cycles_by_id, covariance_cycles, opts)
-      when is_map(float_cycles_by_id) and is_list(covariance_cycles) do
-    ids = float_cycles_by_id |> Map.keys() |> Enum.sort()
-    floats = Enum.map(ids, &Map.fetch!(float_cycles_by_id, &1))
-
-    NIF.ils_lambda_search(floats, covariance_cycles, opts.ratio_threshold)
-    |> build_result(ids, float_cycles_by_id, :lambda)
   rescue
     e in ErlangError -> {:error, e.original}
   end

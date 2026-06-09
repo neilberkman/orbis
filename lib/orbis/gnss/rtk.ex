@@ -191,7 +191,7 @@ defmodule Orbis.GNSS.RTK do
               required(:converged) => boolean(),
               required(:status) => :state_tolerance | :max_iterations,
               required(:integer_status) => :fixed | :not_fixed,
-              required(:integer_method) => :bounded_ils | :widelane_narrowlane_bounded_ils,
+              required(:integer_method) => :lambda | :widelane_narrowlane_lambda,
               required(:integer_ratio) => float() | :infinity,
               required(:integer_best_score) => float(),
               required(:integer_second_best_score) => float() | nil,
@@ -616,7 +616,7 @@ defmodule Orbis.GNSS.RTK do
          | wide_lane_ambiguities_cycles: used_wide_lane_cycles,
            metadata:
              Map.merge(sol.metadata, %{
-               integer_method: :widelane_narrowlane_bounded_ils,
+               integer_method: :widelane_narrowlane_lambda,
                wide_lane_fixed: true,
                wide_lane_ambiguities_cycles: used_wide_lane_cycles,
                dropped_cycle_slip_sats: slip_meta.dropped_sats,

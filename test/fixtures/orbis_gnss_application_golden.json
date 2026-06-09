@@ -1674,11 +1674,11 @@
           "phase_rms_m": "0x1.d363d1848dcbfp-30",
           "weighted_rms_m": "0x1.0236387bc2cecp-23",
           "integer_status": "fixed",
-          "integer_method": "bounded_ils",
+          "integer_method": "lambda",
           "integer_ratio": "0x1.2013ce5f6f79ep+41",
           "integer_best_score": "0x1.8b61e2d078040p-42",
           "integer_second_best_score": "0x1.bcecb62a86800p-1",
-          "integer_candidates": 6561
+          "integer_candidates": 2
         }
       }
     }
