@@ -22,6 +22,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   atomic-commit discipline (same-directory temp file + `File.rename/2`), with an
   optional `gzip: true` for the gzipped-archive shape. Unblocks persisting a
   merged product, which was otherwise only an in-memory handle.
+- `Orbis.GNSS.Data.fetch_merged_sp3_file/4` composes `fetch_merged_sp3/3` and
+  `write_sp3/3` into one call — fetch the merged current-day product from several
+  ultra-rapid centers and persist it to a standard SP3 file, returning
+  `{:ok, path, report}` so a live-latency product feeds the cache / observables /
+  positioning layers with no network at solve time.
+- `Orbis.GNSS.RTK.solve_widelane_fixed_baseline_epochs/3` now supports
+  `partial_ambiguity_resolution: true`. When the full narrow-lane set fails the
+  ratio test, a bounded largest-first exhaustive subset search (run only after
+  the greedy ranking finds nothing) accepts the highest-ratio subset of the
+  largest size that passes the **unchanged** ratio threshold. Holding the
+  widelane integers fixed collapses the per-satellite bias, so the dual-frequency
+  partial fix safely covers a larger subset than the single-frequency partial —
+  on the real Wettzell arc, a 6-satellite fix (ratio 4.27, 4.4 cm baseline error)
+  versus the single-frequency 4. The full-set refusal and single-frequency
+  behavior are unchanged.
 
 ## [0.13.0] - 2026-06-08
 
