@@ -14,7 +14,7 @@ defmodule Orbis.GNSS.CarrierPhaseOracleTest do
     {:ok, obs: Observations.load!(@obs_path), golden: golden}
   end
 
-  describe "RINEX observation values vs georinex oracle" do
+  describe "RINEX observation values vs georinex reference fixture" do
     test "values/3 matches georinex for selected multi-system raw observations", %{
       obs: obs,
       golden: golden
@@ -38,7 +38,7 @@ defmodule Orbis.GNSS.CarrierPhaseOracleTest do
       end
     end
 
-    test "phases/3 wavelengths and metre values match the oracle fixture", %{
+    test "phases/3 wavelengths and metre values match the reference fixture", %{
       obs: obs,
       golden: golden
     } do
@@ -79,8 +79,8 @@ defmodule Orbis.GNSS.CarrierPhaseOracleTest do
     end
   end
 
-  describe "CarrierPhase combinations vs Python oracle" do
-    test "scalar combinations match the Python fixture", %{golden: golden} do
+  describe "CarrierPhase combinations vs Python reference fixture" do
+    test "scalar combinations match the reference fixture", %{golden: golden} do
       scalars = golden["carrier_phase"]["scalar_cases"]
       f1 = h(golden["carrier_phase"]["constants"]["f_l1_hz"])
       f2 = h(golden["carrier_phase"]["constants"]["f_l2_hz"])
@@ -108,7 +108,7 @@ defmodule Orbis.GNSS.CarrierPhaseOracleTest do
       assert_ulp(mw, h(scalars["melbourne_wubbena_m"]), 0, "Melbourne-Wubbena")
     end
 
-    test "cycle-slip classification matches the Python arc oracle", %{golden: golden} do
+    test "cycle-slip classification matches the parity/generator arc fixture", %{golden: golden} do
       arc = decode_arc(golden["carrier_phase"]["arc"])
       actual = CarrierPhase.detect_cycle_slips(arc)
       expected = golden["carrier_phase"]["detect_cycle_slips"]
@@ -123,7 +123,7 @@ defmodule Orbis.GNSS.CarrierPhaseOracleTest do
       end
     end
 
-    test "Hatch-smoothed code matches the Python arc oracle", %{golden: golden} do
+    test "Hatch-smoothed code matches the parity/generator arc fixture", %{golden: golden} do
       arc = decode_arc(golden["carrier_phase"]["arc"])
       actual = CarrierPhase.smooth_code(arc)
       expected = golden["carrier_phase"]["smooth_code"]
@@ -136,7 +136,9 @@ defmodule Orbis.GNSS.CarrierPhaseOracleTest do
       end
     end
 
-    test "ionosphere-free Hatch-smoothed code matches the Python arc oracle", %{golden: golden} do
+    test "ionosphere-free Hatch-smoothed code matches the parity/generator arc fixture", %{
+      golden: golden
+    } do
       arc = decode_arc(golden["carrier_phase"]["arc"])
       actual = CarrierPhase.smooth_iono_free_code(arc)
       expected = golden["carrier_phase"]["smooth_iono_free_code"]

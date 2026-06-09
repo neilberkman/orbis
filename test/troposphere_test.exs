@@ -3,7 +3,7 @@ defmodule Orbis.GNSS.TroposphereTest do
 
   alias Orbis.GNSS.Troposphere
 
-  # Standard sea-level surface meteorology used by the troposphere parity
+  # Standard sea-level surface meteorology used by the troposphere reference
   # fixtures: 1013.25 hPa, 288.15 K, 50% relative humidity.
   @met %{pressure_hpa: 1013.25, temperature_k: 288.15, relative_humidity: 0.5}
 
@@ -12,7 +12,7 @@ defmodule Orbis.GNSS.TroposphereTest do
   @epoch {{2021, 1, 28}, {0, 0, 0}}
 
   describe "zenith_delay/3" do
-    test "matches the parity-fixture sea-level zenith delays bit-for-bit" do
+    test "matches the reference fixture sea-level zenith delays bit-for-bit (0 ULP)" do
       assert {:ok, %{dry_m: dry_m, wet_m: wet_m}} =
                Troposphere.zenith_delay(45.0, 0.0, @met)
 
@@ -41,9 +41,9 @@ defmodule Orbis.GNSS.TroposphereTest do
   end
 
   describe "slant_delay/6" do
-    test "at the zenith equals the parity-fixture slant value bit-for-bit" do
+    test "at the zenith equals the reference fixture slant value bit-for-bit (0 ULP)" do
       # Niell mapping is unity at 90 deg, so the slant delay is the sum of the
-      # zenith delays; this is the 'zenith_midlat' troposphere golden.
+      # zenith delays; this is the 'zenith_midlat' troposphere reference fixture.
       assert {:ok, slant_m} =
                Troposphere.slant_delay(90.0, 45.0, 10.0, 0.0, @met, @epoch)
 

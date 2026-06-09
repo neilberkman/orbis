@@ -6,11 +6,11 @@ defmodule Orbis.GNSS.IonosphereTest do
   # Synthetic 7x7 two-map IONEX grid (committed fixture): latitudes 60..-60 step
   # -20, longitudes -180..180 step 60, two epochs at 2020-06-24 00:00 and 02:00.
   # Same bytes the parity generator uses, so the slant delay below can be checked
-  # against the IONEX parity golden.
+  # against the IONEX reference fixture.
   @ionex_path Path.join(__DIR__, "fixtures/synthetic_2map_7x7.20i")
   @ionex File.read!(@ionex_path)
 
-  # GPS broadcast coefficients used across the Klobuchar parity fixtures.
+  # GPS broadcast coefficients used across the Klobuchar reference fixtures.
   @klobuchar_params %{
     alpha:
       {0.1490116119384766e-7, 0.2235174179077148e-7, -0.1192092895507813e-6,
@@ -87,7 +87,7 @@ defmodule Orbis.GNSS.IonosphereTest do
                )
     end
 
-    test "matches the Klobuchar parity golden exactly (0 ULP) through the public path" do
+    test "matches the Klobuchar reference fixture (klobuchar_golden.json) exactly (0 ULP) through the public path" do
       # The exact inputs and coefficients of the `zenith_midlat_day` golden case
       # (parity/fixtures/klobuchar_golden.json): 14:00:00 == second-of-day 50400.
       # The public path passes degrees straight through and forms the
@@ -128,8 +128,10 @@ defmodule Orbis.GNSS.IonosphereTest do
       assert {:error, _reason} = Ionosphere.parse_ionex("not an ionex file\n")
     end
 
-    test "slant delay matches the parity-fixture L1 value bit-for-bit", %{handle: handle} do
-      # Same inputs as the IONEX parity golden 'interior_l1': lat 45, lon 10,
+    test "slant delay matches the reference fixture L1 value bit-for-bit (0 ULP)", %{
+      handle: handle
+    } do
+      # Same inputs as the IONEX reference fixture 'interior_l1': lat 45, lon 10,
       # az 60, el 60, L1, epoch 2020-06-24 01:00:00.
       assert {:ok, delay_m} =
                Ionosphere.ionex_slant_delay(

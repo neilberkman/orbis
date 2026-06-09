@@ -7,7 +7,8 @@ defmodule Orbis.GNSS.PositioningTest do
 
   # End-to-end check of the Elixir -> NIF -> astrodynamics-gnss SPP path. The
   # observations, epoch parameters, atmosphere coefficients, and synthesized
-  # receiver truth come from a committed parity trace fixture; the precise
+  # receiver truth come from a committed known-truth trace fixture
+  # (spp_trace_L2_tropo.json); the precise
   # ephemeris is the matching SP3 file. Bit-exact physics parity is asserted in
   # the crate's own test suite — here we only prove the full round trip recovers
   # the truth, so a sub-millimetre solver-agreement bound is the right bar.

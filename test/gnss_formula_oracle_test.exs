@@ -15,7 +15,7 @@ defmodule Orbis.GNSS.FormulaOracleTest do
     {:ok, golden: @golden_path |> File.read!() |> Jason.decode!()}
   end
 
-  describe "IonosphereFree vs Python oracle" do
+  describe "IonosphereFree vs scipy reference fixture" do
     test "gamma, noise amplification, and combined ranges match the fixture", %{golden: golden} do
       for c <- golden["ionosphere_free"]["cases"] do
         f1 = h(c["f1_hz"])
@@ -51,8 +51,8 @@ defmodule Orbis.GNSS.FormulaOracleTest do
     end
   end
 
-  describe "QC vs Python/scipy oracle" do
-    test "elevation and C/N0 weighting matches the Python fixture", %{golden: golden} do
+  describe "QC vs scipy reference fixture" do
+    test "elevation and C/N0 weighting matches the reference fixture", %{golden: golden} do
       qc = golden["qc"]
 
       for c <- qc["variance_cases"] do
@@ -88,7 +88,7 @@ defmodule Orbis.GNSS.FormulaOracleTest do
     end
   end
 
-  describe "Observables vs Python/scipy oracle" do
+  describe "Observables vs scipy reference fixture" do
     test "predict/5 matches the independent SP3 observable fixture", %{golden: golden} do
       sp3 = SP3.load!(@sp3_path)
 

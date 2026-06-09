@@ -22,8 +22,10 @@ defmodule Orbis.GNSS.ApplicationOracleTest do
     {:ok, golden: @golden_path |> File.read!() |> Jason.decode!(), sp3: SP3.load!(@sp3_path)}
   end
 
-  describe "GPS C/A and correlator vs Python oracle" do
-    test "C/A chips and selected correlations match the independent generator", %{golden: golden} do
+  describe "GPS C/A and correlator vs numpy reference fixture" do
+    test "C/A chips and selected correlations match the parity/generator reference fixture", %{
+      golden: golden
+    } do
       ca = golden["signal"]["ca"]
 
       for {prn, expected} <- ca["chips"] do
@@ -38,9 +40,10 @@ defmodule Orbis.GNSS.ApplicationOracleTest do
       end
     end
 
-    test "replica, coherent correlation, acquisition, and loss match Python/Numpy", %{
-      golden: golden
-    } do
+    test "replica, coherent correlation, acquisition, and loss match the numpy reference fixture",
+         %{
+           golden: golden
+         } do
       corr = golden["signal"]["correlator"]
       rep = corr["replica_case"]
 
@@ -113,8 +116,10 @@ defmodule Orbis.GNSS.ApplicationOracleTest do
     end
   end
 
-  describe "GPS LNAV vs Python oracle" do
-    test "parity vectors and encoded subframes match the independent generator", %{golden: golden} do
+  describe "GPS LNAV vs Python reference fixture" do
+    test "parity vectors and encoded subframes match the parity/generator reference fixture", %{
+      golden: golden
+    } do
       lnav = golden["lnav"]
 
       for c <- lnav["parity_cases"] do
@@ -149,8 +154,8 @@ defmodule Orbis.GNSS.ApplicationOracleTest do
     end
   end
 
-  describe "SP3-derived application helpers vs operation-order Python oracle" do
-    test "visibility and weighted DOP match the oracle fixture", %{golden: golden, sp3: sp3} do
+  describe "SP3-derived application helpers vs numpy reference fixture" do
+    test "visibility and weighted DOP match the reference fixture", %{golden: golden, sp3: sp3} do
       app = golden["sp3_application"]
       rx = vec3(app["receiver_ecef_m"])
       epoch = NaiveDateTime.from_iso8601!(app["epoch"])
@@ -193,7 +198,7 @@ defmodule Orbis.GNSS.ApplicationOracleTest do
       end
     end
 
-    test "receiver velocity solve matches the numpy least-squares oracle", %{
+    test "receiver velocity solve matches the numpy least-squares reference fixture", %{
       golden: golden,
       sp3: sp3
     } do
@@ -213,10 +218,11 @@ defmodule Orbis.GNSS.ApplicationOracleTest do
       assert_ulp(got.clock_drift_s_s, h(v["solution_clock_drift_s_s"]), 0, "clock drift")
     end
 
-    test "DGNSS corrections and corrected rover observations match the Python oracle", %{
-      golden: golden,
-      sp3: sp3
-    } do
+    test "DGNSS corrections and corrected rover observations match the numpy reference fixture",
+         %{
+           golden: golden,
+           sp3: sp3
+         } do
       d = golden["sp3_application"]["dgnss"]
       epoch = NaiveDateTime.from_iso8601!(golden["sp3_application"]["epoch"])
       base = vec3(d["base_ecef_m"])
@@ -241,7 +247,7 @@ defmodule Orbis.GNSS.ApplicationOracleTest do
       end
     end
 
-    test "float carrier-phase positioning matches the Python normal-equation oracle", %{
+    test "float carrier-phase positioning matches the numpy normal-equation reference fixture", %{
       golden: golden,
       sp3: sp3
     } do
@@ -305,7 +311,7 @@ defmodule Orbis.GNSS.ApplicationOracleTest do
       )
     end
 
-    test "multi-epoch float carrier-phase positioning matches the Python oracle", %{
+    test "multi-epoch float carrier-phase positioning matches the numpy reference fixture", %{
       golden: golden,
       sp3: sp3
     } do
@@ -409,7 +415,7 @@ defmodule Orbis.GNSS.ApplicationOracleTest do
       )
     end
 
-    test "integer-fixed carrier-phase positioning matches the Python oracle", %{
+    test "integer-fixed carrier-phase positioning matches the numpy reference fixture", %{
       golden: golden,
       sp3: sp3
     } do
@@ -534,7 +540,7 @@ defmodule Orbis.GNSS.ApplicationOracleTest do
       )
     end
 
-    test "SolutionReport sky rows and residual RMS match Python-derived expectations", %{
+    test "SolutionReport sky rows and residual RMS match the numpy reference fixture", %{
       golden: golden,
       sp3: sp3
     } do

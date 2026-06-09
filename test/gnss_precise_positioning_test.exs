@@ -85,7 +85,7 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
 
   describe "solve_float/4" do
     test "recovers position, receiver clock, and float ambiguities from exact code+phase", ctx do
-      # Known-truth oracle: the observations are synthesized from the SP3 forward
+      # Known-truth round trip: the observations are synthesized from the SP3 forward
       # model with hidden receiver position, clock, and per-satellite float
       # ambiguities. The estimator must recover those hidden values from a
       # separate initial guess; it is not checked against its own output.

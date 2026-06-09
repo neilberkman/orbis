@@ -1,14 +1,14 @@
-defmodule Orbis.OracleTest do
+defmodule Orbis.SkyfieldParityComprehensiveTest do
   @moduledoc """
-  Comprehensive Skyfield oracle tests.
+  Comprehensive Skyfield parity tests (hex-captured Skyfield/ERFA references).
 
   Hex-captured reference values from Skyfield for every major feature.
   Tagged :skyfield_parity — run with: mix test --include skyfield_parity
 
   Note: SGP4 propagation uses the Rust `sgp4` crate which differs from
   Skyfield's bundled Python sgp4. TEME values are compared with a tolerance
-  rather than 0 ULP. The coordinate transforms applied to those TEME values
-  inherit the SGP4 delta.
+  rather than 0 ULP (see the "SGP4 TEME within tolerance (not 0 ULP)" block).
+  The coordinate transforms applied to those TEME values inherit the SGP4 delta.
   """
   use ExUnit.Case
 
@@ -57,7 +57,7 @@ defmodule Orbis.OracleTest do
   @iss_tle_line1 "1 25544U 98067A   18184.80969102  .00001614  00000-0  31745-4 0  9993"
   @iss_tle_line2 "2 25544  51.6414 295.8524 0003435 262.6267 204.2868 15.54005638121106"
 
-  describe "SGP4 propagation" do
+  describe "SGP4 TEME within tolerance (not 0 ULP)" do
     @describetag :skyfield_parity
     test "ISS TEME position within 1mm of Skyfield" do
       {:ok, tle} = Orbis.parse_tle(@iss_tle_line1, @iss_tle_line2)

@@ -12,7 +12,7 @@ defmodule Orbis.GNSS.ReducedOrbitOracleTest do
     {:ok, golden: @golden_path |> File.read!() |> Jason.decode!()}
   end
 
-  describe "ReducedOrbit vs Astropy/scipy oracle" do
+  describe "ReducedOrbit vs Astropy/scipy reference fixture" do
     test "fit/2 recovers the independent circular scipy fit", %{golden: golden} do
       c = golden["cases"]["circular"]
 
@@ -77,7 +77,9 @@ defmodule Orbis.GNSS.ReducedOrbitOracleTest do
       end
     end
 
-    test "drift/3 errors match the Python source-backed drift oracle", %{golden: golden} do
+    test "drift/3 errors match the Python source-backed drift reference fixture", %{
+      golden: golden
+    } do
       for {_name, c} <- golden["cases"] do
         assert {:ok, model} = c["fit"]["map"] |> dehex_map() |> ReducedOrbit.from_map()
         assert {:ok, drift} = ReducedOrbit.drift(model, samples(c), threshold_m: 1.0e9)
@@ -93,7 +95,7 @@ defmodule Orbis.GNSS.ReducedOrbitOracleTest do
       end
     end
 
-    test "TLE/SGP4 source fit matches the Python sgp4 + Astropy/scipy oracle", %{
+    test "TLE/SGP4 source fit matches the Python sgp4 + Astropy/scipy reference fixture", %{
       golden: golden
     } do
       c = golden["tle_sgp4"]
@@ -125,7 +127,7 @@ defmodule Orbis.GNSS.ReducedOrbitOracleTest do
       assert_in_delta fit.fit.max_m, h(c["fit"]["stats"]["max_m"]), 0.1
     end
 
-    test "TLE/SGP4 source drift matches the Python source-backed drift oracle", %{
+    test "TLE/SGP4 source drift matches the Python source-backed drift reference fixture", %{
       golden: golden
     } do
       c = golden["tle_sgp4"]
@@ -159,7 +161,7 @@ defmodule Orbis.GNSS.ReducedOrbitOracleTest do
     end
   end
 
-  describe "Piecewise vs Astropy/scipy oracle" do
+  describe "Piecewise vs Astropy/scipy reference fixture" do
     test "fit/2 segment count and query positions match the independent piecewise fit", %{
       golden: golden
     } do
