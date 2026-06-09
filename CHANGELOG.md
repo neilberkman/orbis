@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-06-09
+
 ### Fixed
 
 - The internal integer least-squares search wrappers now reject malformed
