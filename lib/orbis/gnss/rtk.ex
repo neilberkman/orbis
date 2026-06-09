@@ -2415,6 +2415,14 @@ defmodule Orbis.GNSS.RTK do
   # the search, and the historical not-fixed result is preserved.
   @partial_exhaustive_max_ambiguities 14
 
+  # Hard global ceiling on the number of candidate subsets the largest-first
+  # exhaustive fallback evaluates, so worst-case work is bounded directly rather
+  # than only indirectly via the ambiguity-count cap. Covers a full N=14 search
+  # (~16k subsets); if the budget is exhausted before a passing subset is found,
+  # the safe historical not-fixed result stands. The actual count evaluated is
+  # reported in `metadata.partial_exhaustive_subsets_evaluated`.
+  @partial_exhaustive_max_subsets 20_000
+
   defp search_partial_baseline_ambiguities_exhaustive(
          ambiguity_ids,
          float_cycles,
@@ -2425,56 +2433,71 @@ defmodule Orbis.GNSS.RTK do
          full_meta,
          min_size
        ) do
-    not_fixed = fn ->
+    not_fixed = fn evaluated ->
       {:ok, full_fixed_cycles,
        Map.merge(
          full_meta,
          partial_meta(true, false, full_fixed_cycles, [], %{
            ambiguity_offsets_m: offsets,
-           partial_full_set: full_set_integer_summary(full_meta)
+           partial_full_set: full_set_integer_summary(full_meta),
+           partial_exhaustive_subsets_evaluated: evaluated
          })
        )}
     end
 
     if length(ambiguity_ids) > @partial_exhaustive_max_ambiguities do
-      not_fixed.()
+      not_fixed.(0)
     else
-      (length(ambiguity_ids) - 1)..min_size//-1
-      |> Enum.reduce_while(:not_fixed, fn subset_size, :not_fixed ->
-        best_passing =
-          ambiguity_ids
-          |> ambiguity_subset_combinations(subset_size)
-          |> Enum.reduce(nil, fn subset_ids, best ->
-            subset_ids = Enum.sort(subset_ids)
+      result =
+        (length(ambiguity_ids) - 1)..min_size//-1
+        |> Enum.reduce_while({:not_fixed, 0}, fn subset_size, {:not_fixed, evaluated} ->
+          combos = ambiguity_subset_combinations(ambiguity_ids, subset_size)
 
-            case search_ambiguity_subset(
-                   subset_ids,
-                   ambiguity_ids,
-                   float_cycles,
-                   covariance_cycles,
-                   offsets,
-                   integer_opts,
-                   full_meta
-                 ) do
-              {:ok, _fixed_cycles, %{integer_status: :fixed, integer_ratio: ratio}} = ok ->
-                case best do
-                  {best_ratio, _} when best_ratio >= ratio -> best
-                  _ -> {ratio, ok}
+          if evaluated + length(combos) > @partial_exhaustive_max_subsets do
+            # Evaluating this size would exceed the global subset-work budget;
+            # stop and keep the safe historical not-fixed result.
+            {:halt, {:not_fixed, evaluated}}
+          else
+            best_passing =
+              Enum.reduce(combos, nil, fn subset_ids, best ->
+                subset_ids = Enum.sort(subset_ids)
+
+                case search_ambiguity_subset(
+                       subset_ids,
+                       ambiguity_ids,
+                       float_cycles,
+                       covariance_cycles,
+                       offsets,
+                       integer_opts,
+                       full_meta
+                     ) do
+                  {:ok, _fixed_cycles, %{integer_status: :fixed, integer_ratio: ratio}} = ok ->
+                    case best do
+                      {best_ratio, _} when best_ratio >= ratio -> best
+                      _ -> {ratio, ok}
+                    end
+
+                  _ ->
+                    best
                 end
+              end)
 
-              _ ->
-                best
+            evaluated = evaluated + length(combos)
+
+            case best_passing do
+              {_ratio, {:ok, fixed_cycles, meta}} ->
+                meta = Map.put(meta, :partial_exhaustive_subsets_evaluated, evaluated)
+                {:halt, {:fixed, {:ok, fixed_cycles, meta}}}
+
+              nil ->
+                {:cont, {:not_fixed, evaluated}}
             end
-          end)
+          end
+        end)
 
-        case best_passing do
-          {_ratio, ok} -> {:halt, ok}
-          nil -> {:cont, :not_fixed}
-        end
-      end)
-      |> case do
-        {:ok, _fixed_cycles, _meta} = ok -> ok
-        :not_fixed -> not_fixed.()
+      case result do
+        {:fixed, ok} -> ok
+        {:not_fixed, evaluated} -> not_fixed.(evaluated)
       end
     end
   end

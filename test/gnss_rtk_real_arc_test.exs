@@ -204,6 +204,12 @@ defmodule Orbis.GNSS.RTKRealArcTest do
     assert dual_partial_antenna_error_m < float_dual_antenna_error_m
     assert dual_partial_antenna_error_m < wide_lane_antenna_error_m
     assert dual_partial_antenna_error_m < 0.06
+
+    # The exhaustive subset search is globally bounded: it reports how many
+    # candidate subsets it evaluated, and that stays under the hard cap.
+    evaluated = dual_partial.metadata.partial_exhaustive_subsets_evaluated
+    assert is_integer(evaluated) and evaluated > 0
+    assert evaluated <= 20_000
   end
 
   defp real_gps_l1_rtk_epochs(sp3, base_obs, rover_obs, count) do
