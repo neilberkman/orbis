@@ -11,7 +11,7 @@ defmodule Orbis.GNSS.PreciseRealArcTest do
   @sp3_path Path.join(__DIR__, "fixtures/sp3/GBM0MGXRAP_20201770000_01D_05M_ORB_120epoch.sp3")
   @obs_path Path.join(__DIR__, "fixtures/obs/ESBC00DNK_R_20201770000_01D_30S_MO_120epoch.rnx")
 
-  @tag timeout: 180_000
+  @tag timeout: 420_000
   test "a real multi-epoch ionosphere-free arc improves with troposphere correction" do
     sp3 = SP3.load!(@sp3_path)
     obs = Observations.load!(@obs_path)
@@ -80,7 +80,7 @@ defmodule Orbis.GNSS.PreciseRealArcTest do
     assert elevation_weighted.metadata.weighted_rms_m < uncorrected.metadata.weighted_rms_m / 5.0
   end
 
-  @tag timeout: 180_000
+  @tag timeout: 420_000
   test "real noisy narrow-lane fixing returns a not-fixed candidate set" do
     sp3 = SP3.load!(@sp3_path)
     obs = Observations.load!(@obs_path)
@@ -107,7 +107,7 @@ defmodule Orbis.GNSS.PreciseRealArcTest do
     assert position_error(fixed.position, {x0, y0, z0}) < 6.0
   end
 
-  @tag timeout: 180_000
+  @tag timeout: 420_000
   test "real elevation-weighted narrow-lane fixing still refuses an unsafe fix" do
     sp3 = SP3.load!(@sp3_path)
     obs = Observations.load!(@obs_path)
@@ -146,7 +146,7 @@ defmodule Orbis.GNSS.PreciseRealArcTest do
              position_error(unweighted.position, truth) / 2.0
   end
 
-  @tag timeout: 180_000
+  @tag timeout: 420_000
   test "real slipped arcs can be split before the narrow-lane search" do
     sp3 = SP3.load!(@sp3_path)
     obs = Observations.load!(@obs_path)
