@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-06-09
+
+### Fixed
+
+- Re-published the 0.14.x release line with precompiled-NIF checksums matching
+  the final GitHub release assets built against `astrodynamics-gnss` 0.9.4. The
+  0.14.0 package was published before the final checksum file was committed, so
+  supported platforms could reject the downloaded precompiled archive and fall
+  back poorly. No API or numerical behavior changed from 0.14.0.
+
 ## [0.14.0] - 2026-06-08
 
 ### Added
