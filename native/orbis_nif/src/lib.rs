@@ -13,6 +13,7 @@ mod rinex_obs;
 mod sp3;
 mod spp;
 mod tropo;
+mod ils;
 
 use rustler::{Env, NifResult, Term};
 

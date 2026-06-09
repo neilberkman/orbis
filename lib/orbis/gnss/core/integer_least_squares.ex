@@ -3,9 +3,55 @@ defmodule Orbis.GNSS.Core.IntegerLeastSquares do
 
   import Orbis.GNSS.Core.LinearAlgebra, only: [invert_matrix: 1]
 
+  alias Orbis.NIF
+
   @spec search(%{String.t() => number()}, [[number()]], map()) ::
           {:ok, %{String.t() => integer()}, map()} | {:error, term()}
   def search(float_cycles_by_id, covariance_cycles, opts)
+      when is_map(float_cycles_by_id) and is_list(covariance_cycles) do
+    ids = float_cycles_by_id |> Map.keys() |> Enum.sort()
+    floats = Enum.map(ids, &Map.fetch!(float_cycles_by_id, &1))
+
+    case NIF.ils_search(
+           floats,
+           covariance_cycles,
+           opts.radius_cycles,
+           opts.candidate_limit,
+           opts.ratio_threshold
+         ) do
+      {:ok, {fixed_list, status?, ratio, best, second, evaluated, {q_cycles, q_inv}}} ->
+        fixed_cycles = ids |> Enum.zip(fixed_list) |> Map.new()
+
+        {:ok, fixed_cycles,
+         %{
+           integer_status: if(status?, do: :fixed, else: :not_fixed),
+           integer_method: :bounded_ils,
+           integer_ratio: ratio,
+           integer_best_score: best,
+           integer_second_best_score: second,
+           integer_candidates: evaluated,
+           ambiguity_search: %{
+             order: ids,
+             float_cycles: float_cycles_by_id,
+             covariance_cycles: q_cycles,
+             covariance_inverse_cycles: q_inv
+           }
+         }}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  rescue
+    e in ErlangError -> {:error, e.original}
+  end
+
+  # Pure-Elixir reference implementation — the bit-identical parity oracle for the
+  # Rust kernel (see test/ils_parity_test.exs) and a documentation of the
+  # algorithm. `search/3` above delegates to the NIF; this is kept for the parity
+  # gate and as a transparent reference.
+  @spec reference_search(%{String.t() => number()}, [[number()]], map()) ::
+          {:ok, %{String.t() => integer()}, map()} | {:error, term()}
+  def reference_search(float_cycles_by_id, covariance_cycles, opts)
       when is_map(float_cycles_by_id) and is_list(covariance_cycles) do
     ids = float_cycles_by_id |> Map.keys() |> Enum.sort()
     q_cycles = symmetrize_matrix(covariance_cycles)
