@@ -3102,10 +3102,13 @@ defmodule Orbis.GNSS.RTK do
        ) do
     n = baseline_unknown_count(ambiguity_ids)
 
+    {initial_ambiguities, initial_ambiguity_count} =
+      initial_sequential_ambiguities(epochs, reference_sat, physical_sats, ambiguity_ids)
+
     initial = %{
       state: %{
         baseline: initial_baseline,
-        ambiguities: Map.new(ambiguity_ids, &{&1, 0.0})
+        ambiguities: initial_ambiguities
       },
       information:
         sequential_initial_information(
@@ -3177,13 +3180,51 @@ defmodule Orbis.GNSS.RTK do
              split_cycle_slip_arcs: prep_meta.split_arcs,
              hold_sigma_m: filter_opts.hold_sigma_m,
              baseline_prior_sigma_m: filter_opts.baseline_prior_sigma_m,
-             ambiguity_prior_sigma_m: filter_opts.ambiguity_prior_sigma_m
+             ambiguity_prior_sigma_m: filter_opts.ambiguity_prior_sigma_m,
+             ambiguity_initialization: :phase_code,
+             initialized_ambiguity_count: initial_ambiguity_count
            }
          }}
 
       {:error, _reason} = err ->
         err
     end
+  end
+
+  defp initial_sequential_ambiguities(epochs, reference_sat, physical_sats, ambiguity_ids) do
+    zero = Map.new(ambiguity_ids, &{&1, 0.0})
+    ambiguity_set = MapSet.new(ambiguity_ids)
+
+    seeded =
+      Enum.reduce_while(epochs, %{}, fn epoch, acc ->
+        if map_size(acc) == length(ambiguity_ids) do
+          {:halt, acc}
+        else
+          ref_dd = single_difference(epoch, reference_sat)
+
+          acc =
+            epoch
+            |> epoch_available_nonrefs(reference_sat, physical_sats)
+            |> Enum.reduce(acc, fn sat, sat_acc ->
+              obs_dd = double_difference_measurement(epoch, sat, ref_dd)
+
+              if MapSet.member?(ambiguity_set, obs_dd.ambiguity_id) and
+                   not Map.has_key?(sat_acc, obs_dd.ambiguity_id) do
+                # RTK filters conventionally seed carrier ambiguities from the
+                # phase-code difference; the prior remains intentionally broad,
+                # but starting near the code-pinned level avoids spending early
+                # epochs pulling kilometre-scale zero-state ambiguities into place.
+                Map.put(sat_acc, obs_dd.ambiguity_id, obs_dd.phase_m - obs_dd.code_m)
+              else
+                sat_acc
+              end
+            end)
+
+          {:cont, acc}
+        end
+      end)
+
+    {Map.merge(zero, seeded), map_size(seeded)}
   end
 
   defp sequential_filter_epoch(
