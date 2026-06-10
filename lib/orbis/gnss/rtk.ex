@@ -605,10 +605,11 @@ defmodule Orbis.GNSS.RTK do
   Run a sequential static RTK baseline filter with per-epoch ambiguity fixing.
 
   This is the RTKLIB-style real-time path: it carries one static baseline and
-  double-difference ambiguity state across epochs, performs a correlated
-  double-difference measurement update at each epoch, attempts integer
-  ambiguity fixing from the current posterior covariance, and holds accepted
-  integers as tight pseudo-measurements on later epochs.
+  one single-difference ambiguity state per satellite arc across epochs,
+  performs a correlated double-difference measurement update at each epoch,
+  attempts integer fixing from the posterior covariance of the corresponding
+  double-difference ambiguity combinations, and holds accepted integers as tight
+  pseudo-measurements on those combinations in later epochs.
 
   Options are the fixed-baseline options plus the filter parameters below.
   `:partial_ambiguity_resolution` is deliberately rejected for this entry
@@ -643,10 +644,13 @@ defmodule Orbis.GNSS.RTK do
          {:ok, weights} <- baseline_weights(float_opts),
          {:ok, solve_opts} <- baseline_solve_options(float_opts),
          {:ok, initial_baseline} <- initial_baseline(float_opts),
-         {:ok, ambiguity_ids, ambiguity_satellites} <-
-           baseline_ambiguity_index(normalized_epochs, all_sats, reference_sat),
-         {:ok, wavelengths} <- ambiguity_wavelengths(ambiguity_ids, ambiguity_satellites, opts),
-         {:ok, offsets} <- ambiguity_offsets(ambiguity_ids, ambiguity_satellites, opts),
+         {:ok, sd_ambiguity_ids, sd_ambiguity_satellites} <-
+           single_difference_ambiguity_index(normalized_epochs, all_sats),
+         {:ok, dd_ambiguity_ids, dd_ambiguity_satellites, dd_ambiguity_pairs} <-
+           sequential_dd_ambiguity_index(normalized_epochs, all_sats, reference_sat),
+         {:ok, wavelengths} <-
+           ambiguity_wavelengths(dd_ambiguity_ids, dd_ambiguity_satellites, opts),
+         {:ok, offsets} <- ambiguity_offsets(dd_ambiguity_ids, dd_ambiguity_satellites, opts),
          {:ok, integer_opts} <- integer_options(opts),
          :ok <- validate_filter_integer_options(integer_opts) do
       physical_sats = Enum.reject(all_sats, &(&1 == reference_sat))
@@ -656,8 +660,11 @@ defmodule Orbis.GNSS.RTK do
         normalized_epochs,
         reference_sat,
         physical_sats,
-        ambiguity_ids,
-        ambiguity_satellites,
+        sd_ambiguity_ids,
+        sd_ambiguity_satellites,
+        dd_ambiguity_ids,
+        dd_ambiguity_satellites,
+        dd_ambiguity_pairs,
         wavelengths,
         offsets,
         weights,
@@ -2136,6 +2143,17 @@ defmodule Orbis.GNSS.RTK do
     |> Enum.sort()
   end
 
+  defp epoch_available_sats(epoch, physical_sats) do
+    epoch.base
+    |> Map.keys()
+    |> MapSet.new()
+    |> MapSet.intersection(epoch.rover |> Map.keys() |> MapSet.new())
+    |> MapSet.intersection(epoch.positions |> Map.keys() |> MapSet.new())
+    |> MapSet.intersection(MapSet.new(physical_sats))
+    |> MapSet.to_list()
+    |> Enum.sort()
+  end
+
   defp ensure_baseline_satellites(common_sats) do
     if length(common_sats) < 4,
       do: {:error, {:too_few_common_satellites, length(common_sats), 4}},
@@ -2308,6 +2326,88 @@ defmodule Orbis.GNSS.RTK do
           |> Enum.map(&elem(&1, 0))
 
         {:ok, ambiguity_ids, Map.new(ambiguity_satellites)}
+
+      {:error, _reason} = err ->
+        err
+    end
+  end
+
+  defp single_difference_ambiguity_index(epochs, all_sats) do
+    epochs
+    |> Enum.reduce_while({:ok, %{}}, fn epoch, {:ok, acc} ->
+      epoch
+      |> epoch_available_sats(all_sats)
+      |> Enum.reduce_while({:ok, acc}, fn sat, {:ok, acc} ->
+        ambiguity_id = single_difference(epoch, sat).ambiguity_id
+
+        case Map.fetch(acc, ambiguity_id) do
+          {:ok, ^sat} ->
+            {:cont, {:ok, acc}}
+
+          {:ok, other_sat} ->
+            {:halt, {:error, {:duplicate_ambiguity_id, ambiguity_id, other_sat, sat}}}
+
+          :error ->
+            {:cont, {:ok, Map.put(acc, ambiguity_id, sat)}}
+        end
+      end)
+      |> case do
+        {:ok, acc} -> {:cont, {:ok, acc}}
+        {:error, _reason} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, ambiguity_satellites} ->
+        ambiguity_ids =
+          ambiguity_satellites
+          |> Enum.sort_by(fn {ambiguity_id, sat} -> {sat, ambiguity_id} end)
+          |> Enum.map(&elem(&1, 0))
+
+        {:ok, ambiguity_ids, Map.new(ambiguity_satellites)}
+
+      {:error, _reason} = err ->
+        err
+    end
+  end
+
+  defp sequential_dd_ambiguity_index(epochs, all_sats, reference_sat) do
+    physical_sats = Enum.reject(all_sats, &(&1 == reference_sat))
+
+    epochs
+    |> Enum.reduce_while({:ok, {%{}, %{}}}, fn epoch, {:ok, {satellites, pairs}} ->
+      ref_dd = single_difference(epoch, reference_sat)
+
+      epoch
+      |> epoch_available_nonrefs(reference_sat, physical_sats)
+      |> Enum.reduce_while({:ok, {satellites, pairs}}, fn sat, {:ok, {satellites, pairs}} ->
+        sd = single_difference(epoch, sat)
+        dd_id = double_difference_ambiguity_id(sat, sd.ambiguity_id, ref_dd)
+        pair = %{sat_sd_id: sd.ambiguity_id, ref_sd_id: ref_dd.ambiguity_id}
+
+        case Map.fetch(satellites, dd_id) do
+          {:ok, ^sat} ->
+            {:cont, {:ok, {satellites, Map.put_new(pairs, dd_id, pair)}}}
+
+          {:ok, other_sat} ->
+            {:halt, {:error, {:duplicate_ambiguity_id, dd_id, other_sat, sat}}}
+
+          :error ->
+            {:cont, {:ok, {Map.put(satellites, dd_id, sat), Map.put(pairs, dd_id, pair)}}}
+        end
+      end)
+      |> case do
+        {:ok, acc} -> {:cont, {:ok, acc}}
+        {:error, _reason} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, {ambiguity_satellites, pairs}} ->
+        ambiguity_ids =
+          ambiguity_satellites
+          |> Enum.sort_by(fn {ambiguity_id, sat} -> {sat, ambiguity_id} end)
+          |> Enum.map(&elem(&1, 0))
+
+        {:ok, ambiguity_ids, Map.new(ambiguity_satellites), pairs}
 
       {:error, _reason} = err ->
         err
@@ -2564,6 +2664,72 @@ defmodule Orbis.GNSS.RTK do
     end
   end
 
+  defp build_epoch_sequential_baseline_rows(
+         base,
+         epoch,
+         reference_sat,
+         physical_sats,
+         sd_ambiguity_ids,
+         dd_ambiguity_pairs,
+         state,
+         weights
+       ) do
+    ref_dd = single_difference(epoch, reference_sat)
+    ref_pos = Map.fetch!(epoch.positions, reference_sat)
+
+    epoch
+    |> epoch_available_nonrefs(reference_sat, physical_sats)
+    |> Enum.reduce({:ok, []}, fn sat, {:ok, acc} ->
+      obs_dd = double_difference_measurement(epoch, sat, ref_dd)
+      sat_pos = Map.fetch!(epoch.positions, sat)
+      {geom_dd, deriv} = geometry_double_difference(base, state.baseline, sat_pos, ref_pos)
+
+      %{sat_sd_id: sat_sd_id, ref_sd_id: ref_sd_id} =
+        Map.fetch!(dd_ambiguity_pairs, obs_dd.ambiguity_id)
+
+      ambiguity = dd_state_ambiguity_m(state, sat_sd_id, ref_sd_id)
+      h_base = design_baseline_row(deriv, nil, sd_ambiguity_ids)
+
+      h_phase =
+        design_single_difference_baseline_row(deriv, sat_sd_id, ref_sd_id, sd_ambiguity_ids)
+
+      code_variance = row_variance(weights, :code, base, sat_pos, ref_pos)
+      phase_variance = row_variance(weights, :phase, base, sat_pos, ref_pos)
+
+      code_row = %{
+        kind: :code,
+        epoch_idx: epoch.idx,
+        epoch: epoch.epoch,
+        sat: sat,
+        ambiguity_id: obs_dd.ambiguity_id,
+        h: h_base,
+        y: obs_dd.code_m - geom_dd,
+        sd_variance_m2: code_variance.sd_variance_m2,
+        ref_sd_variance_m2: code_variance.ref_sd_variance_m2,
+        weight: code_variance.weight
+      }
+
+      phase_row = %{
+        kind: :phase,
+        epoch_idx: epoch.idx,
+        epoch: epoch.epoch,
+        sat: sat,
+        ambiguity_id: obs_dd.ambiguity_id,
+        h: h_phase,
+        y: obs_dd.phase_m - (geom_dd + ambiguity),
+        sd_variance_m2: phase_variance.sd_variance_m2,
+        ref_sd_variance_m2: phase_variance.ref_sd_variance_m2,
+        weight: phase_variance.weight
+      }
+
+      {:ok, [phase_row, code_row | acc]}
+    end)
+    |> case do
+      {:ok, rows} -> {:ok, Enum.reverse(rows)}
+      {:error, _reason} = err -> err
+    end
+  end
+
   defp single_difference(epoch, sat) do
     base_obs = Map.fetch!(epoch.base, sat)
     rover_obs = Map.fetch!(epoch.rover, sat)
@@ -2600,6 +2766,10 @@ defmodule Orbis.GNSS.RTK do
     if sat_sd_id == sat and ref_dd.ambiguity_id == ref_dd.satellite_id,
       do: sat,
       else: "#{sat_sd_id}|ref=#{ref_dd.ambiguity_id}"
+  end
+
+  defp dd_state_ambiguity_m(state, sat_sd_id, ref_sd_id) do
+    Map.fetch!(state.ambiguities, sat_sd_id) - Map.fetch!(state.ambiguities, ref_sd_id)
   end
 
   defp geometry_double_difference(base, baseline, sat_pos, ref_pos) do
@@ -2645,6 +2815,19 @@ defmodule Orbis.GNSS.RTK do
 
   defp design_baseline_row({dx, dy, dz}, ambiguity_id, ambiguity_ids) do
     ambiguity_cols = Enum.map(ambiguity_ids, &if(&1 == ambiguity_id, do: 1.0, else: 0.0))
+    [dx, dy, dz | ambiguity_cols]
+  end
+
+  defp design_single_difference_baseline_row({dx, dy, dz}, sat_sd_id, ref_sd_id, sd_ambiguity_ids) do
+    ambiguity_cols =
+      Enum.map(sd_ambiguity_ids, fn id ->
+        cond do
+          id == sat_sd_id -> 1.0
+          id == ref_sd_id -> -1.0
+          true -> 0.0
+        end
+      end)
+
     [dx, dy, dz | ambiguity_cols]
   end
 
@@ -3078,6 +3261,37 @@ defmodule Orbis.GNSS.RTK do
     end
   end
 
+  defp dd_covariance_m_to_cycles(sd_covariance_m, sd_ids, dd_ids, dd_pairs, wavelengths) do
+    sd_index = sd_ids |> Enum.with_index() |> Map.new()
+
+    dd_ids
+    |> Enum.map(fn dd_i ->
+      lambda_i = Map.fetch!(wavelengths, dd_i)
+      ti = dd_transform_indices(Map.fetch!(dd_pairs, dd_i), sd_index)
+
+      dd_ids
+      |> Enum.map(fn dd_j ->
+        lambda_j = Map.fetch!(wavelengths, dd_j)
+        tj = dd_transform_indices(Map.fetch!(dd_pairs, dd_j), sd_index)
+
+        dd_covariance_m(sd_covariance_m, ti, tj) / (lambda_i * lambda_j)
+      end)
+    end)
+  end
+
+  defp dd_transform_indices(%{sat_sd_id: sat_sd_id, ref_sd_id: ref_sd_id}, sd_index) do
+    [{Map.fetch!(sd_index, sat_sd_id), 1.0}, {Map.fetch!(sd_index, ref_sd_id), -1.0}]
+  end
+
+  defp dd_covariance_m(covariance_m, ti, tj) do
+    Enum.reduce(ti, 0.0, fn {i, wi}, acc ->
+      acc +
+        Enum.reduce(tj, 0.0, fn {j, wj}, inner ->
+          inner + wi * wj * (covariance_m |> Enum.at(i) |> Enum.at(j))
+        end)
+    end)
+  end
+
   defp fixed_ambiguities_m(fixed_cycles, wavelengths, offsets) do
     Map.new(fixed_cycles, fn {sat, cycles} ->
       {sat, Map.fetch!(offsets, sat) + cycles * Map.fetch!(wavelengths, sat)}
@@ -3089,8 +3303,11 @@ defmodule Orbis.GNSS.RTK do
          epochs,
          reference_sat,
          physical_sats,
-         ambiguity_ids,
-         ambiguity_satellites,
+         sd_ambiguity_ids,
+         sd_ambiguity_satellites,
+         dd_ambiguity_ids,
+         dd_ambiguity_satellites,
+         dd_ambiguity_pairs,
          wavelengths,
          offsets,
          weights,
@@ -3100,10 +3317,10 @@ defmodule Orbis.GNSS.RTK do
          initial_baseline,
          prep_meta
        ) do
-    n = baseline_unknown_count(ambiguity_ids)
+    n = baseline_unknown_count(sd_ambiguity_ids)
 
     {initial_ambiguities, initial_ambiguity_count} =
-      initial_sequential_ambiguities(epochs, reference_sat, physical_sats, ambiguity_ids)
+      initial_sequential_ambiguities(epochs, [reference_sat | physical_sats], sd_ambiguity_ids)
 
     initial = %{
       state: %{
@@ -3128,7 +3345,9 @@ defmodule Orbis.GNSS.RTK do
              epoch,
              reference_sat,
              physical_sats,
-             ambiguity_ids,
+             sd_ambiguity_ids,
+             dd_ambiguity_ids,
+             dd_ambiguity_pairs,
              wavelengths,
              offsets,
              weights,
@@ -3158,12 +3377,15 @@ defmodule Orbis.GNSS.RTK do
            epochs: epoch_results,
            metadata: %{
              integer_method: :sequential_lambda,
+             ambiguity_state: :single_difference,
              first_fixed_epoch: first_fixed && first_fixed.epoch,
              first_fixed_index: first_fixed && first_fixed.index,
              fixed_epoch_count: fixed_epochs,
              n_epochs: length(epochs),
              physical_sats: physical_sats,
-             ambiguity_satellites: ambiguity_satellites,
+             ambiguity_satellites: dd_ambiguity_satellites,
+             single_difference_ambiguity_satellites: sd_ambiguity_satellites,
+             single_difference_ambiguity_count: length(sd_ambiguity_ids),
              measurement_covariance: %{
                model: :double_difference,
                code_sigma_m: weights.code_sigma_m,
@@ -3191,30 +3413,28 @@ defmodule Orbis.GNSS.RTK do
     end
   end
 
-  defp initial_sequential_ambiguities(epochs, reference_sat, physical_sats, ambiguity_ids) do
-    zero = Map.new(ambiguity_ids, &{&1, 0.0})
-    ambiguity_set = MapSet.new(ambiguity_ids)
+  defp initial_sequential_ambiguities(epochs, physical_sats, sd_ambiguity_ids) do
+    zero = Map.new(sd_ambiguity_ids, &{&1, 0.0})
+    ambiguity_set = MapSet.new(sd_ambiguity_ids)
 
     seeded =
       Enum.reduce_while(epochs, %{}, fn epoch, acc ->
-        if map_size(acc) == length(ambiguity_ids) do
+        if map_size(acc) == length(sd_ambiguity_ids) do
           {:halt, acc}
         else
-          ref_dd = single_difference(epoch, reference_sat)
-
           acc =
             epoch
-            |> epoch_available_nonrefs(reference_sat, physical_sats)
+            |> epoch_available_sats(physical_sats)
             |> Enum.reduce(acc, fn sat, sat_acc ->
-              obs_dd = double_difference_measurement(epoch, sat, ref_dd)
+              sd = single_difference(epoch, sat)
 
-              if MapSet.member?(ambiguity_set, obs_dd.ambiguity_id) and
-                   not Map.has_key?(sat_acc, obs_dd.ambiguity_id) do
+              if MapSet.member?(ambiguity_set, sd.ambiguity_id) and
+                   not Map.has_key?(sat_acc, sd.ambiguity_id) do
                 # RTK filters conventionally seed carrier ambiguities from the
                 # phase-code difference; the prior remains intentionally broad,
                 # but starting near the code-pinned level avoids spending early
                 # epochs pulling kilometre-scale zero-state ambiguities into place.
-                Map.put(sat_acc, obs_dd.ambiguity_id, obs_dd.phase_m - obs_dd.code_m)
+                Map.put(sat_acc, sd.ambiguity_id, sd.phase_m - sd.code_m)
               else
                 sat_acc
               end
@@ -3232,7 +3452,9 @@ defmodule Orbis.GNSS.RTK do
          epoch,
          reference_sat,
          physical_sats,
-         ambiguity_ids,
+         sd_ambiguity_ids,
+         dd_ambiguity_ids,
+         dd_ambiguity_pairs,
          wavelengths,
          offsets,
          weights,
@@ -3247,7 +3469,8 @@ defmodule Orbis.GNSS.RTK do
              epoch,
              reference_sat,
              physical_sats,
-             ambiguity_ids,
+             sd_ambiguity_ids,
+             dd_ambiguity_pairs,
              acc.state,
              acc.state,
              acc.information,
@@ -3263,7 +3486,9 @@ defmodule Orbis.GNSS.RTK do
              state,
              covariance,
              rows,
-             ambiguity_ids,
+             sd_ambiguity_ids,
+             dd_ambiguity_ids,
+             dd_ambiguity_pairs,
              acc.fixed_cycles,
              wavelengths,
              offsets,
@@ -3302,7 +3527,8 @@ defmodule Orbis.GNSS.RTK do
          epoch,
          reference_sat,
          physical_sats,
-         ambiguity_ids,
+         sd_ambiguity_ids,
+         dd_ambiguity_pairs,
          prior_center,
          prior_state,
          prior_information,
@@ -3313,33 +3539,35 @@ defmodule Orbis.GNSS.RTK do
          iter
        ) do
     with {:ok, rows} <-
-           build_epoch_baseline_rows(
+           build_epoch_sequential_baseline_rows(
              base,
              epoch,
              reference_sat,
              physical_sats,
-             ambiguity_ids,
+             sd_ambiguity_ids,
+             dd_ambiguity_pairs,
              prior_state,
              weights
            ),
          {measurement_information, measurement_rhs} <-
-           baseline_normal_equations(rows, baseline_unknown_count(ambiguity_ids)),
+           baseline_normal_equations(rows, baseline_unknown_count(sd_ambiguity_ids)),
          {hold_information, hold_rhs} <-
            sequential_hold_normal_equations(
-             ambiguity_ids,
+             sd_ambiguity_ids,
+             dd_ambiguity_pairs,
              prior_state,
              fixed_m,
              filter_opts.hold_sigma_m
            ),
          prior_rhs =
-           sequential_prior_rhs(ambiguity_ids, prior_information, prior_center, prior_state),
+           sequential_prior_rhs(sd_ambiguity_ids, prior_information, prior_center, prior_state),
          information =
            prior_information
            |> matrix_add(measurement_information)
            |> matrix_add(hold_information),
          rhs = measurement_rhs |> vector_add(hold_rhs) |> vector_add(prior_rhs),
          {:ok, dx} <- solve_linear(information, rhs),
-         next_state = apply_baseline_delta(prior_state, ambiguity_ids, dx),
+         next_state = apply_baseline_delta(prior_state, sd_ambiguity_ids, dx),
          {baseline_step, ambiguity_step} <- baseline_step_norms(dx) do
       cond do
         baseline_step <= solve_opts.position_tolerance_m and
@@ -3355,7 +3583,8 @@ defmodule Orbis.GNSS.RTK do
             epoch,
             reference_sat,
             physical_sats,
-            ambiguity_ids,
+            sd_ambiguity_ids,
+            dd_ambiguity_pairs,
             prior_center,
             next_state,
             prior_information,
@@ -3388,21 +3617,49 @@ defmodule Orbis.GNSS.RTK do
     |> then(&matvec(prior_information, &1))
   end
 
-  defp sequential_hold_normal_equations(ambiguity_ids, state, fixed_m, hold_sigma_m) do
-    n = baseline_unknown_count(ambiguity_ids)
+  defp sequential_hold_normal_equations(
+         sd_ambiguity_ids,
+         dd_ambiguity_pairs,
+         state,
+         fixed_m,
+         hold_sigma_m
+       ) do
+    n = baseline_unknown_count(sd_ambiguity_ids)
     hold_weight = 1.0 / (hold_sigma_m * hold_sigma_m)
     zero = zero_matrix(n)
     rhs = zero_vector(n)
 
     fixed_m
-    |> Enum.reduce({zero, rhs}, fn {ambiguity_id, fixed}, {normal, rhs} ->
-      idx = 3 + Enum.find_index(ambiguity_ids, &(&1 == ambiguity_id))
-      current = Map.fetch!(state.ambiguities, ambiguity_id)
+    |> Enum.reduce({zero, rhs}, fn {dd_id, fixed}, {normal, rhs} ->
+      %{sat_sd_id: sat_sd_id, ref_sd_id: ref_sd_id} = Map.fetch!(dd_ambiguity_pairs, dd_id)
+      current = dd_state_ambiguity_m(state, sat_sd_id, ref_sd_id)
 
-      {
-        add_diagonal(normal, idx, hold_weight),
-        add_vector_value(rhs, idx, (fixed - current) * hold_weight)
-      }
+      h =
+        design_single_difference_baseline_row(
+          {0.0, 0.0, 0.0},
+          sat_sd_id,
+          ref_sd_id,
+          sd_ambiguity_ids
+        )
+
+      weighted_h = Enum.map(h, &(&1 * hold_weight))
+
+      normal =
+        Enum.with_index(h)
+        |> Enum.reduce(normal, fn {hi, i}, normal ->
+          Enum.with_index(weighted_h)
+          |> Enum.reduce(normal, fn {weighted_hj, j}, normal ->
+            add_matrix_value(normal, i, j, hi * weighted_hj)
+          end)
+        end)
+
+      rhs =
+        Enum.with_index(weighted_h)
+        |> Enum.reduce(rhs, fn {weighted_hi, i}, rhs ->
+          add_vector_value(rhs, i, (fixed - current) * weighted_hi)
+        end)
+
+      {normal, rhs}
     end)
   end
 
@@ -3410,7 +3667,9 @@ defmodule Orbis.GNSS.RTK do
          state,
          covariance,
          rows,
-         ambiguity_ids,
+         sd_ambiguity_ids,
+         dd_ambiguity_ids,
+         dd_ambiguity_pairs,
          fixed_cycles,
          wavelengths,
          offsets,
@@ -3428,15 +3687,24 @@ defmodule Orbis.GNSS.RTK do
     if search_ids == [] do
       {:ok, fixed_cycles, fixed_ambiguities_m(fixed_cycles, wavelengths, offsets), %{}}
     else
-      ambiguity_covariance =
-        submatrix(covariance, 3, length(ambiguity_ids), 3, length(ambiguity_ids))
+      sd_covariance =
+        submatrix(covariance, 3, length(sd_ambiguity_ids), 3, length(sd_ambiguity_ids))
 
-      covariance_cycles = covariance_m_to_cycles(ambiguity_covariance, ambiguity_ids, wavelengths)
-      subset_covariance = covariance_submatrix(ambiguity_ids, covariance_cycles, search_ids)
+      covariance_cycles =
+        dd_covariance_m_to_cycles(
+          sd_covariance,
+          sd_ambiguity_ids,
+          dd_ambiguity_ids,
+          dd_ambiguity_pairs,
+          wavelengths
+        )
+
+      subset_covariance = covariance_submatrix(dd_ambiguity_ids, covariance_cycles, search_ids)
 
       float_cycles =
         Map.new(search_ids, fn id ->
-          ambiguity_m = Map.fetch!(state.ambiguities, id)
+          %{sat_sd_id: sat_sd_id, ref_sd_id: ref_sd_id} = Map.fetch!(dd_ambiguity_pairs, id)
+          ambiguity_m = dd_state_ambiguity_m(state, sat_sd_id, ref_sd_id)
           offset_m = Map.fetch!(offsets, id)
           {id, (ambiguity_m - offset_m) / Map.fetch!(wavelengths, id)}
         end)
@@ -4102,12 +4370,12 @@ defmodule Orbis.GNSS.RTK do
     [x, y, z | Enum.map(ambiguity_ids, &Map.fetch!(state.ambiguities, &1))]
   end
 
-  defp add_diagonal(matrix, idx, value) do
+  defp add_matrix_value(matrix, row_idx, col_idx, value) do
     matrix
     |> Enum.with_index()
-    |> Enum.map(fn {row, row_idx} ->
-      if row_idx == idx do
-        add_vector_value(row, idx, value)
+    |> Enum.map(fn {row, i} ->
+      if i == row_idx do
+        add_vector_value(row, col_idx, value)
       else
         row
       end

@@ -20,10 +20,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `Orbis.GNSS.RTK.solve_filter_baseline_epochs/3` adds a sequential static RTK
   information filter: it carries baseline/ambiguity covariance epoch to epoch,
   attempts LAMBDA ambiguity fixing from the posterior covariance, and holds
-  accepted integers with a configurable pseudo-measurement. The filter seeds
-  double-difference ambiguity states from phase-code differences, matching
-  standard RTK filter initialization rather than starting every ambiguity at
-  zero.
+  accepted integers with a configurable pseudo-measurement. The filter carries
+  RTKLIB-style single-difference ambiguity states, searches/holds the
+  corresponding double-difference integer combinations, and seeds the
+  single-difference ambiguities from phase-code differences rather than starting
+  every ambiguity at zero.
 
 ### Fixed
 

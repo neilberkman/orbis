@@ -820,10 +820,10 @@ defmodule Orbis.GNSS.RTKTest do
 
       assert sol.reference_satellite_id == "G01"
       assert sol.metadata.integer_method == :sequential_lambda
+      assert sol.metadata.ambiguity_state == :single_difference
       assert sol.metadata.ambiguity_initialization == :phase_code
 
-      assert sol.metadata.initialized_ambiguity_count ==
-               map_size(Map.delete(@fixed_cycles, "G01"))
+      assert sol.metadata.initialized_ambiguity_count == map_size(@fixed_cycles)
 
       assert sol.metadata.first_fixed_index != nil
       assert sol.metadata.fixed_epoch_count > 0
