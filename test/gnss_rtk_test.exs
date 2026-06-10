@@ -283,6 +283,55 @@ defmodule Orbis.GNSS.RTKTest do
       assert position_error(weighted.baseline_m, @truth_baseline) < 1.0e-5
     end
 
+    test "can apply an elevation mask before reference and ambiguity selection" do
+      base = {6_378_137.0, 0.0, 0.0}
+      baseline = {1.0, 0.2, -0.1}
+
+      positions_a = %{
+        "G01" => {26_000_000.0, 0.0, 0.0},
+        "G02" => {24_000_000.0, 4_000_000.0, 8_000_000.0},
+        "G03" => {23_500_000.0, -5_000_000.0, 9_000_000.0},
+        "G04" => {6_378_137.0, 26_000_000.0, 0.0},
+        "G05" => {25_000_000.0, 2_000_000.0, -7_000_000.0}
+      }
+
+      positions_b = %{
+        "G01" => {26_020_000.0, 20_000.0, 10_000.0},
+        "G02" => {24_010_000.0, 4_020_000.0, 8_010_000.0},
+        "G03" => {23_490_000.0, -4_980_000.0, 9_020_000.0},
+        "G04" => {6_378_137.0, 26_020_000.0, 20_000.0},
+        "G05" => {25_020_000.0, 2_010_000.0, -6_980_000.0}
+      }
+
+      epochs =
+        [positions_a, positions_b]
+        |> Enum.with_index()
+        |> Enum.map(fn {positions, idx} ->
+          synthetic_baseline_epoch(base, baseline, positions,
+            epoch: idx,
+            ambiguities_m: %{
+              "G01" => 0.0,
+              "G02" => 0.2,
+              "G03" => -0.3,
+              "G04" => 0.4,
+              "G05" => -0.5
+            }
+          )
+        end)
+
+      assert {:ok, sol} =
+               RTK.solve_float_baseline_epochs(base, epochs,
+                 elevation_mask_deg: 5.0,
+                 reference_satellite_id: "G01"
+               )
+
+      assert sol.used_sats == ["G02", "G03", "G05"]
+      assert sol.metadata.elevation_mask_deg == 5.0
+      assert sol.metadata.elevation_masked_sats == ["G04"]
+      assert sol.metadata.dropped_sats == ["G04"]
+      assert position_error(sol.baseline_m, baseline) < 1.0e-5
+    end
+
     test "can Hatch-smooth code observations before forming double differences" do
       epochs =
         @sat_positions
@@ -435,6 +484,12 @@ defmodule Orbis.GNSS.RTKTest do
 
       assert RTK.solve_float_baseline_epochs(@base, [epoch], elevation_weighting: :bad) ==
                {:error, {:invalid_option, :elevation_weighting}}
+
+      assert RTK.solve_float_baseline_epochs(@base, [epoch], elevation_mask_deg: -1.0) ==
+               {:error, {:invalid_option, :elevation_mask_deg}}
+
+      assert RTK.solve_float_baseline_epochs(@base, [epoch], elevation_mask_deg: 90.0) ==
+               {:error, {:invalid_option, :elevation_mask_deg}}
 
       assert RTK.solve_float_baseline_epochs(@base, [epoch], code_smoothing: :bad) ==
                {:error, {:invalid_option, :code_smoothing}}

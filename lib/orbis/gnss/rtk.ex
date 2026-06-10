@@ -80,6 +80,7 @@ defmodule Orbis.GNSS.RTK do
     :phase_sigma_m,
     :on_cycle_slip,
     :elevation_weighting,
+    :elevation_mask_deg,
     :code_smoothing,
     :hatch_window_cap,
     :max_iterations,
@@ -181,6 +182,8 @@ defmodule Orbis.GNSS.RTK do
               n_observations: pos_integer(),
               dropped_sats: [String.t()],
               dropped_cycle_slip_sats: [String.t()],
+              elevation_mask_deg: float() | nil,
+              elevation_masked_sats: [String.t()],
               split_cycle_slip_arcs: [map()]
             }
           }
@@ -267,6 +270,8 @@ defmodule Orbis.GNSS.RTK do
               optional(:partial_free_ambiguities) => [String.t()],
               optional(:partial_full_set) => map(),
               optional(:dropped_cycle_slip_sats) => [String.t()],
+              optional(:elevation_mask_deg) => float() | nil,
+              optional(:elevation_masked_sats) => [String.t()],
               optional(:split_cycle_slip_arcs) => [map()]
             }
           }
@@ -412,6 +417,9 @@ defmodule Orbis.GNSS.RTK do
       measurement sigma by `1 / max(sin(elevation), #{@min_elevation_sin})`
       before propagating the double-difference covariance. Default `false`
       preserves the constant-sigma, transcendental-free solve path.
+    * `:elevation_mask_deg` - optional elevation mask in degrees. Satellites
+      below the mask at the base station are removed before reference selection
+      and ambiguity construction.
     * `:code_smoothing` - when `true`, applies per-receiver/per-ambiguity-arc
       Hatch carrier smoothing to code observations before forming double
       differences. Default `false`.
@@ -429,12 +437,7 @@ defmodule Orbis.GNSS.RTK do
   def solve_float_baseline_epochs(base_position, epochs, opts) when is_list(epochs) do
     with :ok <- validate_options(opts, @float_baseline_options),
          {:ok, base} <- Types.normalize_ecef(base_position, :invalid_base_position),
-         :ok <- ensure_nonempty_epochs(epochs),
-         {:ok, normalized_epochs} <- normalize_epochs(epochs),
-         {:ok, normalized_epochs, slip_meta} <-
-           prepare_epochs_for_cycle_slips(normalized_epochs, opts),
-         {:ok, normalized_epochs, smoothing_meta} <-
-           prepare_epochs_for_code_smoothing(normalized_epochs, opts),
+         {:ok, normalized_epochs, prep_meta} <- prepare_baseline_epochs(base, epochs, opts),
          {:ok, common_sats, _not_common_sats} <- common_epoch_sats(normalized_epochs),
          {:ok, all_sats} <- all_epoch_sats(normalized_epochs),
          :ok <- ensure_baseline_satellites(all_sats),
@@ -469,7 +472,7 @@ defmodule Orbis.GNSS.RTK do
           weights,
           solve_opts,
           [],
-          Map.merge(slip_meta, smoothing_meta),
+          prep_meta,
           1
         )
       end
@@ -606,9 +609,7 @@ defmodule Orbis.GNSS.RTK do
          fixed_m = fixed_ambiguities_m(fixed_cycles, wavelengths, offsets),
          free_ambiguity_ids = free_ambiguity_ids(float_sol.used_sats, fixed_cycles),
          {:ok, base} <- Types.normalize_ecef(base_position, :invalid_base_position),
-         {:ok, normalized_epochs} <- normalize_epochs(epochs),
-         {:ok, normalized_epochs, _slip_meta} <-
-           prepare_epochs_for_cycle_slips(normalized_epochs, float_opts),
+         {:ok, normalized_epochs, _prep_meta} <- prepare_baseline_epochs(base, epochs, float_opts),
          {:ok, weights} <- baseline_weights(float_opts),
          {:ok, solve_opts} <- baseline_solve_options(float_opts) do
       state = %{
@@ -1664,6 +1665,19 @@ defmodule Orbis.GNSS.RTK do
 
   defp empty_cycle_slip_meta, do: %{dropped_sats: [], split_arcs: []}
 
+  defp prepare_baseline_epochs(base, epochs, opts) do
+    with :ok <- ensure_nonempty_epochs(epochs),
+         {:ok, normalized_epochs} <- normalize_epochs(epochs),
+         {:ok, normalized_epochs, slip_meta} <-
+           prepare_epochs_for_cycle_slips(normalized_epochs, opts),
+         {:ok, normalized_epochs, smoothing_meta} <-
+           prepare_epochs_for_code_smoothing(normalized_epochs, opts),
+         {:ok, normalized_epochs, mask_meta} <-
+           apply_elevation_mask(base, normalized_epochs, opts) do
+      {:ok, normalized_epochs, Map.merge(Map.merge(slip_meta, smoothing_meta), mask_meta)}
+    end
+  end
+
   defp prepare_epochs_for_code_smoothing(epochs, opts) do
     with {:ok, smoothing} <- rtk_code_smoothing(opts) do
       case smoothing do
@@ -1697,6 +1711,61 @@ defmodule Orbis.GNSS.RTK do
 
       _other ->
         {:error, {:invalid_option, :code_smoothing}}
+    end
+  end
+
+  defp apply_elevation_mask(base, epochs, opts) do
+    with {:ok, mask_deg} <- elevation_mask_deg(opts) do
+      case mask_deg do
+        nil ->
+          {:ok, epochs, %{elevation_mask_deg: nil, elevation_masked_sats: []}}
+
+        mask_deg ->
+          min_sin = :math.sin(mask_deg * :math.pi() / 180.0)
+
+          {epochs, masked} =
+            Enum.map_reduce(epochs, MapSet.new(), fn epoch, masked ->
+              kept =
+                epoch.positions
+                |> Enum.filter(fn {_sat, sat_pos} -> elevation_sin(base, sat_pos) >= min_sin end)
+                |> Enum.map(fn {sat, _sat_pos} -> sat end)
+
+              kept_set = MapSet.new(kept)
+
+              masked =
+                epoch.positions
+                |> Map.keys()
+                |> MapSet.new()
+                |> MapSet.difference(kept_set)
+                |> MapSet.union(masked)
+
+              {%{
+                 epoch
+                 | base: Map.take(epoch.base, kept),
+                   rover: Map.take(epoch.rover, kept),
+                   positions: Map.take(epoch.positions, kept)
+               }, masked}
+            end)
+
+          {:ok, epochs,
+           %{
+             elevation_mask_deg: mask_deg,
+             elevation_masked_sats: masked |> MapSet.to_list() |> Enum.sort()
+           }}
+      end
+    end
+  end
+
+  defp elevation_mask_deg(opts) do
+    case Keyword.get(opts, :elevation_mask_deg) do
+      nil ->
+        {:ok, nil}
+
+      deg when is_number(deg) and deg >= 0.0 and deg < 90.0 ->
+        {:ok, deg / 1.0}
+
+      _other ->
+        {:error, {:invalid_option, :elevation_mask_deg}}
     end
   end
 
@@ -2517,8 +2586,16 @@ defmodule Orbis.GNSS.RTK do
            weighted_rms_m: weighted_rms(rows),
            n_epochs: length(epochs),
            n_observations: length(rows),
-           dropped_sats: Enum.uniq(dropped_sats ++ slip_meta.dropped_sats) |> Enum.sort(),
+           dropped_sats:
+             Enum.uniq(
+               dropped_sats ++
+                 slip_meta.dropped_sats ++
+                 Map.get(slip_meta, :elevation_masked_sats, [])
+             )
+             |> Enum.sort(),
            dropped_cycle_slip_sats: slip_meta.dropped_sats,
+           elevation_mask_deg: Map.get(slip_meta, :elevation_mask_deg),
+           elevation_masked_sats: Map.get(slip_meta, :elevation_masked_sats, []),
            split_cycle_slip_arcs: slip_meta.split_arcs,
            code_smoothing: Map.get(slip_meta, :code_smoothing, false),
            code_smoothing_window_cap: Map.get(slip_meta, :code_smoothing_window_cap)
@@ -3125,6 +3202,8 @@ defmodule Orbis.GNSS.RTK do
              physical_sats: physical_sats,
              ambiguity_satellites: Map.fetch!(float_sol.metadata, :ambiguity_satellites),
              dropped_cycle_slip_sats: Map.get(float_sol.metadata, :dropped_cycle_slip_sats, []),
+             elevation_mask_deg: Map.get(float_sol.metadata, :elevation_mask_deg),
+             elevation_masked_sats: Map.get(float_sol.metadata, :elevation_masked_sats, []),
              split_cycle_slip_arcs: Map.get(float_sol.metadata, :split_cycle_slip_arcs, []),
              measurement_covariance: %{
                model: :double_difference,

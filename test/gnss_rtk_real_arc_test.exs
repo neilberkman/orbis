@@ -250,6 +250,7 @@ defmodule Orbis.GNSS.RTKRealArcTest do
                max_iterations: 10,
                on_cycle_slip: :split_arc,
                elevation_weighting: true,
+               elevation_mask_deg: 10.0,
                code_sigma_m: 2.0,
                phase_sigma_m: 0.01,
                ambiguity_wavelength_m: @gps_l1_wavelength_m,
@@ -263,12 +264,18 @@ defmodule Orbis.GNSS.RTKRealArcTest do
     assert sol.metadata.integer_ratio >= 3.0
     assert sol.metadata.integer_method == :lambda
     assert sol.metadata.n_epochs == 2
+    assert sol.metadata.elevation_mask_deg == 10.0
+    assert sol.metadata.elevation_masked_sats == ["G08", "G18", "G27"]
 
     # This pins the current gap: a batch partial-AR solve can pass the ratio
-    # test on the two-epoch prefix while landing far from the same ARP truth
-    # that RTKLIB fixes at epoch 2. The sequential filter must eliminate this
-    # false confidence, not merely produce a fixed status.
-    assert position_error(sol.baseline_m, antenna_baseline) > 0.5
+    # test on the two-epoch prefix while landing far from the same ARP truth that
+    # RTKLIB fixes at epoch 2. Matching RTKLIB's 10-degree elevation mask removes
+    # the low-elevation G08/G18/G27 contributors and improves the result, but the
+    # sequential filter must still eliminate the remaining false confidence, not
+    # merely produce a fixed status.
+    error_m = position_error(sol.baseline_m, antenna_baseline)
+    assert error_m > 0.3
+    assert error_m < 0.5
   end
 
   defp real_gps_l1_rtk_epochs(sp3, base_obs, rover_obs, count) do

@@ -13,6 +13,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   satellite up to a bounded cap, re-solves, and reports the exclusions in
   solution metadata; if the residuals still fail, it returns a tagged
   `:residual_validation_failed` error with the offending residual.
+- RTK float and fixed baseline solvers now accept `:elevation_mask_deg`, which
+  removes satellites below the base-station elevation mask before reference
+  selection and ambiguity construction. Masked satellites are reported in
+  solution metadata.
 
 ### Fixed
 
