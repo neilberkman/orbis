@@ -147,6 +147,18 @@ defmodule Orbis.GNSS.RTKTest do
 
       assert RTK.double_differences([{"G01", 1.0, 2.0}], [{"G01", 1.0, :bad}]) ==
                {:error, {:invalid_rover_observations, {"G01", 1.0, :bad}}}
+
+      assert RTK.double_differences(
+               [{"G01", 1.0, 2.0}, {"G02", 3.0, 4.0}],
+               [{"G01", 1.0, 2.0}, {"G02", 3.0, 4.0}],
+               reference_satellite: "G01"
+             ) == {:error, {:invalid_option, :reference_satellite}}
+
+      assert RTK.double_differences(
+               [{"G01", 1.0, 2.0}, {"G02", 3.0, 4.0}],
+               [{"G01", 1.0, 2.0}, {"G02", 3.0, 4.0}],
+               [:not_a_keyword]
+             ) == {:error, {:invalid_option, :opts}}
     end
   end
 
@@ -431,6 +443,9 @@ defmodule Orbis.GNSS.RTKTest do
                code_smoothing: true,
                hatch_window_cap: 0
              ) == {:error, {:invalid_option, :hatch_window_cap}}
+
+      assert RTK.solve_float_baseline_epochs(@base, [epoch], phase_sigma: 0.02) ==
+               {:error, {:invalid_option, :phase_sigma}}
     end
   end
 
@@ -660,6 +675,11 @@ defmodule Orbis.GNSS.RTKTest do
                ambiguity_wavelength_m: @l1_wavelength_m,
                ambiguity_offset_m: :bad
              ) == {:error, {:invalid_option, :ambiguity_offset_m}}
+
+      assert RTK.solve_fixed_baseline_epochs(@base, [epoch],
+               ambiguity_wavelength_m: @l1_wavelength_m,
+               integer_ratio: 3.0
+             ) == {:error, {:invalid_option, :integer_ratio}}
     end
   end
 
@@ -820,6 +840,10 @@ defmodule Orbis.GNSS.RTKTest do
 
       assert RTK.solve_widelane_fixed_baseline_epochs(@base, [epoch], wide_lane_min_epochs: 0) ==
                {:error, {:invalid_option, :wide_lane_min_epochs}}
+
+      assert RTK.solve_widelane_fixed_baseline_epochs(@base, [epoch],
+               ambiguity_wavelength_m: @l1_wavelength_m
+             ) == {:error, {:invalid_option, :ambiguity_wavelength_m}}
     end
   end
 

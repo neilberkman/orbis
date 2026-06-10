@@ -154,20 +154,16 @@ defmodule Orbis.GNSS.Broadcast do
   defp j2000_seconds(%NaiveDateTime{} = ndt) do
     {micro, _precision} = ndt.microsecond
 
-    case Time.epoch_to_j2000_seconds(%{ndt | microsecond: {0, 0}}) do
-      {:ok, seconds} -> {:ok, seconds + micro / 1_000_000.0}
-      {:error, _} = err -> err
-    end
+    {:ok, seconds} = Time.epoch_to_j2000_seconds(%{ndt | microsecond: {0, 0}})
+    {:ok, seconds + micro / 1_000_000.0}
   end
 
   defp j2000_seconds({{_y, _mo, _d} = date, {hour, minute, second}}) when is_float(second) do
     whole = trunc(second)
     frac = second - whole
 
-    case Time.epoch_to_j2000_seconds({date, {hour, minute, whole}}) do
-      {:ok, seconds} -> {:ok, seconds + frac}
-      {:error, _} = err -> err
-    end
+    {:ok, seconds} = Time.epoch_to_j2000_seconds({date, {hour, minute, whole}})
+    {:ok, seconds + frac}
   end
 
   defp j2000_seconds(epoch) do

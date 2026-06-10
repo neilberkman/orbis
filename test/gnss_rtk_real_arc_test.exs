@@ -52,13 +52,15 @@ defmodule Orbis.GNSS.RTKRealArcTest do
       integer_candidate_limit: 200_000
     ]
 
-    assert {:ok, float} = RTK.solve_float_baseline_epochs(base_arp, epochs, opts)
+    float_opts = Keyword.drop(opts, [:ambiguity_wavelength_m, :integer_candidate_limit])
+
+    assert {:ok, float} = RTK.solve_float_baseline_epochs(base_arp, epochs, float_opts)
 
     assert {:ok, smoothed_float} =
              RTK.solve_float_baseline_epochs(
                base_arp,
                epochs,
-               Keyword.put(opts, :code_smoothing, true)
+               Keyword.put(float_opts, :code_smoothing, true)
              )
 
     float_antenna_error_m = position_error(float.baseline_m, antenna_baseline)

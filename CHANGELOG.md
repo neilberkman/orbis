@@ -6,6 +6,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- RTK APIs now reject unknown/misspelled options at the public boundary instead
+  of silently falling back to defaults, and RTK residual finalization returns a
+  tagged error if an internal row set is missing either the code or phase member
+  of a double-difference pair. Fractional-epoch helpers in broadcast and SPP
+  positioning also no longer carry dead error clauses that produced
+  warnings-as-errors failures on newer Elixir compilers.
+
+### Tests
+
+- Added a vendored RTKLIB `rnx2rtkp` oracle fixture for the WTZR/WTZZ real RTK
+  arc. The fixture pins the L1+SP3 fix-and-hold reference target (119/120 fixed,
+  first fix at 2020-06-25 00:00:30 GPST, millimetre final ARP baseline error)
+  plus L1 instantaneous, L1 float, and L1/L2 comparison summaries.
+
 ## [0.15.1] - 2026-06-09
 
 ### Fixed

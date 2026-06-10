@@ -71,6 +71,41 @@ defmodule Orbis.GNSS.RTK do
   @default_cycle_slip_policy :error
   @default_hatch_window_cap 100
   @min_elevation_sin 0.05
+  @double_difference_options [:reference_satellite_id]
+  @float_baseline_options [
+    :reference_satellite_id,
+    :initial_baseline_m,
+    :code_sigma_m,
+    :phase_sigma_m,
+    :on_cycle_slip,
+    :elevation_weighting,
+    :code_smoothing,
+    :hatch_window_cap,
+    :max_iterations,
+    :position_tolerance_m,
+    :ambiguity_tolerance_m
+  ]
+  @integer_baseline_options [
+    :ambiguity_wavelength_m,
+    :ambiguity_offset_m,
+    :integer_search_radius_cycles,
+    :integer_ratio_threshold,
+    :integer_candidate_limit,
+    :partial_ambiguity_resolution,
+    :partial_min_ambiguities
+  ]
+  @fixed_baseline_options @float_baseline_options ++ @integer_baseline_options
+  @dual_wide_lane_options [
+    :wide_lane_min_epochs,
+    :wide_lane_tolerance_cycles,
+    :gf_threshold_m,
+    :mw_threshold_cycles
+  ]
+  @widelane_baseline_options (@fixed_baseline_options --
+                                [:ambiguity_wavelength_m, :ambiguity_offset_m]) ++
+                               @dual_wide_lane_options
+  @widelane_delegate_drop_options @dual_wide_lane_options ++
+                                    [:ambiguity_wavelength_m, :ambiguity_offset_m]
 
   defmodule FloatBaselineSolution do
     @moduledoc """
@@ -385,7 +420,8 @@ defmodule Orbis.GNSS.RTK do
   def solve_float_baseline_epochs(base_position, epochs, opts \\ [])
 
   def solve_float_baseline_epochs(base_position, epochs, opts) when is_list(epochs) do
-    with {:ok, base} <- Types.normalize_ecef(base_position, :invalid_base_position),
+    with :ok <- validate_options(opts, @float_baseline_options),
+         {:ok, base} <- Types.normalize_ecef(base_position, :invalid_base_position),
          :ok <- ensure_nonempty_epochs(epochs),
          {:ok, normalized_epochs} <- normalize_epochs(epochs),
          {:ok, normalized_epochs, slip_meta} <-
@@ -475,7 +511,10 @@ defmodule Orbis.GNSS.RTK do
   def solve_fixed_baseline_epochs(base_position, epochs, opts \\ [])
 
   def solve_fixed_baseline_epochs(base_position, epochs, opts) when is_list(epochs) do
-    with {:ok, float_sol} <- solve_float_baseline_epochs(base_position, epochs, opts),
+    float_opts = Keyword.take(opts, @float_baseline_options)
+
+    with :ok <- validate_options(opts, @fixed_baseline_options),
+         {:ok, float_sol} <- solve_float_baseline_epochs(base_position, epochs, float_opts),
          {:ok, wavelengths} <-
            ambiguity_wavelengths(
              float_sol.used_sats,
@@ -496,9 +535,9 @@ defmodule Orbis.GNSS.RTK do
          {:ok, base} <- Types.normalize_ecef(base_position, :invalid_base_position),
          {:ok, normalized_epochs} <- normalize_epochs(epochs),
          {:ok, normalized_epochs, _slip_meta} <-
-           prepare_epochs_for_cycle_slips(normalized_epochs, opts),
-         {:ok, weights} <- baseline_weights(opts),
-         {:ok, solve_opts} <- baseline_solve_options(opts) do
+           prepare_epochs_for_cycle_slips(normalized_epochs, float_opts),
+         {:ok, weights} <- baseline_weights(float_opts),
+         {:ok, solve_opts} <- baseline_solve_options(float_opts) do
       state = %{
         baseline: {float_sol.baseline_m.x_m, float_sol.baseline_m.y_m, float_sol.baseline_m.z_m},
         ambiguities: Map.take(float_sol.ambiguities_m, free_ambiguity_ids)
@@ -584,7 +623,8 @@ defmodule Orbis.GNSS.RTK do
 
   def solve_widelane_fixed_baseline_epochs(base_position, dual_epochs, opts)
       when is_list(dual_epochs) do
-    with {:ok, base} <- Types.normalize_ecef(base_position, :invalid_base_position),
+    with :ok <- validate_options(opts, @widelane_baseline_options),
+         {:ok, base} <- Types.normalize_ecef(base_position, :invalid_base_position),
          :ok <- ensure_nonempty_epochs(dual_epochs),
          {:ok, normalized_dual_epochs} <- normalize_dual_baseline_epochs(dual_epochs),
          {:ok, prepared_dual_epochs, slip_meta} <-
@@ -603,6 +643,7 @@ defmodule Orbis.GNSS.RTK do
            ),
          fixed_opts =
            opts
+           |> Keyword.drop(@widelane_delegate_drop_options)
            |> Keyword.put(:reference_satellite_id, reference_sat)
            |> Keyword.put(:ambiguity_wavelength_m, wavelengths)
            |> Keyword.put(:ambiguity_offset_m, offsets),
@@ -651,7 +692,8 @@ defmodule Orbis.GNSS.RTK do
 
   def double_differences(base_observations, rover_observations, opts)
       when is_list(base_observations) and is_list(rover_observations) do
-    with {:ok, base} <- normalize_observations(base_observations, :invalid_base_observations),
+    with :ok <- validate_options(opts, @double_difference_options),
+         {:ok, base} <- normalize_observations(base_observations, :invalid_base_observations),
          {:ok, rover} <- normalize_observations(rover_observations, :invalid_rover_observations),
          {:ok, common, dropped} <- common_observations(base, rover),
          {:ok, reference_sat} <- reference_satellite(common, opts) do
@@ -693,6 +735,21 @@ defmodule Orbis.GNSS.RTK do
 
   defp ensure_nonempty_epochs([]), do: {:error, :no_epochs}
   defp ensure_nonempty_epochs(_epochs), do: :ok
+
+  defp validate_options(opts, allowed) when is_list(opts) do
+    if Keyword.keyword?(opts) do
+      allowed = MapSet.new(allowed)
+
+      case Enum.find(Keyword.keys(opts), &(not MapSet.member?(allowed, &1))) do
+        nil -> :ok
+        key -> {:error, {:invalid_option, key}}
+      end
+    else
+      {:error, {:invalid_option, :opts}}
+    end
+  end
+
+  defp validate_options(_opts, _allowed), do: {:error, {:invalid_option, :opts}}
 
   defp normalize_epochs(epochs) do
     epochs
@@ -2244,8 +2301,8 @@ defmodule Orbis.GNSS.RTK do
              3,
              length(ambiguity_ids)
            ),
-         {:ok, covariance_inverse_m} <- invert_matrix(covariance_m) do
-      residuals = baseline_residuals(rows, reference_sat)
+         {:ok, covariance_inverse_m} <- invert_matrix(covariance_m),
+         {:ok, residuals} <- baseline_residuals(rows, reference_sat) do
       code_residuals = Enum.map(residuals, & &1.code_m)
       phase_residuals = Enum.map(residuals, & &1.phase_m)
       rover = add3(base, state.baseline)
@@ -2859,8 +2916,8 @@ defmodule Orbis.GNSS.RTK do
              fixed_m,
              state,
              weights
-           ) do
-      residuals = baseline_residuals(rows, reference_sat)
+           ),
+         {:ok, residuals} <- baseline_residuals(rows, reference_sat) do
       code_residuals = Enum.map(residuals, & &1.code_m)
       phase_residuals = Enum.map(residuals, & &1.phase_m)
       rover = add3(base, state.baseline)
@@ -2905,20 +2962,41 @@ defmodule Orbis.GNSS.RTK do
   defp baseline_residuals(rows, reference_sat) do
     rows
     |> Enum.group_by(&{&1.epoch, &1.sat, &1.ambiguity_id})
-    |> Enum.map(fn {{epoch, sat, ambiguity_id}, grouped} ->
+    |> Enum.reduce_while({:ok, []}, fn {{epoch, sat, ambiguity_id}, grouped}, {:ok, acc} ->
       code = Enum.find(grouped, &(&1.kind == :code))
       phase = Enum.find(grouped, &(&1.kind == :phase))
 
-      %{
-        epoch: epoch,
-        satellite_id: sat,
-        reference_satellite_id: reference_sat,
-        ambiguity_id: ambiguity_id,
-        code_m: code.y,
-        phase_m: phase.y
-      }
+      case {code, phase} do
+        {%{y: code_y}, %{y: phase_y}} ->
+          residual = %{
+            epoch: epoch,
+            satellite_id: sat,
+            reference_satellite_id: reference_sat,
+            ambiguity_id: ambiguity_id,
+            code_m: code_y,
+            phase_m: phase_y
+          }
+
+          {:cont, {:ok, [residual | acc]}}
+
+        {nil, nil} ->
+          {:halt,
+           {:error, {:incomplete_residual_pair, epoch, sat, ambiguity_id, [:code, :phase]}}}
+
+        {nil, _phase} ->
+          {:halt, {:error, {:incomplete_residual_pair, epoch, sat, ambiguity_id, [:code]}}}
+
+        {_code, nil} ->
+          {:halt, {:error, {:incomplete_residual_pair, epoch, sat, ambiguity_id, [:phase]}}}
+      end
     end)
-    |> Enum.sort_by(&{inspect(&1.epoch), &1.satellite_id, &1.ambiguity_id})
+    |> case do
+      {:ok, residuals} ->
+        {:ok, Enum.sort_by(residuals, &{inspect(&1.epoch), &1.satellite_id, &1.ambiguity_id})}
+
+      {:error, _reason} = err ->
+        err
+    end
   end
 
   defp solve_baseline_normal_equations(rows, n) do
