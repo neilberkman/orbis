@@ -17,6 +17,10 @@ defmodule Orbis.GNSS.RTKRealArcTest do
                    "fixtures/obs/WTZZ00DEU_R_20201770000_01D_30S_MO_120epoch.rnx"
                  )
   @rtklib_oracle_path Path.join(__DIR__, "fixtures/rtk/wtzr_wtzz_rtklib_oracle.json")
+  @rtklib_precise_oracle_path Path.join(
+                                __DIR__,
+                                "fixtures/rtk/wtzr_wtzz_rtklib_precise_oracle.json"
+                              )
 
   @c_m_s 299_792_458.0
   @gps_l1_hz 1_575_420_000.0
@@ -214,9 +218,14 @@ defmodule Orbis.GNSS.RTKRealArcTest do
   end
 
   @tag timeout: 180_000
-  test "broadcast-mode RTKLIB fixes the two-epoch prefix that batch partial AR gets wrong" do
+  test "RTKLIB fixes the two-epoch prefix that batch partial AR gets wrong" do
     oracle =
       @rtklib_oracle_path
+      |> File.read!()
+      |> Jason.decode!()
+
+    precise_oracle =
+      @rtklib_precise_oracle_path
       |> File.read!()
       |> Jason.decode!()
 
@@ -229,12 +238,18 @@ defmodule Orbis.GNSS.RTKRealArcTest do
     antenna_baseline_enu = enu_map_to_tuple(oracle["truth"]["antenna_baseline_enu_m"])
 
     rtklib_epoch_2 = oracle["per_epoch"] |> Enum.at(1)
+    rtklib_precise_epoch_2 = precise_oracle["per_epoch"] |> Enum.at(1)
     rtklib_epoch_2_baseline = enu_map_to_tuple(rtklib_epoch_2["baseline_enu_m"])
 
     assert oracle["reference"]["first_fixed_index"] == 1
     assert rtklib_epoch_2["fix_status"] == "fixed"
     assert rtklib_epoch_2["ratio"] >= 3.0
     assert position_error(rtklib_epoch_2_baseline, antenna_baseline_enu) < 0.006
+    assert precise_oracle["reference"]["first_fixed_index"] == 1
+    assert precise_oracle["broadcast_comparison"]["same_fix_status_by_epoch"]
+    assert precise_oracle["broadcast_comparison"]["max_baseline_delta_m"] < 0.002
+    assert rtklib_precise_epoch_2["fix_status"] == "fixed"
+    assert rtklib_precise_epoch_2["ratio"] >= 3.0
 
     epochs =
       sp3
@@ -267,7 +282,8 @@ defmodule Orbis.GNSS.RTKRealArcTest do
 
     # This pins the current gap: a batch partial-AR solve can pass the ratio
     # test on the two-epoch prefix while landing far from the same ARP truth that
-    # RTKLIB's broadcast-mode run fixes at epoch 2. Matching its 10-degree
+    # RTKLIB fixes at epoch 2 in both broadcast mode and explicit
+    # SP3/clock-backed precise mode. Matching its 10-degree
     # elevation mask removes the low-elevation G08/G18/G27 contributors and
     # improves the result, but the sequential filter must still eliminate the
     # remaining false confidence, not merely produce a fixed status.
@@ -306,10 +322,10 @@ defmodule Orbis.GNSS.RTKRealArcTest do
              )
 
     # RTKLIB's variance shape is part of the comparison lane, but it is not
-    # enough by itself to justify a fix on the two-epoch prefix. The committed
-    # RTKLIB fixture is broadcast-mode, while these Orbis epochs are SP3-backed;
-    # the remaining gap is ephemeris/correction-model alignment, not a
-    # ratio-threshold or covariance-form tweak.
+    # enough by itself to justify a fix on the two-epoch prefix. RTKLIB fixes
+    # this prefix with both the broadcast fixture and the staged lowercase-SP3
+    # precise fixture, so the remaining gap is not explained by ephemeris class
+    # alone and is not a ratio-threshold or covariance-form tweak.
     assert rtklib_weighted_filter.metadata.measurement_covariance.stochastic_model == :rtklib
     assert rtklib_weighted_filter.metadata.first_fixed_index == nil
     assert Enum.all?(rtklib_weighted_filter.epochs, &(&1.integer_status == :not_fixed))

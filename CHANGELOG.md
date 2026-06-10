@@ -54,6 +54,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   provenance now records that RTKLIB defaults to broadcast ephemeris unless
   `pos1-sateph = precise` is set, so this fixture is not mislabeled as an SP3
   parity oracle.
+- Added a separate RTKLIB precise-mode fixture for the same WTZR/WTZZ arc,
+  generated with `pos1-sateph = precise`, a CODE final SP3 orbit, and a
+  CNES/CLS RINEX clock. The provenance records RTKLIB 2.4.2's lowercase `.sp3`
+  staging requirement and pins that the precise run fixes the same 119/120
+  epochs as the broadcast reference.
 
 ## [0.15.1] - 2026-06-09
 
