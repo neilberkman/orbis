@@ -1036,6 +1036,88 @@ defmodule Orbis.GNSS.RTKTest do
       end
     end
 
+    test "re-initializes the wide-lane and narrow-lane ambiguity of a satellite that sets and re-rises" do
+      ref = "G01"
+      sats = ["G01", "G02", "G03", "G04", "G05"]
+      base_positions = hd(@sat_positions)
+
+      others_n1 = %{"G02" => 5, "G03" => -7, "G04" => 12}
+      others_wl = %{"G02" => 3, "G03" => -5, "G04" => 8}
+
+      # G05's carrier integers change across the outage (lock lost):
+      # pre-outage n1=-4 / wide-lane=-2, post-outage n1=9 / wide-lane=6.
+      g05_pre_n1 = -4
+      g05_pre_wl = -2
+      g05_post_n1 = 9
+      g05_post_wl = 6
+
+      epochs =
+        for idx <- 0..14 do
+          positions =
+            Map.new(sats, fn sat ->
+              {x, y, z} = Map.fetch!(base_positions, sat)
+              {sat, {x + idx * 1_000.0, y - idx * 800.0, z + idx * 1_200.0}}
+            end)
+
+          {positions, n1_cycles, wide_lane_cycles} =
+            cond do
+              # G05 has set below the horizon for three epochs.
+              idx in 6..8 ->
+                {Map.delete(positions, "G05"), Map.put(others_n1, "G01", 0),
+                 Map.put(others_wl, "G01", 0)}
+
+              idx <= 5 ->
+                {positions, others_n1 |> Map.put("G01", 0) |> Map.put("G05", g05_pre_n1),
+                 others_wl |> Map.put("G01", 0) |> Map.put("G05", g05_pre_wl)}
+
+              # Re-risen with DIFFERENT integers and NO loss-of-lock flag.
+              true ->
+                {positions, others_n1 |> Map.put("G01", 0) |> Map.put("G05", g05_post_n1),
+                 others_wl |> Map.put("G01", 0) |> Map.put("G05", g05_post_wl)}
+            end
+
+          synthetic_dual_baseline_epoch(@base, @truth_baseline, positions,
+            epoch: idx,
+            base_clock_m: 70.0 - idx,
+            rover_clock_m: -31.0 + 2.0 * idx,
+            n1_cycles: n1_cycles,
+            wide_lane_cycles: wide_lane_cycles
+          )
+        end
+
+      assert {:ok, sol} =
+               RTK.solve_widelane_fixed_baseline_epochs(@base, epochs,
+                 reference_satellite_id: ref,
+                 initial_baseline_m: {-40.0, 35.0, 12.0},
+                 wide_lane_tolerance_cycles: 0.01,
+                 # Disable threshold-based slip detection so the only arc break is
+                 # the G05 outage gap (which is detected independently of LLI).
+                 gf_threshold_m: 1.0e9,
+                 mw_threshold_cycles: 1.0e9
+               )
+
+      assert sol.metadata.integer_status == :fixed
+
+      # A stale G05 ambiguity held from the pre-outage arc conflicts with the
+      # post-outage truth; if the wide-lane prep does not start a fresh arc on
+      # re-rise the offset map keys diverge and the post-outage arc silently
+      # inherits the pre-outage offset, corrupting the static baseline.
+      assert position_error(sol.baseline_m, @truth_baseline) < 1.0e-3
+
+      # G05 must resolve as TWO separate arcs, each fixing to its own true
+      # integers: narrow-lane n1 {-4, 9} and wide-lane {-2, 6}.
+      g05_ids = Enum.filter(sol.used_sats, &String.contains?(&1, "G05"))
+      assert length(g05_ids) == 2
+
+      assert g05_ids
+             |> Enum.map(&Map.fetch!(sol.fixed_ambiguities_cycles, &1))
+             |> Enum.sort() == [-4, 9]
+
+      assert g05_ids
+             |> Enum.map(&Map.fetch!(sol.wide_lane_ambiguities_cycles, &1))
+             |> Enum.sort() == [-2, 6]
+    end
+
     test "can split dual-frequency ambiguity arcs at cycle slips" do
       epochs =
         @sat_positions

@@ -1273,25 +1273,41 @@ defmodule Orbis.GNSS.RTK do
     with {:ok, policy} <- rtk_cycle_slip_policy(opts) do
       slips = dual_cycle_slip_events(epochs, opts)
 
-      case {policy, slips} do
-        {_policy, []} ->
-          {:ok, epochs, empty_cycle_slip_meta()}
+      result =
+        case {policy, slips} do
+          {_policy, []} ->
+            {:ok, epochs, empty_cycle_slip_meta()}
 
-        {:error, [slip | _]} ->
-          {:error,
-           {:cycle_slip_detected, slip.receiver, slip.satellite_id, slip.epoch, slip.reasons}}
+          {:error, [slip | _]} ->
+            {:error,
+             {:cycle_slip_detected, slip.receiver, slip.satellite_id, slip.epoch, slip.reasons}}
 
-        {:drop_satellite, slips} ->
-          dropped = slips |> Enum.map(& &1.satellite_id) |> Enum.uniq() |> Enum.sort()
+          {:drop_satellite, slips} ->
+            dropped = slips |> Enum.map(& &1.satellite_id) |> Enum.uniq() |> Enum.sort()
 
-          {:ok, drop_dual_cycle_slip_sats(epochs, dropped),
-           %{dropped_sats: dropped, split_arcs: []}}
+            {:ok, drop_dual_cycle_slip_sats(epochs, dropped),
+             %{dropped_sats: dropped, split_arcs: []}}
 
-        {:split_arc, slips} ->
-          split_epochs = split_dual_cycle_slip_arcs(epochs, slips)
+          {:split_arc, slips} ->
+            split_epochs = split_dual_cycle_slip_arcs(epochs, slips)
 
-          {:ok, split_epochs,
-           %{dropped_sats: [], split_arcs: dual_cycle_slip_split_metadata(split_epochs, slips)}}
+            {:ok, split_epochs,
+             %{dropped_sats: [], split_arcs: dual_cycle_slip_split_metadata(split_epochs, slips)}}
+        end
+
+      # As in the single-frequency prep (see `prepare_epochs_for_cycle_slips/2`),
+      # a satellite that disappears and later reappears must start a FRESH
+      # ambiguity arc: lock was lost during the outage so the integer can differ.
+      # This must happen HERE, before wide-lane estimation, so the wide-lane
+      # integers, narrow-lane wavelengths, and offsets are all keyed by the same
+      # segmented `~raN` ambiguity ids that the delegated fixed-solve will see.
+      # Dual epochs share the `%{base/rover => %{sat => %{ambiguity_id: ...}}}`
+      # shape, so `segment_reacquired_arcs/1` applies unchanged. The delegated
+      # `solve_fixed_baseline_epochs/3` re-segments the derived ionosphere-free
+      # epochs, but `segment_reacquired_arcs/1` is idempotent so the ids match.
+      case result do
+        {:ok, prepared, meta} -> {:ok, segment_reacquired_arcs(prepared), meta}
+        {:error, _reason} = err -> err
       end
     end
   end
@@ -1863,6 +1879,11 @@ defmodule Orbis.GNSS.RTK do
       # policy above — reusing the pre-outage ambiguity corrupts the solution
       # (the sequential filter would hold a stale integer). Continuous arcs are
       # left unchanged.
+      #
+      # The wide-lane path also segments dual epochs up-front (see
+      # `prepare_dual_baseline_cycle_slips/2`) and then delegates here, so this
+      # may run a second time on already-segmented ids. That is safe:
+      # `segment_reacquired_arcs/1` is idempotent (see `reacquired_ambiguity_id/2`).
       case result do
         {:ok, prepared, meta} -> {:ok, segment_reacquired_arcs(prepared), meta}
         {:error, _reason} = err -> err
@@ -1916,7 +1937,14 @@ defmodule Orbis.GNSS.RTK do
     epochs
   end
 
-  defp reacquired_ambiguity_id(ambiguity_id, arc), do: "#{ambiguity_id}~ra#{arc}"
+  # Idempotent: strip any trailing `~raN` before re-appending, so segmenting the
+  # same gap pattern twice (the wide-lane path segments dual epochs, then the
+  # delegated fixed-solve segments the derived ionosphere-free epochs) yields
+  # identical ids and the offset/wavelength maps stay keyed consistently.
+  defp reacquired_ambiguity_id(ambiguity_id, arc) do
+    base = String.replace(ambiguity_id, ~r/~ra\d+$/, "")
+    "#{base}~ra#{arc}"
+  end
 
   defp prepare_baseline_epochs(base, epochs, opts) do
     with :ok <- ensure_nonempty_epochs(epochs),
