@@ -596,6 +596,52 @@ defmodule Orbis.GNSS.RTKTest do
       assert position_error(partial.baseline_m, @truth_baseline) < 1.0e-5
     end
 
+    test "residual validation can exclude a biased satellite before integer search" do
+      ambiguities_m =
+        Map.new(@fixed_cycles, fn {sat, cycles} -> {sat, cycles * @l1_wavelength_m} end)
+
+      epochs =
+        @sat_positions
+        |> Enum.with_index()
+        |> Enum.map(fn {positions, idx} ->
+          synthetic_baseline_epoch(@base, @truth_baseline, positions,
+            epoch: idx,
+            ambiguities_m: ambiguities_m
+          )
+        end)
+        |> add_rover_code_noise(%{"G05" => [40.0, -40.0, 40.0]})
+
+      common_opts = [
+        reference_satellite_id: "G01",
+        ambiguity_wavelength_m: @l1_wavelength_m,
+        initial_baseline_m: {-40.0, 35.0, 12.0},
+        residual_threshold_sigma: 6.0
+      ]
+
+      assert {:error, {:residual_validation_failed, outlier, []}} =
+               RTK.solve_fixed_baseline_epochs(
+                 @base,
+                 epochs,
+                 Keyword.put(common_opts, :max_residual_exclusions, 0)
+               )
+
+      assert outlier.satellite_id == "G05"
+      assert outlier.kind == :code
+      assert abs(outlier.normalized_residual) > outlier.threshold_sigma
+
+      assert {:ok, sol} = RTK.solve_fixed_baseline_epochs(@base, epochs, common_opts)
+
+      assert sol.metadata.integer_status == :fixed
+      assert sol.metadata.residual_validation.excluded_sats == ["G05"]
+      assert [%{satellite_id: "G05", kind: :code}] = sol.metadata.residual_validation.exclusions
+      refute "G05" in sol.used_sats
+      assert position_error(sol.baseline_m, @truth_baseline) < 1.0e-5
+
+      for sat <- sol.used_sats do
+        assert Map.fetch!(sol.fixed_ambiguities_cycles, sat) == Map.fetch!(@fixed_cycles, sat)
+      end
+    end
+
     test "fixed solve supports per-ambiguity metre offsets" do
       offsets_m = %{"G02" => 0.35, "G03" => -0.22, "G04" => 0.12, "G05" => -0.41}
 
@@ -680,6 +726,16 @@ defmodule Orbis.GNSS.RTKTest do
                ambiguity_wavelength_m: @l1_wavelength_m,
                integer_ratio: 3.0
              ) == {:error, {:invalid_option, :integer_ratio}}
+
+      assert RTK.solve_fixed_baseline_epochs(@base, [epoch],
+               ambiguity_wavelength_m: @l1_wavelength_m,
+               residual_threshold_sigma: 0.0
+             ) == {:error, {:invalid_option, :residual_threshold_sigma}}
+
+      assert RTK.solve_fixed_baseline_epochs(@base, [epoch],
+               ambiguity_wavelength_m: @l1_wavelength_m,
+               max_residual_exclusions: -1
+             ) == {:error, {:invalid_option, :max_residual_exclusions}}
     end
   end
 

@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- RTK fixed-baseline solving can now run an opt-in normalized-residual gate
+  before integer search. When enabled, the solver excludes the worst offending
+  satellite up to a bounded cap, re-solves, and reports the exclusions in
+  solution metadata; if the residuals still fail, it returns a tagged
+  `:residual_validation_failed` error with the offending residual.
+
 ### Fixed
 
 - RTK APIs now reject unknown/misspelled options at the public boundary instead

@@ -68,6 +68,7 @@ defmodule Orbis.GNSS.RTK do
   @default_integer_ratio_threshold 3.0
   @default_integer_candidate_limit 200_000
   @default_partial_min_ambiguities 4
+  @default_max_residual_exclusions 1
   @default_cycle_slip_policy :error
   @default_hatch_window_cap 100
   @min_elevation_sin 0.05
@@ -94,7 +95,9 @@ defmodule Orbis.GNSS.RTK do
     :partial_ambiguity_resolution,
     :partial_min_ambiguities
   ]
-  @fixed_baseline_options @float_baseline_options ++ @integer_baseline_options
+  @residual_validation_options [:residual_threshold_sigma, :max_residual_exclusions]
+  @fixed_baseline_options @float_baseline_options ++
+                            @integer_baseline_options ++ @residual_validation_options
   @dual_wide_lane_options [
     :wide_lane_min_epochs,
     :wide_lane_tolerance_cycles,
@@ -139,7 +142,11 @@ defmodule Orbis.GNSS.RTK do
             reference_satellite_id: String.t(),
             ambiguity_id: String.t(),
             code_m: float(),
-            phase_m: float()
+            phase_m: float(),
+            code_sigma_m: float(),
+            phase_sigma_m: float(),
+            code_normalized: float(),
+            phase_normalized: float()
           }
 
     @type t :: %__MODULE__{
@@ -502,6 +509,12 @@ defmodule Orbis.GNSS.RTK do
       as float states (default `false`).
     * `:partial_min_ambiguities` - minimum subset size for partial ambiguity
       resolution (default `#{@default_partial_min_ambiguities}`).
+    * `:residual_threshold_sigma` - optional normalized-residual gate. When set,
+      the float solve is checked before integer search; the worst offending
+      satellite is excluded and the solve retried up to `:max_residual_exclusions`.
+    * `:max_residual_exclusions` - maximum satellites the residual gate may
+      exclude (default `#{@default_max_residual_exclusions}` when the residual
+      gate is enabled).
 
   The fixed solution is returned even when the ratio test fails; in that case
   `metadata.integer_status` is `:not_fixed`.
@@ -514,8 +527,68 @@ defmodule Orbis.GNSS.RTK do
     float_opts = Keyword.take(opts, @float_baseline_options)
 
     with :ok <- validate_options(opts, @fixed_baseline_options),
-         {:ok, float_sol} <- solve_float_baseline_epochs(base_position, epochs, float_opts),
-         {:ok, wavelengths} <-
+         {:ok, residual_opts} <- residual_validation_options(opts) do
+      solve_fixed_baseline_epochs_attempt(
+        base_position,
+        epochs,
+        opts,
+        float_opts,
+        residual_opts,
+        []
+      )
+    end
+  end
+
+  def solve_fixed_baseline_epochs(_base_position, _epochs, _opts), do: {:error, :invalid_epochs}
+
+  defp solve_fixed_baseline_epochs_attempt(
+         base_position,
+         epochs,
+         opts,
+         float_opts,
+         residual_opts,
+         exclusions
+       ) do
+    with {:ok, float_sol} <- solve_float_baseline_epochs(base_position, epochs, float_opts) do
+      case residual_validation_outlier(float_sol, residual_opts) do
+        nil ->
+          finish_fixed_baseline_epochs(
+            base_position,
+            epochs,
+            opts,
+            float_opts,
+            float_sol,
+            residual_validation_meta(residual_opts, exclusions)
+          )
+
+        outlier ->
+          if length(exclusions) < residual_opts.max_exclusions do
+            epochs = drop_baseline_satellite_from_epochs(epochs, outlier.satellite_id)
+
+            solve_fixed_baseline_epochs_attempt(
+              base_position,
+              epochs,
+              opts,
+              float_opts,
+              residual_opts,
+              [outlier | exclusions]
+            )
+          else
+            {:error, {:residual_validation_failed, outlier, Enum.reverse(exclusions)}}
+          end
+      end
+    end
+  end
+
+  defp finish_fixed_baseline_epochs(
+         base_position,
+         epochs,
+         opts,
+         float_opts,
+         float_sol,
+         residual_validation_meta
+       ) do
+    with {:ok, wavelengths} <-
            ambiguity_wavelengths(
              float_sol.used_sats,
              Map.fetch!(float_sol.metadata, :ambiguity_satellites),
@@ -543,26 +616,27 @@ defmodule Orbis.GNSS.RTK do
         ambiguities: Map.take(float_sol.ambiguities_m, free_ambiguity_ids)
       }
 
-      iterate_fixed_baseline(
-        base,
-        normalized_epochs,
-        float_sol.reference_satellite_id,
-        Map.fetch!(float_sol.metadata, :physical_sats),
-        float_sol.used_sats,
-        free_ambiguity_ids,
-        fixed_m,
-        state,
-        weights,
-        solve_opts,
-        float_sol,
-        fixed_cycles,
-        fixed_meta,
-        1
-      )
+      case iterate_fixed_baseline(
+             base,
+             normalized_epochs,
+             float_sol.reference_satellite_id,
+             Map.fetch!(float_sol.metadata, :physical_sats),
+             float_sol.used_sats,
+             free_ambiguity_ids,
+             fixed_m,
+             state,
+             weights,
+             solve_opts,
+             float_sol,
+             fixed_cycles,
+             fixed_meta,
+             1
+           ) do
+        {:ok, sol} -> {:ok, attach_residual_validation_metadata(sol, residual_validation_meta)}
+        {:error, _reason} = err -> err
+      end
     end
   end
-
-  def solve_fixed_baseline_epochs(_base_position, _epochs, _opts), do: {:error, :invalid_epochs}
 
   @doc """
   Solve a static RTK baseline from raw dual-frequency observations by fixing
@@ -750,6 +824,111 @@ defmodule Orbis.GNSS.RTK do
   end
 
   defp validate_options(_opts, _allowed), do: {:error, {:invalid_option, :opts}}
+
+  defp residual_validation_options(opts) do
+    threshold = Keyword.get(opts, :residual_threshold_sigma)
+    max_exclusions = Keyword.get(opts, :max_residual_exclusions, @default_max_residual_exclusions)
+
+    cond do
+      not (is_integer(max_exclusions) and max_exclusions >= 0) ->
+        {:error, {:invalid_option, :max_residual_exclusions}}
+
+      is_nil(threshold) ->
+        {:ok, %{enabled?: false, threshold_sigma: nil, max_exclusions: max_exclusions}}
+
+      not (is_number(threshold) and threshold > 0.0) ->
+        {:error, {:invalid_option, :residual_threshold_sigma}}
+
+      true ->
+        {:ok,
+         %{
+           enabled?: true,
+           threshold_sigma: threshold / 1.0,
+           max_exclusions: max_exclusions
+         }}
+    end
+  end
+
+  defp residual_validation_outlier(_float_sol, %{enabled?: false}), do: nil
+
+  defp residual_validation_outlier(float_sol, %{threshold_sigma: threshold}) do
+    float_sol.residuals_m
+    |> Enum.flat_map(&residual_components/1)
+    |> Enum.max_by(&abs(&1.normalized_residual), fn -> nil end)
+    |> case do
+      nil ->
+        nil
+
+      %{normalized_residual: normalized} = outlier when abs(normalized) > threshold ->
+        Map.put(outlier, :threshold_sigma, threshold)
+
+      _within_threshold ->
+        nil
+    end
+  end
+
+  defp residual_components(residual) do
+    [
+      %{
+        epoch: residual.epoch,
+        satellite_id: residual.satellite_id,
+        reference_satellite_id: residual.reference_satellite_id,
+        ambiguity_id: residual.ambiguity_id,
+        kind: :code,
+        residual_m: residual.code_m,
+        sigma_m: residual.code_sigma_m,
+        normalized_residual: residual.code_normalized
+      },
+      %{
+        epoch: residual.epoch,
+        satellite_id: residual.satellite_id,
+        reference_satellite_id: residual.reference_satellite_id,
+        ambiguity_id: residual.ambiguity_id,
+        kind: :phase,
+        residual_m: residual.phase_m,
+        sigma_m: residual.phase_sigma_m,
+        normalized_residual: residual.phase_normalized
+      }
+    ]
+  end
+
+  defp residual_validation_meta(%{enabled?: false}, _exclusions), do: nil
+
+  defp residual_validation_meta(opts, exclusions) do
+    exclusions = Enum.reverse(exclusions)
+
+    %{
+      threshold_sigma: opts.threshold_sigma,
+      max_exclusions: opts.max_exclusions,
+      excluded_sats: exclusions |> Enum.map(& &1.satellite_id) |> Enum.uniq() |> Enum.sort(),
+      exclusions: exclusions
+    }
+  end
+
+  defp attach_residual_validation_metadata(sol, nil), do: sol
+
+  defp attach_residual_validation_metadata(%FixedBaselineSolution{} = sol, meta) do
+    %{sol | metadata: Map.put(sol.metadata, :residual_validation, meta)}
+  end
+
+  defp drop_baseline_satellite_from_epochs(epochs, sat) do
+    Enum.map(epochs, &drop_baseline_satellite_from_epoch(&1, sat))
+  end
+
+  defp drop_baseline_satellite_from_epoch(epoch, sat) when is_map(epoch) do
+    epoch
+    |> Map.update!(:base_observations, &drop_observations_satellite(&1, sat))
+    |> Map.update!(:rover_observations, &drop_observations_satellite(&1, sat))
+    |> Map.update!(:satellite_positions_m, &Map.delete(&1, sat))
+  end
+
+  defp drop_observations_satellite(observations, sat) do
+    Enum.reject(observations, &(observation_satellite_id(&1) == sat))
+  end
+
+  defp observation_satellite_id({sat, _code, _phase}), do: sat
+  defp observation_satellite_id(%{satellite_id: sat}), do: sat
+  defp observation_satellite_id(_obs), do: nil
 
   defp normalize_epochs(epochs) do
     epochs
@@ -2967,14 +3146,18 @@ defmodule Orbis.GNSS.RTK do
       phase = Enum.find(grouped, &(&1.kind == :phase))
 
       case {code, phase} do
-        {%{y: code_y}, %{y: phase_y}} ->
+        {%{y: code_y, weight: code_weight}, %{y: phase_y, weight: phase_weight}} ->
           residual = %{
             epoch: epoch,
             satellite_id: sat,
             reference_satellite_id: reference_sat,
             ambiguity_id: ambiguity_id,
             code_m: code_y,
-            phase_m: phase_y
+            phase_m: phase_y,
+            code_sigma_m: 1.0 / code_weight,
+            phase_sigma_m: 1.0 / phase_weight,
+            code_normalized: code_y * code_weight,
+            phase_normalized: phase_y * phase_weight
           }
 
           {:cont, {:ok, [residual | acc]}}
