@@ -1,9 +1,9 @@
 defmodule Orbis.GNSS.RINEX.Observations do
   @moduledoc """
   RINEX 3 observation products: parse a station's observation file, expose its
-  header (including the surveyed `APPROX POSITION XYZ` and optional antenna
-  `DELTA H/E/N` offset), and extract the single-frequency pseudoranges that
-  `Orbis.GNSS.Positioning.solve/4` consumes.
+  header (including the surveyed `APPROX POSITION XYZ`, optional antenna
+  `DELTA H/E/N` offset, and carrier phase-shift records), and extract the
+  single-frequency pseudoranges that `Orbis.GNSS.Positioning.solve/4` consumes.
 
   This is the Elixir surface over the `astrodynamics-gnss` RINEX observation
   parser and its Hatanaka (CRINEX) decoder. A file is parsed **once** into a
@@ -153,6 +153,37 @@ defmodule Orbis.GNSS.RINEX.Observations do
   rescue
     e in ErlangError ->
       raise ArgumentError, "could not read antenna delta H/E/N: #{inspect(e.original)}"
+  end
+
+  @doc """
+  Carrier phase-shift header records from `SYS / PHASE SHIFT`, in file order.
+
+  Each row is a map with `:system`, `:code`, `:correction_cycles`, and
+  `:satellites`. An empty satellite list means the correction applies to every
+  satellite for that system/code.
+  """
+  @spec phase_shifts(t()) :: [
+          %{
+            system: String.t(),
+            code: String.t(),
+            correction_cycles: float(),
+            satellites: [String.t()]
+          }
+        ]
+  def phase_shifts(%__MODULE__{handle: handle}) do
+    handle
+    |> NIF.rinex_obs_phase_shifts()
+    |> Enum.map(fn {system, code, correction_cycles, satellites} ->
+      %{
+        system: system,
+        code: code,
+        correction_cycles: correction_cycles,
+        satellites: satellites
+      }
+    end)
+  rescue
+    e in ErlangError ->
+      raise ArgumentError, "could not read phase shifts: #{inspect(e.original)}"
   end
 
   @doc """

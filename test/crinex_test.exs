@@ -95,6 +95,22 @@ defmodule Orbis.CrinexTest do
       assert n == 0.0
     end
 
+    test "phase_shifts/1 returns carrier phase-shift header records", %{obs: obs} do
+      shifts = Observations.phase_shifts(obs)
+      assert length(shifts) >= 20
+
+      assert %{
+               system: "G",
+               code: "L1C",
+               correction_cycles: 0.0,
+               satellites: []
+             } in shifts
+
+      assert Enum.any?(shifts, fn row ->
+               row.system == "E" and row.code == "L5Q" and row.correction_cycles == 0.0
+             end)
+    end
+
     test "observation_codes/1 returns per-system code lists in order", %{obs: obs} do
       codes = Observations.observation_codes(obs)
       assert hd(codes["G"]) == "C1C"

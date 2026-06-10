@@ -87,6 +87,28 @@ fn rinex_obs_antenna_delta_hen(env: Env<'_>, handle: ResourceArc<RinexObsResourc
     }
 }
 
+/// Carrier phase-shift header records as
+/// `[{"G", "L1C", correction_cycles, ["G01", ...]}, ...]`.
+#[rustler::nif]
+fn rinex_obs_phase_shifts(
+    handle: ResourceArc<RinexObsResource>,
+) -> Vec<(String, String, f64, Vec<String>)> {
+    handle
+        .obs
+        .header
+        .phase_shifts
+        .iter()
+        .map(|shift| {
+            (
+                shift.system.letter().to_string(),
+                shift.code.clone(),
+                shift.correction_cycles,
+                shift.satellites.iter().map(ToString::to_string).collect(),
+            )
+        })
+        .collect()
+}
+
 /// The per-constellation observation-code table as `[{"G", ["C1C", ...]}, ...]`
 /// in declared order (system letter, then the code list).
 #[rustler::nif]

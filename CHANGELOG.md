@@ -32,6 +32,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `ANTENNA: DELTA H/E/N` receiver antenna offset so real RTK gates and
   consumers can derive antenna-reference-point baselines from the observation
   product itself.
+- `Orbis.GNSS.RINEX.Observations.phase_shifts/1` exposes parsed
+  `SYS / PHASE SHIFT` carrier correction metadata for correction-model and
+  RTK parity work.
 
 ### Fixed
 
