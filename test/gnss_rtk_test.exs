@@ -794,6 +794,64 @@ defmodule Orbis.GNSS.RTKTest do
     end
   end
 
+  describe "solve_filter_baseline_epochs/3" do
+    test "sequentially fixes and holds static RTK ambiguities" do
+      ambiguities_m =
+        Map.new(@fixed_cycles, fn {sat, cycles} -> {sat, cycles * @l1_wavelength_m} end)
+
+      epochs =
+        @sat_positions
+        |> Enum.with_index()
+        |> Enum.map(fn {positions, idx} ->
+          synthetic_baseline_epoch(@base, @truth_baseline, positions,
+            epoch: idx,
+            base_clock_m: 15.0 + idx,
+            rover_clock_m: -8.0 + idx,
+            ambiguities_m: ambiguities_m
+          )
+        end)
+
+      assert {:ok, sol} =
+               RTK.solve_filter_baseline_epochs(@base, epochs,
+                 reference_satellite_id: "G01",
+                 ambiguity_wavelength_m: @l1_wavelength_m,
+                 initial_baseline_m: {-40.0, 35.0, 12.0}
+               )
+
+      assert sol.reference_satellite_id == "G01"
+      assert sol.metadata.integer_method == :sequential_lambda
+      assert sol.metadata.first_fixed_index != nil
+      assert sol.metadata.fixed_epoch_count > 0
+      assert position_error(sol.baseline_m, @truth_baseline) < 2.0e-4
+
+      for {sat, expected_cycles} <- Map.delete(@fixed_cycles, "G01") do
+        assert Map.fetch!(sol.fixed_ambiguities_cycles, sat) == expected_cycles
+      end
+    end
+
+    test "bad filter options are tagged" do
+      epoch = synthetic_baseline_epoch(@base, @truth_baseline, hd(@sat_positions))
+
+      assert RTK.solve_filter_baseline_epochs(@base, [epoch]) ==
+               {:error, :ambiguity_wavelength_required}
+
+      assert RTK.solve_filter_baseline_epochs(@base, [epoch],
+               ambiguity_wavelength_m: @l1_wavelength_m,
+               baseline_prior_sigma_m: 0.0
+             ) == {:error, {:invalid_option, :baseline_prior_sigma_m}}
+
+      assert RTK.solve_filter_baseline_epochs(@base, [epoch],
+               ambiguity_wavelength_m: @l1_wavelength_m,
+               ambiguity_prior_sigma_m: -1.0
+             ) == {:error, {:invalid_option, :ambiguity_prior_sigma_m}}
+
+      assert RTK.solve_filter_baseline_epochs(@base, [epoch],
+               ambiguity_wavelength_m: @l1_wavelength_m,
+               hold_sigma_m: :bad
+             ) == {:error, {:invalid_option, :hold_sigma_m}}
+    end
+  end
+
   describe "solve_widelane_fixed_baseline_epochs/3" do
     test "fixes wide-lane then narrow-lane DD ambiguities" do
       epochs =

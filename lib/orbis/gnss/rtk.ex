@@ -48,11 +48,15 @@ defmodule Orbis.GNSS.RTK do
       correlated_normal_equations: 2,
       invert_matrix: 1,
       matmul: 2,
+      matvec: 2,
+      matrix_add: 2,
       matrix_sub: 2,
       solve_linear: 2,
       solve_matrix: 2,
       submatrix: 5,
-      transpose: 1
+      transpose: 1,
+      zero_matrix: 1,
+      zero_vector: 1
     ]
 
   alias Orbis.GNSS.{CarrierPhase, IonosphereFree}
@@ -71,6 +75,9 @@ defmodule Orbis.GNSS.RTK do
   @default_max_residual_exclusions 1
   @default_cycle_slip_policy :error
   @default_hatch_window_cap 100
+  @default_filter_baseline_prior_sigma_m 100.0
+  @default_filter_ambiguity_prior_sigma_m 1_000.0
+  @default_filter_hold_sigma_m 1.0e-4
   @min_elevation_sin 0.05
   @double_difference_options [:reference_satellite_id]
   @float_baseline_options [
@@ -99,6 +106,12 @@ defmodule Orbis.GNSS.RTK do
   @residual_validation_options [:residual_threshold_sigma, :max_residual_exclusions]
   @fixed_baseline_options @float_baseline_options ++
                             @integer_baseline_options ++ @residual_validation_options
+  @filter_baseline_options @fixed_baseline_options ++
+                             [
+                               :baseline_prior_sigma_m,
+                               :ambiguity_prior_sigma_m,
+                               :hold_sigma_m
+                             ]
   @dual_wide_lane_options [
     :wide_lane_min_epochs,
     :wide_lane_tolerance_cycles,
@@ -274,6 +287,50 @@ defmodule Orbis.GNSS.RTK do
               optional(:elevation_masked_sats) => [String.t()],
               optional(:split_cycle_slip_arcs) => [map()]
             }
+          }
+  end
+
+  defmodule FilterBaselineSolution do
+    @moduledoc """
+    Sequential RTK baseline-filter result.
+    """
+
+    @enforce_keys [
+      :baseline_m,
+      :rover_position_m,
+      :reference_satellite_id,
+      :fixed_ambiguities_cycles,
+      :epochs,
+      :metadata
+    ]
+    defstruct [
+      :baseline_m,
+      :rover_position_m,
+      :reference_satellite_id,
+      :fixed_ambiguities_cycles,
+      :epochs,
+      :metadata
+    ]
+
+    @type ecef :: %{x_m: float(), y_m: float(), z_m: float()}
+
+    @type epoch_result :: %{
+            epoch: term(),
+            index: non_neg_integer(),
+            baseline_m: ecef(),
+            integer_status: :fixed | :not_fixed,
+            integer_ratio: float() | :infinity | nil,
+            newly_fixed_ambiguities: [String.t()],
+            fixed_ambiguities: [String.t()]
+          }
+
+    @type t :: %__MODULE__{
+            baseline_m: ecef(),
+            rover_position_m: ecef(),
+            reference_satellite_id: String.t(),
+            fixed_ambiguities_cycles: %{String.t() => integer()},
+            epochs: [epoch_result()],
+            metadata: map()
           }
   end
 
@@ -543,6 +600,73 @@ defmodule Orbis.GNSS.RTK do
   end
 
   def solve_fixed_baseline_epochs(_base_position, _epochs, _opts), do: {:error, :invalid_epochs}
+
+  @doc """
+  Run a sequential static RTK baseline filter with per-epoch ambiguity fixing.
+
+  This is the RTKLIB-style real-time path: it carries one static baseline and
+  double-difference ambiguity state across epochs, performs a correlated
+  double-difference measurement update at each epoch, attempts integer
+  ambiguity fixing from the current posterior covariance, and holds accepted
+  integers as tight pseudo-measurements on later epochs.
+
+  Options are the fixed-baseline options plus:
+
+    * `:baseline_prior_sigma_m` - initial baseline prior sigma in metres
+      (default `#{@default_filter_baseline_prior_sigma_m}`).
+    * `:ambiguity_prior_sigma_m` - initial ambiguity prior sigma in metres
+      (default `#{@default_filter_ambiguity_prior_sigma_m}`).
+    * `:hold_sigma_m` - pseudo-measurement sigma for fixed ambiguity holds
+      (default `#{@default_filter_hold_sigma_m}`).
+
+  Returns `{:ok, %FilterBaselineSolution{}}` or a tagged error.
+  """
+  @spec solve_filter_baseline_epochs(ecef_input(), [baseline_epoch()], keyword()) ::
+          {:ok, FilterBaselineSolution.t()} | {:error, term()}
+  def solve_filter_baseline_epochs(base_position, epochs, opts \\ [])
+
+  def solve_filter_baseline_epochs(base_position, epochs, opts) when is_list(epochs) do
+    float_opts = Keyword.take(opts, @float_baseline_options)
+
+    with :ok <- validate_options(opts, @filter_baseline_options),
+         {:ok, base} <- Types.normalize_ecef(base_position, :invalid_base_position),
+         {:ok, filter_opts} <- sequential_filter_options(opts),
+         {:ok, normalized_epochs, prep_meta} <- prepare_baseline_epochs(base, epochs, float_opts),
+         {:ok, common_sats, _not_common_sats} <- common_epoch_sats(normalized_epochs),
+         {:ok, all_sats} <- all_epoch_sats(normalized_epochs),
+         :ok <- ensure_baseline_satellites(all_sats),
+         {:ok, reference_sat} <-
+           baseline_reference_satellite(common_sats, opts, base, normalized_epochs),
+         {:ok, weights} <- baseline_weights(float_opts),
+         {:ok, solve_opts} <- baseline_solve_options(float_opts),
+         {:ok, initial_baseline} <- initial_baseline(float_opts),
+         {:ok, ambiguity_ids, ambiguity_satellites} <-
+           baseline_ambiguity_index(normalized_epochs, all_sats, reference_sat),
+         {:ok, wavelengths} <- ambiguity_wavelengths(ambiguity_ids, ambiguity_satellites, opts),
+         {:ok, offsets} <- ambiguity_offsets(ambiguity_ids, ambiguity_satellites, opts),
+         {:ok, integer_opts} <- integer_options(opts) do
+      physical_sats = Enum.reject(all_sats, &(&1 == reference_sat))
+
+      run_sequential_baseline_filter(
+        base,
+        normalized_epochs,
+        reference_sat,
+        physical_sats,
+        ambiguity_ids,
+        ambiguity_satellites,
+        wavelengths,
+        offsets,
+        weights,
+        solve_opts,
+        integer_opts,
+        filter_opts,
+        initial_baseline,
+        prep_meta
+      )
+    end
+  end
+
+  def solve_filter_baseline_epochs(_base_position, _epochs, _opts), do: {:error, :invalid_epochs}
 
   defp solve_fixed_baseline_epochs_attempt(
          base_position,
@@ -2073,6 +2197,38 @@ defmodule Orbis.GNSS.RTK do
     end
   end
 
+  defp sequential_filter_options(opts) do
+    with {:ok, baseline_prior_sigma_m} <-
+           positive_option(
+             opts,
+             :baseline_prior_sigma_m,
+             @default_filter_baseline_prior_sigma_m
+           ),
+         {:ok, ambiguity_prior_sigma_m} <-
+           positive_option(
+             opts,
+             :ambiguity_prior_sigma_m,
+             @default_filter_ambiguity_prior_sigma_m
+           ),
+         {:ok, hold_sigma_m} <-
+           positive_option(opts, :hold_sigma_m, @default_filter_hold_sigma_m) do
+      {:ok,
+       %{
+         baseline_prior_sigma_m: baseline_prior_sigma_m,
+         ambiguity_prior_sigma_m: ambiguity_prior_sigma_m,
+         hold_sigma_m: hold_sigma_m
+       }}
+    end
+  end
+
+  defp positive_option(opts, key, default) do
+    value = Keyword.get(opts, key, default)
+
+    if is_number(value) and value > 0.0,
+      do: {:ok, value / 1.0},
+      else: {:error, {:invalid_option, key}}
+  end
+
   defp baseline_weights(opts) do
     with {:ok, code_sigma_m} <- measurement_sigma(opts, :code_sigma_m, @default_code_sigma_m),
          {:ok, phase_sigma_m} <- measurement_sigma(opts, :phase_sigma_m, @default_phase_sigma_m),
@@ -2919,6 +3075,336 @@ defmodule Orbis.GNSS.RTK do
     end)
   end
 
+  defp run_sequential_baseline_filter(
+         base,
+         epochs,
+         reference_sat,
+         physical_sats,
+         ambiguity_ids,
+         ambiguity_satellites,
+         wavelengths,
+         offsets,
+         weights,
+         solve_opts,
+         integer_opts,
+         filter_opts,
+         initial_baseline,
+         prep_meta
+       ) do
+    n = baseline_unknown_count(ambiguity_ids)
+
+    initial = %{
+      state: %{
+        baseline: initial_baseline,
+        ambiguities: Map.new(ambiguity_ids, &{&1, 0.0})
+      },
+      information:
+        sequential_initial_information(
+          n,
+          filter_opts.baseline_prior_sigma_m,
+          filter_opts.ambiguity_prior_sigma_m
+        ),
+      fixed_cycles: %{},
+      fixed_m: %{},
+      epochs: []
+    }
+
+    epochs
+    |> Enum.reduce_while({:ok, initial}, fn epoch, {:ok, acc} ->
+      case sequential_filter_epoch(
+             base,
+             epoch,
+             reference_sat,
+             physical_sats,
+             ambiguity_ids,
+             wavelengths,
+             offsets,
+             weights,
+             solve_opts,
+             integer_opts,
+             filter_opts,
+             acc
+           ) do
+        {:ok, next} -> {:cont, {:ok, next}}
+        {:error, _reason} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, acc} ->
+        baseline = acc.state.baseline
+        rover = add3(base, baseline)
+        epoch_results = Enum.reverse(acc.epochs)
+        first_fixed = Enum.find(epoch_results, &(&1.integer_status == :fixed))
+        fixed_epochs = Enum.count(epoch_results, &(&1.integer_status == :fixed))
+
+        {:ok,
+         %FilterBaselineSolution{
+           baseline_m: ecef_map(baseline),
+           rover_position_m: ecef_map(rover),
+           reference_satellite_id: reference_sat,
+           fixed_ambiguities_cycles: acc.fixed_cycles,
+           epochs: epoch_results,
+           metadata: %{
+             integer_method: :sequential_lambda,
+             first_fixed_epoch: first_fixed && first_fixed.epoch,
+             first_fixed_index: first_fixed && first_fixed.index,
+             fixed_epoch_count: fixed_epochs,
+             n_epochs: length(epochs),
+             physical_sats: physical_sats,
+             ambiguity_satellites: ambiguity_satellites,
+             measurement_covariance: %{
+               model: :double_difference,
+               code_sigma_m: weights.code_sigma_m,
+               phase_sigma_m: weights.phase_sigma_m,
+               elevation_weighting: weights.elevation_weighting?,
+               min_elevation_sin: @min_elevation_sin
+             },
+             dropped_sats:
+               Enum.uniq(prep_meta.dropped_sats ++ Map.get(prep_meta, :elevation_masked_sats, []))
+               |> Enum.sort(),
+             dropped_cycle_slip_sats: prep_meta.dropped_sats,
+             elevation_mask_deg: Map.get(prep_meta, :elevation_mask_deg),
+             elevation_masked_sats: Map.get(prep_meta, :elevation_masked_sats, []),
+             split_cycle_slip_arcs: prep_meta.split_arcs,
+             hold_sigma_m: filter_opts.hold_sigma_m,
+             baseline_prior_sigma_m: filter_opts.baseline_prior_sigma_m,
+             ambiguity_prior_sigma_m: filter_opts.ambiguity_prior_sigma_m
+           }
+         }}
+
+      {:error, _reason} = err ->
+        err
+    end
+  end
+
+  defp sequential_filter_epoch(
+         base,
+         epoch,
+         reference_sat,
+         physical_sats,
+         ambiguity_ids,
+         wavelengths,
+         offsets,
+         weights,
+         solve_opts,
+         integer_opts,
+         filter_opts,
+         acc
+       ) do
+    with {:ok, state, information, rows} <-
+           iterate_sequential_filter_epoch(
+             base,
+             epoch,
+             reference_sat,
+             physical_sats,
+             ambiguity_ids,
+             acc.state,
+             acc.state,
+             acc.information,
+             acc.fixed_m,
+             weights,
+             solve_opts,
+             filter_opts,
+             1
+           ),
+         {:ok, covariance} <- invert_matrix(information),
+         {:ok, fixed_cycles, fixed_m, search_meta} <-
+           sequential_search_and_hold(
+             state,
+             covariance,
+             rows,
+             ambiguity_ids,
+             acc.fixed_cycles,
+             wavelengths,
+             offsets,
+             integer_opts
+           ) do
+      newly_fixed =
+        fixed_cycles |> Map.keys() |> Kernel.--(Map.keys(acc.fixed_cycles)) |> Enum.sort()
+
+      all_fixed = fixed_cycles |> Map.keys() |> Enum.sort()
+      fixed? = all_fixed != []
+
+      epoch_result = %{
+        epoch: epoch.epoch,
+        index: epoch.idx,
+        baseline_m: ecef_map(state.baseline),
+        integer_status: if(fixed?, do: :fixed, else: :not_fixed),
+        integer_ratio: Map.get(search_meta, :integer_ratio),
+        newly_fixed_ambiguities: newly_fixed,
+        fixed_ambiguities: all_fixed
+      }
+
+      {:ok,
+       %{
+         acc
+         | state: state,
+           information: information,
+           fixed_cycles: fixed_cycles,
+           fixed_m: fixed_m,
+           epochs: [epoch_result | acc.epochs]
+       }}
+    end
+  end
+
+  defp iterate_sequential_filter_epoch(
+         base,
+         epoch,
+         reference_sat,
+         physical_sats,
+         ambiguity_ids,
+         prior_center,
+         prior_state,
+         prior_information,
+         fixed_m,
+         weights,
+         solve_opts,
+         filter_opts,
+         iter
+       ) do
+    with {:ok, rows} <-
+           build_epoch_baseline_rows(
+             base,
+             epoch,
+             reference_sat,
+             physical_sats,
+             ambiguity_ids,
+             prior_state,
+             weights
+           ),
+         {measurement_information, measurement_rhs} <-
+           baseline_normal_equations(rows, baseline_unknown_count(ambiguity_ids)),
+         {hold_information, hold_rhs} <-
+           sequential_hold_normal_equations(
+             ambiguity_ids,
+             prior_state,
+             fixed_m,
+             filter_opts.hold_sigma_m
+           ),
+         prior_rhs =
+           sequential_prior_rhs(ambiguity_ids, prior_information, prior_center, prior_state),
+         information =
+           prior_information
+           |> matrix_add(measurement_information)
+           |> matrix_add(hold_information),
+         rhs = measurement_rhs |> vector_add(hold_rhs) |> vector_add(prior_rhs),
+         {:ok, dx} <- solve_linear(information, rhs),
+         next_state = apply_baseline_delta(prior_state, ambiguity_ids, dx),
+         {baseline_step, ambiguity_step} <- baseline_step_norms(dx) do
+      cond do
+        baseline_step <= solve_opts.position_tolerance_m and
+            ambiguity_step <= solve_opts.ambiguity_tolerance_m ->
+          {:ok, next_state, information, rows}
+
+        iter >= solve_opts.max_iterations ->
+          {:ok, next_state, information, rows}
+
+        true ->
+          iterate_sequential_filter_epoch(
+            base,
+            epoch,
+            reference_sat,
+            physical_sats,
+            ambiguity_ids,
+            prior_center,
+            next_state,
+            prior_information,
+            fixed_m,
+            weights,
+            solve_opts,
+            filter_opts,
+            iter + 1
+          )
+      end
+    end
+  end
+
+  defp sequential_initial_information(n, baseline_sigma_m, ambiguity_sigma_m) do
+    for i <- 0..(n - 1) do
+      for j <- 0..(n - 1) do
+        cond do
+          i != j -> 0.0
+          i < 3 -> 1.0 / (baseline_sigma_m * baseline_sigma_m)
+          true -> 1.0 / (ambiguity_sigma_m * ambiguity_sigma_m)
+        end
+      end
+    end
+  end
+
+  defp sequential_prior_rhs(ambiguity_ids, prior_information, prior_center, current_state) do
+    prior_center
+    |> state_vector(ambiguity_ids)
+    |> vector_sub(state_vector(current_state, ambiguity_ids))
+    |> then(&matvec(prior_information, &1))
+  end
+
+  defp sequential_hold_normal_equations(ambiguity_ids, state, fixed_m, hold_sigma_m) do
+    n = baseline_unknown_count(ambiguity_ids)
+    hold_weight = 1.0 / (hold_sigma_m * hold_sigma_m)
+    zero = zero_matrix(n)
+    rhs = zero_vector(n)
+
+    fixed_m
+    |> Enum.reduce({zero, rhs}, fn {ambiguity_id, fixed}, {normal, rhs} ->
+      idx = 3 + Enum.find_index(ambiguity_ids, &(&1 == ambiguity_id))
+      current = Map.fetch!(state.ambiguities, ambiguity_id)
+
+      {
+        add_diagonal(normal, idx, hold_weight),
+        add_vector_value(rhs, idx, (fixed - current) * hold_weight)
+      }
+    end)
+  end
+
+  defp sequential_search_and_hold(
+         state,
+         covariance,
+         rows,
+         ambiguity_ids,
+         fixed_cycles,
+         wavelengths,
+         offsets,
+         integer_opts
+       ) do
+    observed_ids =
+      rows
+      |> Enum.map(& &1.ambiguity_id)
+      |> Enum.uniq()
+      |> Enum.sort()
+
+    fixed_set = fixed_cycles |> Map.keys() |> MapSet.new()
+    search_ids = Enum.reject(observed_ids, &MapSet.member?(fixed_set, &1))
+
+    if search_ids == [] do
+      {:ok, fixed_cycles, fixed_ambiguities_m(fixed_cycles, wavelengths, offsets), %{}}
+    else
+      ambiguity_covariance =
+        submatrix(covariance, 3, length(ambiguity_ids), 3, length(ambiguity_ids))
+
+      covariance_cycles = covariance_m_to_cycles(ambiguity_covariance, ambiguity_ids, wavelengths)
+      subset_covariance = covariance_submatrix(ambiguity_ids, covariance_cycles, search_ids)
+
+      float_cycles =
+        Map.new(search_ids, fn id ->
+          ambiguity_m = Map.fetch!(state.ambiguities, id)
+          offset_m = Map.fetch!(offsets, id)
+          {id, (ambiguity_m - offset_m) / Map.fetch!(wavelengths, id)}
+        end)
+
+      case IntegerLeastSquares.search(float_cycles, subset_covariance, integer_opts) do
+        {:ok, new_fixed, %{integer_status: :fixed} = meta} ->
+          fixed_cycles = Map.merge(fixed_cycles, new_fixed)
+          {:ok, fixed_cycles, fixed_ambiguities_m(fixed_cycles, wavelengths, offsets), meta}
+
+        {:ok, _new_fixed, meta} ->
+          {:ok, fixed_cycles, fixed_ambiguities_m(fixed_cycles, wavelengths, offsets), meta}
+
+        {:error, _reason} = err ->
+          err
+      end
+    end
+  end
+
   defp iterate_fixed_baseline(
          base,
          epochs,
@@ -3542,6 +4028,41 @@ defmodule Orbis.GNSS.RTK do
       n when n > 0.0 -> {:ok, scale3(v, 1.0 / n)}
       _zero -> :zero
     end
+  end
+
+  defp vector_add(a, b) do
+    a
+    |> Enum.zip(b)
+    |> Enum.map(fn {x, y} -> x + y end)
+  end
+
+  defp vector_sub(a, b) do
+    a
+    |> Enum.zip(b)
+    |> Enum.map(fn {x, y} -> x - y end)
+  end
+
+  defp state_vector(state, ambiguity_ids) do
+    {x, y, z} = state.baseline
+    [x, y, z | Enum.map(ambiguity_ids, &Map.fetch!(state.ambiguities, &1))]
+  end
+
+  defp add_diagonal(matrix, idx, value) do
+    matrix
+    |> Enum.with_index()
+    |> Enum.map(fn {row, row_idx} ->
+      if row_idx == idx do
+        add_vector_value(row, idx, value)
+      else
+        row
+      end
+    end)
+  end
+
+  defp add_vector_value(vector, idx, value) do
+    vector
+    |> Enum.with_index()
+    |> Enum.map(fn {x, col_idx} -> if col_idx == idx, do: x + value, else: x end)
   end
 
   defp dot3({ax, ay, az}, {bx, by, bz}), do: ax * bx + ay * by + az * bz

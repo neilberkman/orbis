@@ -276,6 +276,23 @@ defmodule Orbis.GNSS.RTKRealArcTest do
     error_m = position_error(sol.baseline_m, antenna_baseline)
     assert error_m > 0.3
     assert error_m < 0.5
+
+    assert {:ok, filter} =
+             RTK.solve_filter_baseline_epochs(base_arp, epochs,
+               initial_baseline_m: {0.0, 0.0, 0.0},
+               max_iterations: 10,
+               on_cycle_slip: :split_arc,
+               elevation_weighting: true,
+               elevation_mask_deg: 10.0,
+               code_sigma_m: 2.0,
+               phase_sigma_m: 0.01,
+               ambiguity_wavelength_m: @gps_l1_wavelength_m,
+               integer_candidate_limit: 200_000
+             )
+
+    assert filter.metadata.first_fixed_index == nil
+    assert Enum.all?(filter.epochs, &(&1.integer_status == :not_fixed))
+    assert List.last(filter.epochs).integer_ratio < 3.0
   end
 
   defp real_gps_l1_rtk_epochs(sp3, base_obs, rover_obs, count) do

@@ -17,6 +17,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   removes satellites below the base-station elevation mask before reference
   selection and ambiguity construction. Masked satellites are reported in
   solution metadata.
+- `Orbis.GNSS.RTK.solve_filter_baseline_epochs/3` adds a sequential static RTK
+  information filter: it carries baseline/ambiguity covariance epoch to epoch,
+  attempts LAMBDA ambiguity fixing from the posterior covariance, and holds
+  accepted integers with a configurable pseudo-measurement.
 
 ### Fixed
 
