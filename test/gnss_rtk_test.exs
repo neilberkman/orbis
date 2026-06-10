@@ -849,6 +849,11 @@ defmodule Orbis.GNSS.RTKTest do
                ambiguity_wavelength_m: @l1_wavelength_m,
                hold_sigma_m: :bad
              ) == {:error, {:invalid_option, :hold_sigma_m}}
+
+      assert RTK.solve_filter_baseline_epochs(@base, [epoch],
+               ambiguity_wavelength_m: @l1_wavelength_m,
+               partial_ambiguity_resolution: true
+             ) == {:error, {:unsupported_option, :partial_ambiguity_resolution}}
     end
   end
 

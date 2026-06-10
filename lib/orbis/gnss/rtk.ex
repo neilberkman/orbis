@@ -610,7 +610,10 @@ defmodule Orbis.GNSS.RTK do
   ambiguity fixing from the current posterior covariance, and holds accepted
   integers as tight pseudo-measurements on later epochs.
 
-  Options are the fixed-baseline options plus:
+  Options are the fixed-baseline options plus the filter parameters below.
+  `:partial_ambiguity_resolution` is deliberately rejected for this entry
+  point: the sequential filter only holds a full-set fix until partial
+  sequential AR has post-fix validation against real data.
 
     * `:baseline_prior_sigma_m` - initial baseline prior sigma in metres
       (default `#{@default_filter_baseline_prior_sigma_m}`).
@@ -644,7 +647,8 @@ defmodule Orbis.GNSS.RTK do
            baseline_ambiguity_index(normalized_epochs, all_sats, reference_sat),
          {:ok, wavelengths} <- ambiguity_wavelengths(ambiguity_ids, ambiguity_satellites, opts),
          {:ok, offsets} <- ambiguity_offsets(ambiguity_ids, ambiguity_satellites, opts),
-         {:ok, integer_opts} <- integer_options(opts) do
+         {:ok, integer_opts} <- integer_options(opts),
+         :ok <- validate_filter_integer_options(integer_opts) do
       physical_sats = Enum.reject(all_sats, &(&1 == reference_sat))
 
       run_sequential_baseline_filter(
@@ -667,6 +671,11 @@ defmodule Orbis.GNSS.RTK do
   end
 
   def solve_filter_baseline_epochs(_base_position, _epochs, _opts), do: {:error, :invalid_epochs}
+
+  defp validate_filter_integer_options(%{partial_ambiguity_resolution?: true}),
+    do: {:error, {:unsupported_option, :partial_ambiguity_resolution}}
+
+  defp validate_filter_integer_options(_integer_opts), do: :ok
 
   defp solve_fixed_baseline_epochs_attempt(
          base_position,
@@ -3393,10 +3402,15 @@ defmodule Orbis.GNSS.RTK do
 
       case IntegerLeastSquares.search(float_cycles, subset_covariance, integer_opts) do
         {:ok, new_fixed, %{integer_status: :fixed} = meta} ->
-          fixed_cycles = Map.merge(fixed_cycles, new_fixed)
+          meta = Map.put(meta, :ambiguity_offsets_m, Map.take(offsets, search_ids))
+
+          fixed_cycles =
+            Map.merge(fixed_cycles, new_fixed)
+
           {:ok, fixed_cycles, fixed_ambiguities_m(fixed_cycles, wavelengths, offsets), meta}
 
         {:ok, _new_fixed, meta} ->
+          meta = Map.put(meta, :ambiguity_offsets_m, Map.take(offsets, search_ids))
           {:ok, fixed_cycles, fixed_ambiguities_m(fixed_cycles, wavelengths, offsets), meta}
 
         {:error, _reason} = err ->
