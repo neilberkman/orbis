@@ -75,6 +75,7 @@ defmodule Orbis.GNSS.RTK do
   @default_partial_min_ambiguities 4
   @default_max_residual_exclusions 1
   @default_cycle_slip_policy :error
+  @default_sagnac true
   @default_hatch_window_cap 100
   @default_filter_baseline_prior_sigma_m 100.0
   @default_filter_ambiguity_prior_sigma_m 1_000.0
@@ -89,6 +90,7 @@ defmodule Orbis.GNSS.RTK do
     :stochastic_model,
     :on_cycle_slip,
     :elevation_weighting,
+    :sagnac,
     :elevation_mask_deg,
     :code_smoothing,
     :hatch_window_cap,
@@ -189,6 +191,7 @@ defmodule Orbis.GNSS.RTK do
                 phase_sigma_m: float(),
                 stochastic_model: :simple | :rtklib,
                 elevation_weighting: boolean(),
+                sagnac: boolean(),
                 min_elevation_sin: float()
               },
               code_rms_m: float(),
@@ -268,6 +271,7 @@ defmodule Orbis.GNSS.RTK do
                 phase_sigma_m: float(),
                 stochastic_model: :simple | :rtklib,
                 elevation_weighting: boolean(),
+                sagnac: boolean(),
                 min_elevation_sin: float()
               },
               required(:ambiguity_search) => %{
@@ -374,11 +378,18 @@ defmodule Orbis.GNSS.RTK do
 
   `:epoch` is preserved in residual diagnostics; it is not interpreted by this
   first solver layer because satellite positions are supplied by the caller.
+  `:satellite_positions_m` is used for satellite selection and elevation
+  weighting. When the caller has receiver-specific transmit-time positions, it
+  may also provide `:base_satellite_positions_m` and
+  `:rover_satellite_positions_m`; otherwise both default to
+  `:satellite_positions_m`.
   """
   @type baseline_epoch :: %{
           required(:base_observations) => [observation()],
           required(:rover_observations) => [observation()],
           required(:satellite_positions_m) => satellite_positions(),
+          optional(:base_satellite_positions_m) => satellite_positions(),
+          optional(:rover_satellite_positions_m) => satellite_positions(),
           optional(:epoch) => term()
         }
 
@@ -408,6 +419,8 @@ defmodule Orbis.GNSS.RTK do
           required(:base_observations) => [dual_frequency_observation()],
           required(:rover_observations) => [dual_frequency_observation()],
           required(:satellite_positions_m) => satellite_positions(),
+          optional(:base_satellite_positions_m) => satellite_positions(),
+          optional(:rover_satellite_positions_m) => satellite_positions(),
           optional(:epoch) => term()
         }
 
@@ -437,6 +450,9 @@ defmodule Orbis.GNSS.RTK do
       epoch = %{
         epoch: ~N[2026-01-01 00:00:00],
         satellite_positions_m: %{"G01" => {21.0e6, 14.0e6, 20.0e6}, ...},
+        # Optional when base/rover transmit-time satellite positions differ:
+        base_satellite_positions_m: %{"G01" => {21.0e6, 14.0e6, 20.0e6}, ...},
+        rover_satellite_positions_m: %{"G01" => {21.0e6, 14.0e6, 20.0e6}, ...},
         base_observations: [%{satellite_id: "G01", code_m: p_base, phase_m: l_base}, ...],
         rover_observations: [%{satellite_id: "G01", code_m: p_rover, phase_m: l_rover}, ...]
       }
@@ -488,6 +504,10 @@ defmodule Orbis.GNSS.RTK do
       measurement sigma by `1 / max(sin(elevation), #{@min_elevation_sin})`
       before propagating the double-difference covariance. Default `false`
       preserves the constant-sigma, transcendental-free solve path.
+    * `:sagnac` - when `true` (default), applies the standard first-order
+      Earth-rotation correction to each receiver-satellite range before
+      forming double differences. Set `false` only for synthetic fixtures whose
+      observations were generated from plain Euclidean range.
     * `:elevation_mask_deg` - optional elevation mask in degrees. Satellites
       below the mask at the base station are removed before reference selection
       and ambiguity construction.
@@ -1075,6 +1095,12 @@ defmodule Orbis.GNSS.RTK do
     |> Map.update!(:base_observations, &drop_observations_satellite(&1, sat))
     |> Map.update!(:rover_observations, &drop_observations_satellite(&1, sat))
     |> Map.update!(:satellite_positions_m, &Map.delete(&1, sat))
+    |> drop_optional_satellite_positions(:base_satellite_positions_m, sat)
+    |> drop_optional_satellite_positions(:rover_satellite_positions_m, sat)
+  end
+
+  defp drop_optional_satellite_positions(epoch, key, sat) do
+    if Map.has_key?(epoch, key), do: Map.update!(epoch, key, &Map.delete(&1, sat)), else: epoch
   end
 
   defp drop_observations_satellite(observations, sat) do
@@ -1110,16 +1136,23 @@ defmodule Orbis.GNSS.RTK do
        )
        when is_list(base_observations) and is_list(rover_observations) and
               is_map(satellite_positions) do
+    base_satellite_positions = Map.get(epoch, :base_satellite_positions_m, satellite_positions)
+    rover_satellite_positions = Map.get(epoch, :rover_satellite_positions_m, satellite_positions)
+
     with {:ok, base} <- normalize_observations(base_observations, :invalid_base_observations),
          {:ok, rover} <- normalize_observations(rover_observations, :invalid_rover_observations),
-         {:ok, positions} <- normalize_satellite_positions(satellite_positions) do
+         {:ok, positions} <- normalize_satellite_positions(satellite_positions),
+         {:ok, base_positions} <- normalize_satellite_positions(base_satellite_positions),
+         {:ok, rover_positions} <- normalize_satellite_positions(rover_satellite_positions) do
       {:ok,
        %{
          idx: idx,
          epoch: Map.get(epoch, :epoch, idx),
          base: base,
          rover: rover,
-         positions: positions
+         positions: positions,
+         base_positions: base_positions,
+         rover_positions: rover_positions
        }}
     end
   end
@@ -1151,18 +1184,25 @@ defmodule Orbis.GNSS.RTK do
        )
        when is_list(base_observations) and is_list(rover_observations) and
               is_map(satellite_positions) do
+    base_satellite_positions = Map.get(epoch, :base_satellite_positions_m, satellite_positions)
+    rover_satellite_positions = Map.get(epoch, :rover_satellite_positions_m, satellite_positions)
+
     with {:ok, base} <-
            normalize_dual_observations(base_observations, :invalid_base_observations),
          {:ok, rover} <-
            normalize_dual_observations(rover_observations, :invalid_rover_observations),
-         {:ok, positions} <- normalize_satellite_positions(satellite_positions) do
+         {:ok, positions} <- normalize_satellite_positions(satellite_positions),
+         {:ok, base_positions} <- normalize_satellite_positions(base_satellite_positions),
+         {:ok, rover_positions} <- normalize_satellite_positions(rover_satellite_positions) do
       {:ok,
        %{
          idx: idx,
          epoch: Map.get(epoch, :epoch, idx),
          base: base,
          rover: rover,
-         positions: positions
+         positions: positions,
+         base_positions: base_positions,
+         rover_positions: rover_positions
        }}
     end
   end
@@ -1313,7 +1353,9 @@ defmodule Orbis.GNSS.RTK do
         epoch
         | base: Map.drop(epoch.base, MapSet.to_list(dropped)),
           rover: Map.drop(epoch.rover, MapSet.to_list(dropped)),
-          positions: Map.drop(epoch.positions, MapSet.to_list(dropped))
+          positions: Map.drop(epoch.positions, MapSet.to_list(dropped)),
+          base_positions: Map.drop(epoch.base_positions, MapSet.to_list(dropped)),
+          rover_positions: Map.drop(epoch.rover_positions, MapSet.to_list(dropped))
       }
     end)
   end
@@ -1496,11 +1538,7 @@ defmodule Orbis.GNSS.RTK do
   end
 
   defp dual_epoch_common_sats(epoch) do
-    epoch.base
-    |> Map.keys()
-    |> MapSet.new()
-    |> MapSet.intersection(epoch.rover |> Map.keys() |> MapSet.new())
-    |> MapSet.intersection(epoch.positions |> Map.keys() |> MapSet.new())
+    epoch_sats(epoch)
     |> MapSet.to_list()
     |> Enum.sort()
   end
@@ -1692,7 +1730,9 @@ defmodule Orbis.GNSS.RTK do
                 epoch: epoch.epoch,
                 base_observations: base_obs,
                 rover_observations: rover_obs,
-                satellite_positions_m: Map.take(epoch.positions, keep_sats)
+                satellite_positions_m: Map.take(epoch.positions, keep_sats),
+                base_satellite_positions_m: Map.take(epoch.base_positions, keep_sats),
+                rover_satellite_positions_m: Map.take(epoch.rover_positions, keep_sats)
               }
               | acc
             ]}}
@@ -1897,7 +1937,9 @@ defmodule Orbis.GNSS.RTK do
                  epoch
                  | base: Map.take(epoch.base, kept),
                    rover: Map.take(epoch.rover, kept),
-                   positions: Map.take(epoch.positions, kept)
+                   positions: Map.take(epoch.positions, kept),
+                   base_positions: Map.take(epoch.base_positions, kept),
+                   rover_positions: Map.take(epoch.rover_positions, kept)
                }, masked}
             end)
 
@@ -2005,7 +2047,9 @@ defmodule Orbis.GNSS.RTK do
         epoch
         | base: Map.drop(epoch.base, MapSet.to_list(dropped)),
           rover: Map.drop(epoch.rover, MapSet.to_list(dropped)),
-          positions: Map.drop(epoch.positions, MapSet.to_list(dropped))
+          positions: Map.drop(epoch.positions, MapSet.to_list(dropped)),
+          base_positions: Map.drop(epoch.base_positions, MapSet.to_list(dropped)),
+          rover_positions: Map.drop(epoch.rover_positions, MapSet.to_list(dropped))
       }
     end)
   end
@@ -2090,11 +2134,7 @@ defmodule Orbis.GNSS.RTK do
   defp common_epoch_sats(epochs) do
     per_epoch =
       Enum.map(epochs, fn epoch ->
-        epoch.base
-        |> Map.keys()
-        |> MapSet.new()
-        |> MapSet.intersection(epoch.rover |> Map.keys() |> MapSet.new())
-        |> MapSet.intersection(epoch.positions |> Map.keys() |> MapSet.new())
+        epoch_sats(epoch)
       end)
 
     common =
@@ -2111,6 +2151,8 @@ defmodule Orbis.GNSS.RTK do
         |> MapSet.new()
         |> MapSet.union(epoch.rover |> Map.keys() |> MapSet.new())
         |> MapSet.union(epoch.positions |> Map.keys() |> MapSet.new())
+        |> MapSet.union(epoch.base_positions |> Map.keys() |> MapSet.new())
+        |> MapSet.union(epoch.rover_positions |> Map.keys() |> MapSet.new())
         |> MapSet.union(acc)
       end)
 
@@ -2127,11 +2169,7 @@ defmodule Orbis.GNSS.RTK do
     all =
       epochs
       |> Enum.reduce(MapSet.new(), fn epoch, acc ->
-        epoch.base
-        |> Map.keys()
-        |> MapSet.new()
-        |> MapSet.intersection(epoch.rover |> Map.keys() |> MapSet.new())
-        |> MapSet.intersection(epoch.positions |> Map.keys() |> MapSet.new())
+        epoch_sats(epoch)
         |> MapSet.union(acc)
       end)
       |> MapSet.to_list()
@@ -2142,11 +2180,8 @@ defmodule Orbis.GNSS.RTK do
 
   defp epoch_available_nonrefs(epoch, reference_sat, physical_sats \\ nil) do
     available =
-      epoch.base
-      |> Map.keys()
-      |> MapSet.new()
-      |> MapSet.intersection(epoch.rover |> Map.keys() |> MapSet.new())
-      |> MapSet.intersection(epoch.positions |> Map.keys() |> MapSet.new())
+      epoch
+      |> epoch_sats()
       |> MapSet.delete(reference_sat)
 
     case physical_sats do
@@ -2158,14 +2193,21 @@ defmodule Orbis.GNSS.RTK do
   end
 
   defp epoch_available_sats(epoch, physical_sats) do
+    epoch
+    |> epoch_sats()
+    |> MapSet.intersection(MapSet.new(physical_sats))
+    |> MapSet.to_list()
+    |> Enum.sort()
+  end
+
+  defp epoch_sats(epoch) do
     epoch.base
     |> Map.keys()
     |> MapSet.new()
     |> MapSet.intersection(epoch.rover |> Map.keys() |> MapSet.new())
     |> MapSet.intersection(epoch.positions |> Map.keys() |> MapSet.new())
-    |> MapSet.intersection(MapSet.new(physical_sats))
-    |> MapSet.to_list()
-    |> Enum.sort()
+    |> MapSet.intersection(epoch.base_positions |> Map.keys() |> MapSet.new())
+    |> MapSet.intersection(epoch.rover_positions |> Map.keys() |> MapSet.new())
   end
 
   defp ensure_baseline_satellites(common_sats) do
@@ -2274,13 +2316,15 @@ defmodule Orbis.GNSS.RTK do
     with {:ok, code_sigma_m} <- measurement_sigma(opts, :code_sigma_m, @default_code_sigma_m),
          {:ok, phase_sigma_m} <- measurement_sigma(opts, :phase_sigma_m, @default_phase_sigma_m),
          {:ok, stochastic_model} <- stochastic_model(opts),
-         {:ok, elevation_weighting?} <- elevation_weighting(opts) do
+         {:ok, elevation_weighting?} <- elevation_weighting(opts),
+         {:ok, sagnac?} <- sagnac(opts) do
       {:ok,
        %{
          code_sigma_m: code_sigma_m,
          phase_sigma_m: phase_sigma_m,
          stochastic_model: stochastic_model,
-         elevation_weighting?: elevation_weighting?
+         elevation_weighting?: elevation_weighting?,
+         sagnac?: sagnac?
        }}
     end
   end
@@ -2297,6 +2341,13 @@ defmodule Orbis.GNSS.RTK do
     case Keyword.get(opts, :elevation_weighting, false) do
       value when is_boolean(value) -> {:ok, value}
       _other -> {:error, {:invalid_option, :elevation_weighting}}
+    end
+  end
+
+  defp sagnac(opts) do
+    case Keyword.get(opts, :sagnac, @default_sagnac) do
+      value when is_boolean(value) -> {:ok, value}
+      _other -> {:error, {:invalid_option, :sagnac}}
     end
   end
 
@@ -2639,13 +2690,28 @@ defmodule Orbis.GNSS.RTK do
        ) do
     ref_dd = single_difference(epoch, reference_sat)
     ref_pos = Map.fetch!(epoch.positions, reference_sat)
+    ref_base_pos = Map.fetch!(epoch.base_positions, reference_sat)
+    ref_rover_pos = Map.fetch!(epoch.rover_positions, reference_sat)
 
     epoch
     |> epoch_available_nonrefs(reference_sat, physical_sats)
     |> Enum.reduce({:ok, []}, fn sat, {:ok, acc} ->
       obs_dd = double_difference_measurement(epoch, sat, ref_dd)
       sat_pos = Map.fetch!(epoch.positions, sat)
-      {geom_dd, deriv} = geometry_double_difference(base, state.baseline, sat_pos, ref_pos)
+      sat_base_pos = Map.fetch!(epoch.base_positions, sat)
+      sat_rover_pos = Map.fetch!(epoch.rover_positions, sat)
+
+      {geom_dd, deriv} =
+        geometry_double_difference(
+          base,
+          state.baseline,
+          sat_base_pos,
+          sat_rover_pos,
+          ref_base_pos,
+          ref_rover_pos,
+          weights
+        )
+
       ambiguity_id = obs_dd.ambiguity_id
       ambiguity = Map.fetch!(state.ambiguities, ambiguity_id)
       h_base = design_baseline_row(deriv, nil, ambiguity_ids)
@@ -2699,13 +2765,27 @@ defmodule Orbis.GNSS.RTK do
        ) do
     ref_dd = single_difference(epoch, reference_sat)
     ref_pos = Map.fetch!(epoch.positions, reference_sat)
+    ref_base_pos = Map.fetch!(epoch.base_positions, reference_sat)
+    ref_rover_pos = Map.fetch!(epoch.rover_positions, reference_sat)
 
     epoch
     |> epoch_available_nonrefs(reference_sat, physical_sats)
     |> Enum.reduce({:ok, []}, fn sat, {:ok, acc} ->
       obs_dd = double_difference_measurement(epoch, sat, ref_dd)
       sat_pos = Map.fetch!(epoch.positions, sat)
-      {geom_dd, deriv} = geometry_double_difference(base, state.baseline, sat_pos, ref_pos)
+      sat_base_pos = Map.fetch!(epoch.base_positions, sat)
+      sat_rover_pos = Map.fetch!(epoch.rover_positions, sat)
+
+      {geom_dd, deriv} =
+        geometry_double_difference(
+          base,
+          state.baseline,
+          sat_base_pos,
+          sat_rover_pos,
+          ref_base_pos,
+          ref_rover_pos,
+          weights
+        )
 
       %{sat_sd_id: sat_sd_id, ref_sd_id: ref_sd_id} =
         Map.fetch!(dd_ambiguity_pairs, obs_dd.ambiguity_id)
@@ -2795,12 +2875,27 @@ defmodule Orbis.GNSS.RTK do
     Map.fetch!(state.ambiguities, sat_sd_id) - Map.fetch!(state.ambiguities, ref_sd_id)
   end
 
-  defp geometry_double_difference(base, baseline, sat_pos, ref_pos) do
+  defp geometry_double_difference(
+         base,
+         baseline,
+         sat_base_pos,
+         sat_rover_pos,
+         ref_base_pos,
+         ref_rover_pos,
+         weights
+       ) do
     rover = add3(base, baseline)
-    sat_sd = range(sat_pos, rover) - range(sat_pos, base)
-    ref_sd = range(ref_pos, rover) - range(ref_pos, base)
-    sat_deriv = range_derivative(rover, sat_pos)
-    ref_deriv = range_derivative(rover, ref_pos)
+
+    sat_sd =
+      geometric_range(sat_rover_pos, rover, weights) -
+        geometric_range(sat_base_pos, base, weights)
+
+    ref_sd =
+      geometric_range(ref_rover_pos, rover, weights) -
+        geometric_range(ref_base_pos, base, weights)
+
+    sat_deriv = geometric_range_derivative(rover, sat_rover_pos, weights)
+    ref_deriv = geometric_range_derivative(rover, ref_rover_pos, weights)
     {sat_sd - ref_sd, sub3(sat_deriv, ref_deriv)}
   end
 
@@ -2963,6 +3058,7 @@ defmodule Orbis.GNSS.RTK do
              phase_sigma_m: weights.phase_sigma_m,
              stochastic_model: weights.stochastic_model,
              elevation_weighting: weights.elevation_weighting?,
+             sagnac: weights.sagnac?,
              min_elevation_sin: @min_elevation_sin
            },
            code_rms_m: rms(code_residuals),
@@ -3428,6 +3524,7 @@ defmodule Orbis.GNSS.RTK do
                phase_sigma_m: weights.phase_sigma_m,
                stochastic_model: weights.stochastic_model,
                elevation_weighting: weights.elevation_weighting?,
+               sagnac: weights.sagnac?,
                min_elevation_sin: @min_elevation_sin
              },
              dropped_sats:
@@ -3923,13 +4020,28 @@ defmodule Orbis.GNSS.RTK do
        ) do
     ref_dd = single_difference(epoch, reference_sat)
     ref_pos = Map.fetch!(epoch.positions, reference_sat)
+    ref_base_pos = Map.fetch!(epoch.base_positions, reference_sat)
+    ref_rover_pos = Map.fetch!(epoch.rover_positions, reference_sat)
 
     epoch
     |> epoch_available_nonrefs(reference_sat, physical_sats)
     |> Enum.reduce({:ok, []}, fn sat, {:ok, acc} ->
       obs_dd = double_difference_measurement(epoch, sat, ref_dd)
       sat_pos = Map.fetch!(epoch.positions, sat)
-      {geom_dd, deriv} = geometry_double_difference(base, state.baseline, sat_pos, ref_pos)
+      sat_base_pos = Map.fetch!(epoch.base_positions, sat)
+      sat_rover_pos = Map.fetch!(epoch.rover_positions, sat)
+
+      {geom_dd, deriv} =
+        geometry_double_difference(
+          base,
+          state.baseline,
+          sat_base_pos,
+          sat_rover_pos,
+          ref_base_pos,
+          ref_rover_pos,
+          weights
+        )
+
       ambiguity_id = obs_dd.ambiguity_id
 
       {phase_ambiguity, phase_h} =
@@ -4074,6 +4186,7 @@ defmodule Orbis.GNSS.RTK do
                phase_sigma_m: weights.phase_sigma_m,
                stochastic_model: weights.stochastic_model,
                elevation_weighting: weights.elevation_weighting?,
+               sagnac: weights.sagnac?,
                min_elevation_sin: @min_elevation_sin
              }
            })
@@ -4236,6 +4349,22 @@ defmodule Orbis.GNSS.RTK do
     rho = range(sat_pos, receiver)
     scale3(sub3(receiver, sat_pos), 1.0 / rho)
   end
+
+  defp geometric_range(sat_pos, receiver, %{sagnac?: true}) do
+    {sx, sy, _sz} = sat_pos
+    {rx, ry, _rz} = receiver
+
+    range(sat_pos, receiver) +
+      Constants.earth_rotation_rate_rad_s() * (sx * ry - sy * rx) /
+        Constants.speed_of_light_m_s()
+  end
+
+  defp geometric_range(sat_pos, receiver, %{sagnac?: false}), do: range(sat_pos, receiver)
+
+  # RTKLIB's first-order Sagnac model corrects the scalar range but keeps the
+  # design row as the Euclidean line-of-sight unit vector.
+  defp geometric_range_derivative(receiver, sat_pos, _weights),
+    do: range_derivative(receiver, sat_pos)
 
   defp add3({ax, ay, az}, {bx, by, bz}), do: {ax + bx, ay + by, az + bz}
   defp sub3({ax, ay, az}, {bx, by, bz}), do: {ax - bx, ay - by, az - bz}

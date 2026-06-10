@@ -32,6 +32,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - RTK float/fixed/filter baseline solvers accept `stochastic_model: :rtklib`
   for RTKLIB's floor-plus-elevation single-difference variance shape. The
   default remains `:simple`.
+- RTK baseline epochs may now carry receiver-specific
+  `:base_satellite_positions_m` and `:rover_satellite_positions_m` maps for
+  transmit-time satellite positions. When omitted, the solvers keep the previous
+  shared `:satellite_positions_m` behavior.
+- RTK float/fixed/filter baseline solvers now apply the first-order Sagnac
+  Earth-rotation range correction by default (`sagnac: true`), with
+  `sagnac: false` available for synthetic Euclidean fixtures.
 - `Orbis.GNSS.RINEX.Observations.antenna_delta_hen/1` exposes the parsed
   `ANTENNA: DELTA H/E/N` receiver antenna offset so real RTK gates and
   consumers can derive antenna-reference-point baselines from the observation
@@ -63,6 +70,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   CNES/CLS RINEX clock. The provenance records RTKLIB 2.4.2's lowercase `.sp3`
   staging requirement and pins that the precise run fixes the same 119/120
   epochs as the broadcast reference.
+- The real WTZR/WTZZ RTK gate now builds receiver-specific transmit-time
+  satellite-position maps and verifies the corrected geometry reaches the
+  RTKLIB millimetre class: the two-epoch prefix fixes below 1 cm, the 120-epoch
+  single-frequency partial-AR path fixes a safe subset below 1 cm, and the
+  dual-frequency wide-lane/narrow-lane path fixes the full set below 1 cm.
 
 ## [0.15.1] - 2026-06-09
 

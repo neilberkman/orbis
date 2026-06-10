@@ -22,11 +22,6 @@ defmodule Orbis.GNSS.RTKRealArcTest do
                                 __DIR__,
                                 "fixtures/rtk/wtzr_wtzz_rtklib_precise_oracle.json"
                               )
-  @rtklib_precise_ambiguity_path Path.join(
-                                   __DIR__,
-                                   "fixtures/rtk/wtzr_wtzz_rtklib_precise_epoch2_ambiguity.json"
-                                 )
-
   @c_m_s 299_792_458.0
   @gps_l1_hz 1_575_420_000.0
   @gps_l2_hz 1_227_600_000.0
@@ -105,12 +100,11 @@ defmodule Orbis.GNSS.RTKRealArcTest do
 
     fixed_antenna_error_m = position_error(fixed.baseline_m, antenna_baseline)
 
-    # The limiting term is the code-pinned integer level on a short
-    # single-frequency arc, not the carrier-phase scatter. The best integer
-    # candidate is worse than the float baseline, so the integer search must refuse the
-    # unsafe fix instead of reporting false centimetre confidence.
-    assert fixed_antenna_error_m > float_antenna_error_m
-    assert fixed_antenna_error_m < 0.2
+    # The full integer set still fails the ratio test, but with receiver-specific
+    # transmit-time satellite positions the corresponding float baseline is
+    # already millimetre-scale on this co-located real arc.
+    assert fixed_antenna_error_m < float_antenna_error_m
+    assert fixed_antenna_error_m < 0.01
 
     assert {:ok, partial_fixed} =
              RTK.solve_fixed_baseline_epochs(
@@ -131,9 +125,14 @@ defmodule Orbis.GNSS.RTKRealArcTest do
 
     assert partial_fixed.metadata.partial_fixed_ambiguities == [
              "G05",
+             "G07",
              "G08",
+             "G09",
+             "G13",
              "G15@rover#2|ref=G30",
-             "G27@rover#1|ref=G30"
+             "G18",
+             "G27@rover#1|ref=G30",
+             "G28"
            ]
 
     assert partial_fixed.metadata.partial_free_ambiguities != []
@@ -156,74 +155,19 @@ defmodule Orbis.GNSS.RTKRealArcTest do
 
     assert wide_lane_fixed.wide_lane_ambiguities_cycles != nil
     assert wide_lane_fixed.metadata.integer_method == :widelane_narrowlane_lambda
-    assert wide_lane_fixed.metadata.integer_status == :not_fixed
-    assert wide_lane_fixed.metadata.integer_ratio < 3.0
+    assert wide_lane_fixed.metadata.integer_status == :fixed
+    assert wide_lane_fixed.metadata.integer_ratio > 3.0
 
     wide_lane_antenna_error_m = position_error(wide_lane_fixed.baseline_m, antenna_baseline)
 
-    assert wide_lane_antenna_error_m < 0.2
-
-    # Dual-frequency partial ambiguity resolution. The full narrow-lane set
-    # fails the ratio test (asserted above as :not_fixed), but holding the
-    # wide-lane integers fixed collapses the per-ambiguity bias for most
-    # satellites. A confidence-ranked subset search therefore fixes a strictly
-    # larger safe subset than the single-frequency partial (4), without
-    # weakening the ratio threshold.
-    assert {:ok, dual_partial} =
-             RTK.solve_widelane_fixed_baseline_epochs(base_arp, dual_epochs,
-               initial_baseline_m: {0.0, 0.0, 0.0},
-               max_iterations: 10,
-               on_cycle_slip: :drop_satellite,
-               elevation_weighting: true,
-               code_sigma_m: 2.0,
-               phase_sigma_m: 0.01,
-               integer_candidate_limit: 200_000,
-               partial_ambiguity_resolution: true,
-               partial_min_ambiguities: 4
-             )
-
-    dual_partial_antenna_error_m = position_error(dual_partial.baseline_m, antenna_baseline)
-
-    assert dual_partial.metadata.integer_method == :widelane_narrowlane_lambda
-    assert dual_partial.metadata.partial_ambiguity_resolution
-    assert dual_partial.metadata.partial_fixed
-    assert dual_partial.metadata.integer_status == :fixed
-    assert dual_partial.metadata.integer_ratio > 3.0
-
-    # Strictly larger than the single-frequency partial subset of 4.
-    assert length(dual_partial.metadata.partial_fixed_ambiguities) > 4
-
-    assert dual_partial.metadata.partial_fixed_ambiguities == [
-             "G05",
-             "G08",
-             "G09",
-             "G13",
-             "G18",
-             "G28"
-           ]
-
-    # G07 is the lone outlier the subset search drops (its narrow-lane float is
-    # several sigma off the integer lattice), so it stays a free ambiguity.
-    assert dual_partial.metadata.partial_free_ambiguities == ["G07"]
-
-    # The accepted dual-frequency partial fix is safe: its baseline error beats
-    # both the narrow-lane float and the refused full wide-lane/narrow-lane fix.
-    float_dual_antenna_error_m =
-      position_error(dual_partial.float_solution.baseline_m, antenna_baseline)
-
-    assert dual_partial_antenna_error_m < float_dual_antenna_error_m
-    assert dual_partial_antenna_error_m < wide_lane_antenna_error_m
-    assert dual_partial_antenna_error_m < 0.06
-
-    # The exhaustive subset search is globally bounded: it reports how many
-    # candidate subsets it evaluated, and that stays under the hard cap.
-    evaluated = dual_partial.metadata.partial_exhaustive_subsets_evaluated
-    assert is_integer(evaluated) and evaluated > 0
-    assert evaluated <= 20_000
+    # With receiver-specific transmit-time geometry, the dual-frequency
+    # wide-lane/narrow-lane path reaches the real centimetre-grade milestone as
+    # a full fix rather than needing the earlier partial-AR escape hatch.
+    assert wide_lane_antenna_error_m < 0.01
   end
 
   @tag timeout: 180_000
-  test "RTKLIB fixes the two-epoch prefix that batch partial AR gets wrong" do
+  test "RTKLIB two-epoch prefix fixes with receiver-specific transmit-time geometry" do
     oracle =
       @rtklib_oracle_path
       |> File.read!()
@@ -231,11 +175,6 @@ defmodule Orbis.GNSS.RTKRealArcTest do
 
     precise_oracle =
       @rtklib_precise_oracle_path
-      |> File.read!()
-      |> Jason.decode!()
-
-    precise_ambiguity =
-      @rtklib_precise_ambiguity_path
       |> File.read!()
       |> Jason.decode!()
 
@@ -283,23 +222,21 @@ defmodule Orbis.GNSS.RTKRealArcTest do
              )
 
     assert sol.metadata.integer_status == :fixed
-    assert sol.metadata.partial_fixed
+    refute sol.metadata.partial_ambiguity_resolution
+    refute sol.metadata.partial_fixed
     assert sol.metadata.integer_ratio >= 3.0
     assert sol.metadata.integer_method == :lambda
     assert sol.metadata.n_epochs == 2
     assert sol.metadata.elevation_mask_deg == 10.0
     assert sol.metadata.elevation_masked_sats == ["G08", "G18", "G27"]
 
-    # This pins the current gap: a batch partial-AR solve can pass the ratio
-    # test on the two-epoch prefix while landing far from the same ARP truth that
-    # RTKLIB fixes at epoch 2 in both broadcast mode and explicit
-    # SP3/clock-backed precise mode. Matching its 10-degree
-    # elevation mask removes the low-elevation G08/G18/G27 contributors and
-    # improves the result, but the sequential filter must still eliminate the
-    # remaining false confidence, not merely produce a fixed status.
+    # The gap pinned by the earlier oracle was not LAMBDA or covariance shape:
+    # the real-data builder was feeding one receive-time satellite position to
+    # both receivers. With receiver-specific transmit-time positions, the same
+    # two-epoch prefix now reaches the RTKLIB millimetre class instead of false
+    # confidence metres away from the ARP truth.
     error_m = position_error(sol.baseline_m, antenna_baseline)
-    assert error_m > 0.3
-    assert error_m < 0.5
+    assert error_m < 0.01
 
     assert {:ok, filter} =
              RTK.solve_filter_baseline_epochs(base_arp, epochs,
@@ -314,9 +251,9 @@ defmodule Orbis.GNSS.RTKRealArcTest do
                integer_candidate_limit: 200_000
              )
 
-    assert filter.metadata.first_fixed_index == nil
-    assert Enum.all?(filter.epochs, &(&1.integer_status == :not_fixed))
-    assert List.last(filter.epochs).integer_ratio < 3.0
+    assert filter.metadata.first_fixed_index in [0, 1]
+    assert Enum.any?(filter.epochs, &(&1.integer_status == :fixed))
+    assert position_error(filter.baseline_m, antenna_baseline) < 0.01
 
     assert {:ok, rtklib_weighted_filter} =
              RTK.solve_filter_baseline_epochs(base_arp, epochs,
@@ -331,41 +268,13 @@ defmodule Orbis.GNSS.RTKRealArcTest do
                integer_candidate_limit: 200_000
              )
 
-    # RTKLIB's variance shape is part of the comparison lane, but it is not
-    # enough by itself to justify a fix on the two-epoch prefix. RTKLIB fixes
-    # this prefix with both the broadcast fixture and the staged lowercase-SP3
-    # precise fixture, so the remaining gap is not explained by ephemeris class
-    # alone and is not a ratio-threshold or covariance-form tweak.
+    # The RTKLIB stochastic model is still compatible with the corrected
+    # geometry; it should also fix the prefix instead of reporting the old
+    # covariance-matches-state-does-not gap.
     assert rtklib_weighted_filter.metadata.measurement_covariance.stochastic_model == :rtklib
-    assert rtklib_weighted_filter.metadata.first_fixed_index == nil
-    assert Enum.all?(rtklib_weighted_filter.epochs, &(&1.integer_status == :not_fixed))
-
-    last_epoch = List.last(rtklib_weighted_filter.epochs)
-    assert last_epoch.integer_ratio < 3.0
-    assert last_epoch.integer_candidates > 0
-    assert last_epoch.integer_best_score < last_epoch.integer_second_best_score
-    assert last_epoch.ambiguity_search.order != []
-    assert Map.keys(last_epoch.ambiguity_search.float_cycles) == last_epoch.ambiguity_search.order
-    assert length(last_epoch.residuals_m) == length(last_epoch.ambiguity_search.order)
-    assert Enum.all?(last_epoch.residuals_m, &(&1.reference_satellite_id == "G30"))
-
-    transformed_covariance =
-      transform_g30_ambiguity_covariance_to_rtklib_basis(last_epoch.ambiguity_search)
-
-    transformed_floats =
-      transform_g30_ambiguity_floats_to_rtklib_basis(last_epoch.ambiguity_search)
-
-    rtklib_covariance = precise_ambiguity["covariance_cycles"]
-    rtklib_floats = precise_ambiguity["float_cycles"]
-
-    # This pins the narrowed RTKLIB gap: after transforming Orbis's G30-reference
-    # ambiguity basis into RTKLIB's G05-reference basis, the covariance structure
-    # agrees closely, but the float ambiguity state still does not. The remaining
-    # parity work is therefore in the posterior state update or an observation
-    # correction feeding it, not in the ILS search, DD basis, or covariance form.
-    assert max_relative_diagonal_delta(transformed_covariance, rtklib_covariance) < 0.03
-    assert max_abs_matrix_delta(transformed_covariance, rtklib_covariance) < 0.5
-    assert max_abs_vector_delta(transformed_floats, rtklib_floats) > 0.15
+    assert rtklib_weighted_filter.metadata.first_fixed_index in [0, 1]
+    assert Enum.any?(rtklib_weighted_filter.epochs, &(&1.integer_status == :fixed))
+    assert position_error(rtklib_weighted_filter.baseline_m, antenna_baseline) < 0.01
   end
 
   defp real_gps_l1_rtk_epochs(sp3, base_obs, rover_obs, count) do
@@ -390,13 +299,26 @@ defmodule Orbis.GNSS.RTKRealArcTest do
 
           epoch = naive_datetime(base_entry.epoch)
           positions = satellite_positions(sp3, epoch, common)
-          usable = Enum.filter(common, &Map.has_key?(positions, &1))
+
+          base_positions =
+            transmit_time_satellite_positions(sp3, epoch, base_values, common, :code_m)
+
+          rover_positions =
+            transmit_time_satellite_positions(sp3, epoch, rover_values, common, :code_m)
+
+          usable =
+            Enum.filter(common, fn sat ->
+              Map.has_key?(positions, sat) and Map.has_key?(base_positions, sat) and
+                Map.has_key?(rover_positions, sat)
+            end)
 
           if length(usable) >= 4 do
             [
               %{
                 epoch: epoch,
                 satellite_positions_m: Map.take(positions, usable),
+                base_satellite_positions_m: Map.take(base_positions, usable),
+                rover_satellite_positions_m: Map.take(rover_positions, usable),
                 base_observations: Enum.map(usable, &Map.fetch!(base_values, &1)),
                 rover_observations: Enum.map(usable, &Map.fetch!(rover_values, &1))
               }
@@ -409,6 +331,7 @@ defmodule Orbis.GNSS.RTKRealArcTest do
           []
       end
     end)
+    |> assert_receiver_position_maps()
   end
 
   defp gps_l1_values(obs, index) do
@@ -458,13 +381,26 @@ defmodule Orbis.GNSS.RTKRealArcTest do
 
           epoch = naive_datetime(base_entry.epoch)
           positions = satellite_positions(sp3, epoch, common)
-          usable = Enum.filter(common, &Map.has_key?(positions, &1))
+
+          base_positions =
+            transmit_time_satellite_positions(sp3, epoch, base_values, common, :p1_m)
+
+          rover_positions =
+            transmit_time_satellite_positions(sp3, epoch, rover_values, common, :p1_m)
+
+          usable =
+            Enum.filter(common, fn sat ->
+              Map.has_key?(positions, sat) and Map.has_key?(base_positions, sat) and
+                Map.has_key?(rover_positions, sat)
+            end)
 
           if length(usable) >= 4 do
             [
               %{
                 epoch: epoch,
                 satellite_positions_m: Map.take(positions, usable),
+                base_satellite_positions_m: Map.take(base_positions, usable),
+                rover_satellite_positions_m: Map.take(rover_positions, usable),
                 base_observations: Enum.map(usable, &Map.fetch!(base_values, &1)),
                 rover_observations: Enum.map(usable, &Map.fetch!(rover_values, &1))
               }
@@ -521,6 +457,35 @@ defmodule Orbis.GNSS.RTKRealArcTest do
     end)
   end
 
+  defp transmit_time_satellite_positions(sp3, receive_epoch, values, sats, code_key) do
+    sats
+    |> Enum.reduce(%{}, fn sat, acc ->
+      with %{^code_key => code_m} when is_number(code_m) <- Map.get(values, sat),
+           {:ok, transmit_epoch} <- transmit_epoch(receive_epoch, code_m),
+           {:ok, %{x_m: x, y_m: y, z_m: z}} <- SP3.position(sp3, sat, transmit_epoch) do
+        Map.put(acc, sat, {x, y, z})
+      else
+        _ -> acc
+      end
+    end)
+  end
+
+  defp transmit_epoch(receive_epoch, code_m) do
+    microseconds = round(code_m / @c_m_s * 1_000_000.0)
+    {:ok, NaiveDateTime.add(receive_epoch, -microseconds, :microsecond)}
+  rescue
+    _ -> :error
+  end
+
+  defp assert_receiver_position_maps(epochs) do
+    # The solve path should use receiver-specific transmit-time maps when tests
+    # provide them. Keep this as a light fixture sanity check instead of a
+    # numeric assertion about the baseline.
+    assert Enum.all?(epochs, &Map.has_key?(&1, :base_satellite_positions_m))
+    assert Enum.all?(epochs, &Map.has_key?(&1, :rover_satellite_positions_m))
+    epochs
+  end
+
   defp naive_datetime({{year, month, day}, {hour, minute, second}}) do
     whole_second = trunc(second)
     microsecond = round((second - whole_second) * 1_000_000)
@@ -547,82 +512,6 @@ defmodule Orbis.GNSS.RTKRealArcTest do
   defp norm3({x, y, z}), do: :math.sqrt(x * x + y * y + z * z)
 
   defp enu_map_to_tuple(%{"east" => east, "north" => north, "up" => up}), do: {east, north, up}
-
-  defp transform_g30_ambiguity_floats_to_rtklib_basis(%{order: order, float_cycles: floats}) do
-    vector = Enum.map(order, &Map.fetch!(floats, &1))
-    transform = rtklib_g05_basis_transform(order)
-    matvec(transform, vector)
-  end
-
-  defp transform_g30_ambiguity_covariance_to_rtklib_basis(%{
-         order: order,
-         covariance_cycles: covariance
-       }) do
-    transform = rtklib_g05_basis_transform(order)
-    matmul(matmul(transform, covariance), transpose(transform))
-  end
-
-  defp rtklib_g05_basis_transform(order) do
-    g15 = Enum.find(order, &String.starts_with?(&1, "G15")) || "G15"
-
-    [
-      %{"G05" => 1.0, "G07" => -1.0},
-      %{"G05" => 1.0, "G09" => -1.0},
-      %{"G05" => 1.0, "G13" => -1.0},
-      %{"G05" => 1.0, g15 => -1.0},
-      %{"G05" => 1.0, "G28" => -1.0},
-      %{"G05" => 1.0}
-    ]
-    |> Enum.map(fn row -> Enum.map(order, &Map.get(row, &1, 0.0)) end)
-  end
-
-  defp max_relative_diagonal_delta(left, right) do
-    left
-    |> Enum.with_index()
-    |> Enum.map(fn {row, idx} ->
-      l = Enum.at(row, idx)
-      r = right |> Enum.at(idx) |> Enum.at(idx)
-      abs(l - r) / max(abs(r), 1.0e-12)
-    end)
-    |> Enum.max()
-  end
-
-  defp max_abs_matrix_delta(left, right) do
-    left
-    |> List.flatten()
-    |> Enum.zip(List.flatten(right))
-    |> Enum.map(fn {l, r} -> abs(l - r) end)
-    |> Enum.max()
-  end
-
-  defp max_abs_vector_delta(left, right) do
-    left
-    |> Enum.zip(right)
-    |> Enum.map(fn {l, r} -> abs(l - r) end)
-    |> Enum.max()
-  end
-
-  defp transpose(matrix), do: matrix |> Enum.zip() |> Enum.map(&Tuple.to_list/1)
-
-  defp matmul(a, b) do
-    b_t = transpose(b)
-
-    Enum.map(a, fn row ->
-      Enum.map(b_t, fn col ->
-        row
-        |> Enum.zip(col)
-        |> Enum.reduce(0.0, fn {x, y}, acc -> acc + x * y end)
-      end)
-    end)
-  end
-
-  defp matvec(matrix, vector) do
-    Enum.map(matrix, fn row ->
-      row
-      |> Enum.zip(vector)
-      |> Enum.reduce(0.0, fn {x, y}, acc -> acc + x * y end)
-    end)
-  end
 
   defp position_error(%{x_m: x, y_m: y, z_m: z}, {truth_x, truth_y, truth_z}) do
     :math.sqrt(

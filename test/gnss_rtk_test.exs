@@ -6,6 +6,7 @@ defmodule Orbis.GNSS.RTKTest do
   @base {1_110_000.0, -4_840_000.0, 3_980_000.0}
   @truth_baseline {12.5, -4.25, 2.75}
   @c 299_792_458.0
+  @earth_rotation_rate_rad_s 7.2921151467e-5
   @f_l1 1_575_420_000.0
   @f_l2 1_227_600_000.0
   @l1_wavelength_m 299_792_458.0 / 1_575_420_000.0
@@ -201,6 +202,7 @@ defmodule Orbis.GNSS.RTKTest do
                phase_sigma_m: 0.02,
                stochastic_model: :simple,
                elevation_weighting: false,
+               sagnac: true,
                min_elevation_sin: 0.05
              }
 
@@ -527,6 +529,9 @@ defmodule Orbis.GNSS.RTKTest do
 
       assert RTK.solve_float_baseline_epochs(@base, [epoch], stochastic_model: :bad) ==
                {:error, {:invalid_option, :stochastic_model}}
+
+      assert RTK.solve_float_baseline_epochs(@base, [epoch], sagnac: :bad) ==
+               {:error, {:invalid_option, :sagnac}}
 
       assert RTK.solve_float_baseline_epochs(@base, [epoch], elevation_mask_deg: -1.0) ==
                {:error, {:invalid_option, :elevation_mask_deg}}
@@ -1192,8 +1197,10 @@ defmodule Orbis.GNSS.RTKTest do
       |> Enum.sort_by(fn {sat, _pos} -> sat end)
       |> Enum.map(fn {sat, sat_pos} ->
         common = Map.get(common_errors_m, sat, 0.0)
-        base_code = norm(sub3(sat_pos, base)) + base_clock_m + common
-        rover_code = norm(sub3(sat_pos, rover)) + rover_clock_m + common
+        base_range = sagnac_range(sat_pos, base)
+        rover_range = sagnac_range(sat_pos, rover)
+        base_code = base_range + base_clock_m + common
+        rover_code = rover_range + rover_clock_m + common
 
         {{sat, base_code, base_code},
          {sat, rover_code, rover_code + Map.get(ambiguities_m, sat, 0.0)}}
@@ -1222,8 +1229,8 @@ defmodule Orbis.GNSS.RTKTest do
       |> Enum.sort_by(fn {sat, _pos} -> sat end)
       |> Enum.with_index()
       |> Enum.map(fn {{sat, sat_pos}, sat_idx} ->
-        base_range = norm(sub3(sat_pos, base))
-        rover_range = norm(sub3(sat_pos, rover))
+        base_range = sagnac_range(sat_pos, base)
+        rover_range = sagnac_range(sat_pos, rover)
         common = 0.4 + 0.03 * sat_idx
         iono1_m = 1.7 + 0.04 * epoch_idx + 0.02 * sat_idx
         iono2_m = iono1_m * :math.pow(@f_l1 / @f_l2, 2)
@@ -1299,4 +1306,11 @@ defmodule Orbis.GNSS.RTKTest do
   defp add3({ax, ay, az}, {bx, by, bz}), do: {ax + bx, ay + by, az + bz}
   defp sub3({ax, ay, az}, {bx, by, bz}), do: {ax - bx, ay - by, az - bz}
   defp norm({x, y, z}), do: :math.sqrt(x * x + y * y + z * z)
+
+  defp sagnac_range(sat_pos, receiver) do
+    {sx, sy, _sz} = sat_pos
+    {rx, ry, _rz} = receiver
+
+    norm(sub3(sat_pos, receiver)) + @earth_rotation_rate_rad_s * (sx * ry - sy * rx) / @c
+  end
 end
