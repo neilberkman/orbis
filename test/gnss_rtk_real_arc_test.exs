@@ -8,6 +8,7 @@ defmodule Orbis.GNSS.RTKRealArcTest do
   alias Orbis.GNSS.SP3
 
   @sp3_path Path.join(__DIR__, "fixtures/sp3/GBM0MGXRAP_20201770000_01D_05M_ORB_120epoch.sp3")
+  @cod_sp3_path Path.join(__DIR__, "fixtures/sp3/COD0MGXFIN_20201770000_01D_05M_ORB.SP3")
   @wtzr_obs_path Path.join(
                    __DIR__,
                    "fixtures/obs/WTZR00DEU_R_20201770000_01D_30S_MO_120epoch.rnx"
@@ -21,6 +22,10 @@ defmodule Orbis.GNSS.RTKRealArcTest do
                                 __DIR__,
                                 "fixtures/rtk/wtzr_wtzz_rtklib_precise_oracle.json"
                               )
+  @rtklib_precise_ambiguity_path Path.join(
+                                   __DIR__,
+                                   "fixtures/rtk/wtzr_wtzz_rtklib_precise_epoch2_ambiguity.json"
+                                 )
 
   @c_m_s 299_792_458.0
   @gps_l1_hz 1_575_420_000.0
@@ -229,7 +234,12 @@ defmodule Orbis.GNSS.RTKRealArcTest do
       |> File.read!()
       |> Jason.decode!()
 
-    sp3 = SP3.load!(@sp3_path)
+    precise_ambiguity =
+      @rtklib_precise_ambiguity_path
+      |> File.read!()
+      |> Jason.decode!()
+
+    sp3 = SP3.load!(@cod_sp3_path)
     base_obs = Observations.load!(@wtzr_obs_path)
     rover_obs = Observations.load!(@wtzz_obs_path)
     base_arp = arp_position(@wtzr_marker, antenna_height_m(base_obs))
@@ -338,6 +348,24 @@ defmodule Orbis.GNSS.RTKRealArcTest do
     assert Map.keys(last_epoch.ambiguity_search.float_cycles) == last_epoch.ambiguity_search.order
     assert length(last_epoch.residuals_m) == length(last_epoch.ambiguity_search.order)
     assert Enum.all?(last_epoch.residuals_m, &(&1.reference_satellite_id == "G30"))
+
+    transformed_covariance =
+      transform_g30_ambiguity_covariance_to_rtklib_basis(last_epoch.ambiguity_search)
+
+    transformed_floats =
+      transform_g30_ambiguity_floats_to_rtklib_basis(last_epoch.ambiguity_search)
+
+    rtklib_covariance = precise_ambiguity["covariance_cycles"]
+    rtklib_floats = precise_ambiguity["float_cycles"]
+
+    # This pins the narrowed RTKLIB gap: after transforming Orbis's G30-reference
+    # ambiguity basis into RTKLIB's G05-reference basis, the covariance structure
+    # agrees closely, but the float ambiguity state still does not. The remaining
+    # parity work is therefore in the posterior state update or an observation
+    # correction feeding it, not in the ILS search, DD basis, or covariance form.
+    assert max_relative_diagonal_delta(transformed_covariance, rtklib_covariance) < 0.03
+    assert max_abs_matrix_delta(transformed_covariance, rtklib_covariance) < 0.5
+    assert max_abs_vector_delta(transformed_floats, rtklib_floats) > 0.15
   end
 
   defp real_gps_l1_rtk_epochs(sp3, base_obs, rover_obs, count) do
@@ -519,6 +547,82 @@ defmodule Orbis.GNSS.RTKRealArcTest do
   defp norm3({x, y, z}), do: :math.sqrt(x * x + y * y + z * z)
 
   defp enu_map_to_tuple(%{"east" => east, "north" => north, "up" => up}), do: {east, north, up}
+
+  defp transform_g30_ambiguity_floats_to_rtklib_basis(%{order: order, float_cycles: floats}) do
+    vector = Enum.map(order, &Map.fetch!(floats, &1))
+    transform = rtklib_g05_basis_transform(order)
+    matvec(transform, vector)
+  end
+
+  defp transform_g30_ambiguity_covariance_to_rtklib_basis(%{
+         order: order,
+         covariance_cycles: covariance
+       }) do
+    transform = rtklib_g05_basis_transform(order)
+    matmul(matmul(transform, covariance), transpose(transform))
+  end
+
+  defp rtklib_g05_basis_transform(order) do
+    g15 = Enum.find(order, &String.starts_with?(&1, "G15")) || "G15"
+
+    [
+      %{"G05" => 1.0, "G07" => -1.0},
+      %{"G05" => 1.0, "G09" => -1.0},
+      %{"G05" => 1.0, "G13" => -1.0},
+      %{"G05" => 1.0, g15 => -1.0},
+      %{"G05" => 1.0, "G28" => -1.0},
+      %{"G05" => 1.0}
+    ]
+    |> Enum.map(fn row -> Enum.map(order, &Map.get(row, &1, 0.0)) end)
+  end
+
+  defp max_relative_diagonal_delta(left, right) do
+    left
+    |> Enum.with_index()
+    |> Enum.map(fn {row, idx} ->
+      l = Enum.at(row, idx)
+      r = right |> Enum.at(idx) |> Enum.at(idx)
+      abs(l - r) / max(abs(r), 1.0e-12)
+    end)
+    |> Enum.max()
+  end
+
+  defp max_abs_matrix_delta(left, right) do
+    left
+    |> List.flatten()
+    |> Enum.zip(List.flatten(right))
+    |> Enum.map(fn {l, r} -> abs(l - r) end)
+    |> Enum.max()
+  end
+
+  defp max_abs_vector_delta(left, right) do
+    left
+    |> Enum.zip(right)
+    |> Enum.map(fn {l, r} -> abs(l - r) end)
+    |> Enum.max()
+  end
+
+  defp transpose(matrix), do: matrix |> Enum.zip() |> Enum.map(&Tuple.to_list/1)
+
+  defp matmul(a, b) do
+    b_t = transpose(b)
+
+    Enum.map(a, fn row ->
+      Enum.map(b_t, fn col ->
+        row
+        |> Enum.zip(col)
+        |> Enum.reduce(0.0, fn {x, y}, acc -> acc + x * y end)
+      end)
+    end)
+  end
+
+  defp matvec(matrix, vector) do
+    Enum.map(matrix, fn row ->
+      row
+      |> Enum.zip(vector)
+      |> Enum.reduce(0.0, fn {x, y}, acc -> acc + x * y end)
+    end)
+  end
 
   defp position_error(%{x_m: x, y_m: y, z_m: z}, {truth_x, truth_y, truth_z}) do
     :math.sqrt(
