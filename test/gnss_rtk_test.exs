@@ -872,6 +872,23 @@ defmodule Orbis.GNSS.RTKTest do
       assert sol.metadata.fixed_epoch_count > 0
       assert position_error(sol.baseline_m, @truth_baseline) < 2.0e-4
 
+      fixed_epoch = Enum.find(sol.epochs, &(&1.integer_status == :fixed))
+      expected_order = @fixed_cycles |> Map.delete("G01") |> Map.keys() |> Enum.sort()
+
+      assert fixed_epoch.integer_ratio >= 3.0
+      assert fixed_epoch.integer_best_score <= fixed_epoch.integer_second_best_score
+      assert fixed_epoch.integer_candidates > 0
+      assert fixed_epoch.ambiguity_search.order == expected_order
+
+      assert Map.keys(fixed_epoch.ambiguity_search.float_cycles) ==
+               fixed_epoch.ambiguity_search.order
+
+      assert length(fixed_epoch.ambiguity_search.covariance_cycles) ==
+               length(fixed_epoch.ambiguity_search.order)
+
+      assert length(fixed_epoch.ambiguity_search.covariance_inverse_cycles) ==
+               length(fixed_epoch.ambiguity_search.order)
+
       for {sat, expected_cycles} <- Map.delete(@fixed_cycles, "G01") do
         assert Map.fetch!(sol.fixed_ambiguities_cycles, sat) == expected_cycles
       end

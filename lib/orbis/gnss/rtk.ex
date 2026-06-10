@@ -324,6 +324,10 @@ defmodule Orbis.GNSS.RTK do
             baseline_m: ecef(),
             integer_status: :fixed | :not_fixed,
             integer_ratio: float() | :infinity | nil,
+            integer_best_score: float() | nil,
+            integer_second_best_score: float() | nil,
+            integer_candidates: non_neg_integer() | nil,
+            ambiguity_search: map() | nil,
             newly_fixed_ambiguities: [String.t()],
             fixed_ambiguities: [String.t()]
           }
@@ -3538,6 +3542,10 @@ defmodule Orbis.GNSS.RTK do
         baseline_m: ecef_map(state.baseline),
         integer_status: if(fixed?, do: :fixed, else: :not_fixed),
         integer_ratio: Map.get(search_meta, :integer_ratio),
+        integer_best_score: Map.get(search_meta, :integer_best_score),
+        integer_second_best_score: Map.get(search_meta, :integer_second_best_score),
+        integer_candidates: Map.get(search_meta, :integer_candidates),
+        ambiguity_search: Map.get(search_meta, :ambiguity_search),
         newly_fixed_ambiguities: newly_fixed,
         fixed_ambiguities: all_fixed
       }

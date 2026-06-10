@@ -329,7 +329,13 @@ defmodule Orbis.GNSS.RTKRealArcTest do
     assert rtklib_weighted_filter.metadata.measurement_covariance.stochastic_model == :rtklib
     assert rtklib_weighted_filter.metadata.first_fixed_index == nil
     assert Enum.all?(rtklib_weighted_filter.epochs, &(&1.integer_status == :not_fixed))
-    assert List.last(rtklib_weighted_filter.epochs).integer_ratio < 3.0
+
+    last_epoch = List.last(rtklib_weighted_filter.epochs)
+    assert last_epoch.integer_ratio < 3.0
+    assert last_epoch.integer_candidates > 0
+    assert last_epoch.integer_best_score < last_epoch.integer_second_best_score
+    assert last_epoch.ambiguity_search.order != []
+    assert Map.keys(last_epoch.ambiguity_search.float_cycles) == last_epoch.ambiguity_search.order
   end
 
   defp real_gps_l1_rtk_epochs(sp3, base_obs, rover_obs, count) do

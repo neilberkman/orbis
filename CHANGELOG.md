@@ -25,6 +25,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   corresponding double-difference integer combinations, and seeds the
   single-difference ambiguities from phase-code differences rather than starting
   every ambiguity at zero.
+- Sequential RTK epoch metadata now includes integer-search diagnostics
+  (`integer_best_score`, `integer_second_best_score`, `integer_candidates`, and
+  `ambiguity_search`) so parity/debug gates can inspect the posterior ambiguity
+  vector and covariance at each fix attempt.
 - RTK float/fixed/filter baseline solvers accept `stochastic_model: :rtklib`
   for RTKLIB's floor-plus-elevation single-difference variance shape. The
   default remains `:simple`.
