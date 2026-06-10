@@ -293,6 +293,28 @@ defmodule Orbis.GNSS.RTKRealArcTest do
     assert filter.metadata.first_fixed_index == nil
     assert Enum.all?(filter.epochs, &(&1.integer_status == :not_fixed))
     assert List.last(filter.epochs).integer_ratio < 3.0
+
+    assert {:ok, rtklib_weighted_filter} =
+             RTK.solve_filter_baseline_epochs(base_arp, epochs,
+               initial_baseline_m: {0.0, 0.0, 0.0},
+               max_iterations: 10,
+               on_cycle_slip: :split_arc,
+               elevation_mask_deg: 10.0,
+               stochastic_model: :rtklib,
+               code_sigma_m: 0.3,
+               phase_sigma_m: 0.003,
+               ambiguity_wavelength_m: @gps_l1_wavelength_m,
+               integer_candidate_limit: 200_000
+             )
+
+    # RTKLIB's variance shape is part of the parity lane, but it is not enough
+    # by itself to justify a fix on the two-epoch prefix. The remaining gap is
+    # the observable/correction model, not a ratio-threshold or covariance-form
+    # tweak.
+    assert rtklib_weighted_filter.metadata.measurement_covariance.stochastic_model == :rtklib
+    assert rtklib_weighted_filter.metadata.first_fixed_index == nil
+    assert Enum.all?(rtklib_weighted_filter.epochs, &(&1.integer_status == :not_fixed))
+    assert List.last(rtklib_weighted_filter.epochs).integer_ratio < 3.0
   end
 
   defp real_gps_l1_rtk_epochs(sp3, base_obs, rover_obs, count) do
