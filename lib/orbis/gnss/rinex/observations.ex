@@ -1,8 +1,9 @@
 defmodule Orbis.GNSS.RINEX.Observations do
   @moduledoc """
   RINEX 3 observation products: parse a station's observation file, expose its
-  header (including the surveyed `APPROX POSITION XYZ`), and extract the
-  single-frequency pseudoranges that `Orbis.GNSS.Positioning.solve/4` consumes.
+  header (including the surveyed `APPROX POSITION XYZ` and optional antenna
+  `DELTA H/E/N` offset), and extract the single-frequency pseudoranges that
+  `Orbis.GNSS.Positioning.solve/4` consumes.
 
   This is the Elixir surface over the `astrodynamics-gnss` RINEX observation
   parser and its Hatanaka (CRINEX) decoder. A file is parsed **once** into a
@@ -136,6 +137,22 @@ defmodule Orbis.GNSS.RINEX.Observations do
   rescue
     e in ErlangError ->
       raise ArgumentError, "could not read approx position: #{inspect(e.original)}"
+  end
+
+  @doc """
+  The antenna reference-point offset from the marker `{height_m, east_m, north_m}`,
+  or `nil` if the file carries no `ANTENNA: DELTA H/E/N` header record.
+
+  RINEX stores this field in local height/east/north coordinates. For a station
+  whose `APPROX POSITION XYZ` is the marker, add this local offset before
+  comparing an observation-derived baseline to antenna-reference-point truth.
+  """
+  @spec antenna_delta_hen(t()) :: {float(), float(), float()} | nil
+  def antenna_delta_hen(%__MODULE__{handle: handle}) do
+    NIF.rinex_obs_antenna_delta_hen(handle)
+  rescue
+    e in ErlangError ->
+      raise ArgumentError, "could not read antenna delta H/E/N: #{inspect(e.original)}"
   end
 
   @doc """

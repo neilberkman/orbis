@@ -88,6 +88,13 @@ defmodule Orbis.CrinexTest do
       assert_in_delta z, 5_232_754.8054, 1.0e-3
     end
 
+    test "antenna_delta_hen/1 returns the antenna reference offset", %{obs: obs} do
+      assert {h, e, n} = Observations.antenna_delta_hen(obs)
+      assert_in_delta h, 0.216, 1.0e-12
+      assert e == 0.0
+      assert n == 0.0
+    end
+
     test "observation_codes/1 returns per-system code lists in order", %{obs: obs} do
       codes = Observations.observation_codes(obs)
       assert hd(codes["G"]) == "C1C"

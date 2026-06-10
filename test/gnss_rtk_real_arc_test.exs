@@ -25,8 +25,6 @@ defmodule Orbis.GNSS.RTKRealArcTest do
 
   @wtzr_marker {4_075_580.3111, 931_854.0543, 4_801_568.2808}
   @wtzz_marker {4_075_579.1913, 931_853.3696, 4_801_569.1897}
-  @wtzr_antenna_h_m 0.0710
-  @wtzz_antenna_h_m 0.2840
 
   @tag timeout: 180_000
   test "real co-located Wettzell L1 RTK solves the antenna baseline and fixes a safe partial subset" do
@@ -34,8 +32,8 @@ defmodule Orbis.GNSS.RTKRealArcTest do
     base_obs = Observations.load!(@wtzr_obs_path)
     rover_obs = Observations.load!(@wtzz_obs_path)
 
-    base_arp = arp_position(@wtzr_marker, @wtzr_antenna_h_m)
-    rover_arp = arp_position(@wtzz_marker, @wtzz_antenna_h_m)
+    base_arp = arp_position(@wtzr_marker, antenna_height_m(base_obs))
+    rover_arp = arp_position(@wtzz_marker, antenna_height_m(rover_obs))
     marker_baseline = sub3(@wtzz_marker, @wtzr_marker)
     antenna_baseline = sub3(rover_arp, base_arp)
     epochs = real_gps_l1_rtk_epochs(sp3, base_obs, rover_obs, 120)
@@ -225,8 +223,8 @@ defmodule Orbis.GNSS.RTKRealArcTest do
     sp3 = SP3.load!(@sp3_path)
     base_obs = Observations.load!(@wtzr_obs_path)
     rover_obs = Observations.load!(@wtzz_obs_path)
-    base_arp = arp_position(@wtzr_marker, @wtzr_antenna_h_m)
-    rover_arp = arp_position(@wtzz_marker, @wtzz_antenna_h_m)
+    base_arp = arp_position(@wtzr_marker, antenna_height_m(base_obs))
+    rover_arp = arp_position(@wtzz_marker, antenna_height_m(rover_obs))
     antenna_baseline = sub3(rover_arp, base_arp)
     antenna_baseline_enu = enu_map_to_tuple(oracle["truth"]["antenna_baseline_enu_m"])
 
@@ -482,6 +480,13 @@ defmodule Orbis.GNSS.RTKRealArcTest do
 
   defp arp_position(marker, antenna_h_m),
     do: add3(marker, scale3(marker, antenna_h_m / norm3(marker)))
+
+  defp antenna_height_m(obs) do
+    assert {height_m, east_m, north_m} = Observations.antenna_delta_hen(obs)
+    assert east_m == 0.0
+    assert north_m == 0.0
+    height_m
+  end
 
   defp add3({ax, ay, az}, {bx, by, bz}), do: {ax + bx, ay + by, az + bz}
   defp sub3({ax, ay, az}, {bx, by, bz}), do: {ax - bx, ay - by, az - bz}

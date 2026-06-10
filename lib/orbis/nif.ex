@@ -121,6 +121,8 @@ defmodule Orbis.NIF do
 
   def rinex_obs_approx_position(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
+  def rinex_obs_antenna_delta_hen(_handle), do: :erlang.nif_error(:nif_not_loaded)
+
   def rinex_obs_codes(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
   def rinex_obs_glonass_slots(_handle), do: :erlang.nif_error(:nif_not_loaded)

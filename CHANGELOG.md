@@ -28,6 +28,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - RTK float/fixed/filter baseline solvers accept `stochastic_model: :rtklib`
   for RTKLIB's floor-plus-elevation single-difference variance shape. The
   default remains `:simple`.
+- `Orbis.GNSS.RINEX.Observations.antenna_delta_hen/1` exposes the parsed
+  `ANTENNA: DELTA H/E/N` receiver antenna offset so real RTK gates and
+  consumers can derive antenna-reference-point baselines from the observation
+  product itself.
 
 ### Fixed
 

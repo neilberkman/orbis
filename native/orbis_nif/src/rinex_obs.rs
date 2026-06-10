@@ -77,6 +77,16 @@ fn rinex_obs_approx_position(env: Env<'_>, handle: ResourceArc<RinexObsResource>
     }
 }
 
+/// The antenna reference-point offset from the marker `{h_m, e_m, n_m}`, or
+/// the atom `nil` when the file carries no `ANTENNA: DELTA H/E/N`.
+#[rustler::nif]
+fn rinex_obs_antenna_delta_hen(env: Env<'_>, handle: ResourceArc<RinexObsResource>) -> Term<'_> {
+    match handle.obs.header.antenna_delta_hen_m {
+        Some([h, e, n]) => (h, e, n).encode(env),
+        None => rustler::types::atom::nil().encode(env),
+    }
+}
+
 /// The per-constellation observation-code table as `[{"G", ["C1C", ...]}, ...]`
 /// in declared order (system letter, then the code list).
 #[rustler::nif]
