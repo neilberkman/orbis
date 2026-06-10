@@ -16,6 +16,7 @@ defmodule Orbis.GNSS.RTKRealArcTest do
                    __DIR__,
                    "fixtures/obs/WTZZ00DEU_R_20201770000_01D_30S_MO_120epoch.rnx"
                  )
+  @rtklib_oracle_path Path.join(__DIR__, "fixtures/rtk/wtzr_wtzz_rtklib_oracle.json")
 
   @c_m_s 299_792_458.0
   @gps_l1_hz 1_575_420_000.0
@@ -214,6 +215,62 @@ defmodule Orbis.GNSS.RTKRealArcTest do
     assert evaluated <= 20_000
   end
 
+  @tag timeout: 180_000
+  test "RTKLIB fixes the two-epoch prefix that the current batch partial fix gets wrong" do
+    oracle =
+      @rtklib_oracle_path
+      |> File.read!()
+      |> Jason.decode!()
+
+    sp3 = SP3.load!(@sp3_path)
+    base_obs = Observations.load!(@wtzr_obs_path)
+    rover_obs = Observations.load!(@wtzz_obs_path)
+    base_arp = arp_position(@wtzr_marker, @wtzr_antenna_h_m)
+    rover_arp = arp_position(@wtzz_marker, @wtzz_antenna_h_m)
+    antenna_baseline = sub3(rover_arp, base_arp)
+    antenna_baseline_enu = enu_map_to_tuple(oracle["truth"]["antenna_baseline_enu_m"])
+
+    rtklib_epoch_2 = oracle["per_epoch"] |> Enum.at(1)
+    rtklib_epoch_2_baseline = enu_map_to_tuple(rtklib_epoch_2["baseline_enu_m"])
+
+    assert oracle["reference"]["first_fixed_index"] == 1
+    assert rtklib_epoch_2["fix_status"] == "fixed"
+    assert rtklib_epoch_2["ratio"] >= 3.0
+    assert position_error(rtklib_epoch_2_baseline, antenna_baseline_enu) < 0.006
+
+    epochs =
+      sp3
+      |> real_gps_l1_rtk_epochs(base_obs, rover_obs, 2)
+
+    assert length(epochs) == 2
+
+    assert {:ok, sol} =
+             RTK.solve_fixed_baseline_epochs(base_arp, epochs,
+               initial_baseline_m: {0.0, 0.0, 0.0},
+               max_iterations: 10,
+               on_cycle_slip: :split_arc,
+               elevation_weighting: true,
+               code_sigma_m: 2.0,
+               phase_sigma_m: 0.01,
+               ambiguity_wavelength_m: @gps_l1_wavelength_m,
+               integer_candidate_limit: 200_000,
+               partial_ambiguity_resolution: true,
+               partial_min_ambiguities: 4
+             )
+
+    assert sol.metadata.integer_status == :fixed
+    assert sol.metadata.partial_fixed
+    assert sol.metadata.integer_ratio >= 3.0
+    assert sol.metadata.integer_method == :lambda
+    assert sol.metadata.n_epochs == 2
+
+    # This pins the current gap: a batch partial-AR solve can pass the ratio
+    # test on the two-epoch prefix while landing far from the same ARP truth
+    # that RTKLIB fixes at epoch 2. The sequential filter must eliminate this
+    # false confidence, not merely produce a fixed status.
+    assert position_error(sol.baseline_m, antenna_baseline) > 0.5
+  end
+
   defp real_gps_l1_rtk_epochs(sp3, base_obs, rover_obs, count) do
     rover_by_epoch = Map.new(Observations.epochs(rover_obs), &{&1.epoch, &1})
 
@@ -385,7 +442,17 @@ defmodule Orbis.GNSS.RTKRealArcTest do
   defp scale3({x, y, z}, s), do: {x * s, y * s, z * s}
   defp norm3({x, y, z}), do: :math.sqrt(x * x + y * y + z * z)
 
+  defp enu_map_to_tuple(%{"east" => east, "north" => north, "up" => up}), do: {east, north, up}
+
   defp position_error(%{x_m: x, y_m: y, z_m: z}, {truth_x, truth_y, truth_z}) do
+    :math.sqrt(
+      (x - truth_x) * (x - truth_x) +
+        (y - truth_y) * (y - truth_y) +
+        (z - truth_z) * (z - truth_z)
+    )
+  end
+
+  defp position_error({x, y, z}, {truth_x, truth_y, truth_z}) do
     :math.sqrt(
       (x - truth_x) * (x - truth_x) +
         (y - truth_y) * (y - truth_y) +
