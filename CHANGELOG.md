@@ -25,6 +25,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   corresponding double-difference integer combinations, and seeds the
   single-difference ambiguities from phase-code differences rather than starting
   every ambiguity at zero.
+- RTK float/fixed/filter baseline solvers accept `stochastic_model: :rtklib`
+  for RTKLIB's floor-plus-elevation single-difference variance shape. The
+  default remains `:simple`.
 
 ### Fixed
 

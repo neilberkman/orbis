@@ -199,6 +199,7 @@ defmodule Orbis.GNSS.RTKTest do
                model: :double_difference,
                code_sigma_m: 1.0,
                phase_sigma_m: 0.02,
+               stochastic_model: :simple,
                elevation_weighting: false,
                min_elevation_sin: 0.05
              }
@@ -281,6 +282,45 @@ defmodule Orbis.GNSS.RTKTest do
                weighted.metadata.ambiguity_float.covariance_m
 
       assert position_error(weighted.baseline_m, @truth_baseline) < 1.0e-5
+    end
+
+    test "can use an RTKLIB-style floor plus elevation stochastic model" do
+      epochs =
+        @sat_positions
+        |> Enum.with_index()
+        |> Enum.map(fn {positions, idx} ->
+          synthetic_baseline_epoch(@base, @truth_baseline, positions,
+            epoch: idx,
+            ambiguities_m: @ambiguities
+          )
+        end)
+
+      assert {:ok, simple} =
+               RTK.solve_float_baseline_epochs(@base, epochs,
+                 reference_satellite_id: "G01",
+                 elevation_weighting: true,
+                 code_sigma_m: 0.3,
+                 phase_sigma_m: 0.003,
+                 initial_baseline_m: {-40.0, 35.0, 12.0}
+               )
+
+      assert {:ok, rtklib} =
+               RTK.solve_float_baseline_epochs(@base, epochs,
+                 reference_satellite_id: "G01",
+                 stochastic_model: :rtklib,
+                 code_sigma_m: 0.3,
+                 phase_sigma_m: 0.003,
+                 initial_baseline_m: {-40.0, 35.0, 12.0}
+               )
+
+      assert rtklib.metadata.measurement_covariance.stochastic_model == :rtklib
+      assert rtklib.metadata.measurement_covariance.code_sigma_m == 0.3
+      assert rtklib.metadata.measurement_covariance.phase_sigma_m == 0.003
+
+      refute rtklib.metadata.ambiguity_float.covariance_m ==
+               simple.metadata.ambiguity_float.covariance_m
+
+      assert position_error(rtklib.baseline_m, @truth_baseline) < 1.0e-5
     end
 
     test "can apply an elevation mask before reference and ambiguity selection" do
@@ -484,6 +524,9 @@ defmodule Orbis.GNSS.RTKTest do
 
       assert RTK.solve_float_baseline_epochs(@base, [epoch], elevation_weighting: :bad) ==
                {:error, {:invalid_option, :elevation_weighting}}
+
+      assert RTK.solve_float_baseline_epochs(@base, [epoch], stochastic_model: :bad) ==
+               {:error, {:invalid_option, :stochastic_model}}
 
       assert RTK.solve_float_baseline_epochs(@base, [epoch], elevation_mask_deg: -1.0) ==
                {:error, {:invalid_option, :elevation_mask_deg}}

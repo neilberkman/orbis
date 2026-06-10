@@ -68,6 +68,7 @@ defmodule Orbis.GNSS.RTK do
   @default_ambiguity_tolerance_m 1.0e-4
   @default_code_sigma_m 1.0
   @default_phase_sigma_m 0.02
+  @default_stochastic_model :simple
   @default_integer_search_radius_cycles 1
   @default_integer_ratio_threshold 3.0
   @default_integer_candidate_limit 200_000
@@ -85,6 +86,7 @@ defmodule Orbis.GNSS.RTK do
     :initial_baseline_m,
     :code_sigma_m,
     :phase_sigma_m,
+    :stochastic_model,
     :on_cycle_slip,
     :elevation_weighting,
     :elevation_mask_deg,
@@ -185,6 +187,7 @@ defmodule Orbis.GNSS.RTK do
                 model: :double_difference,
                 code_sigma_m: float(),
                 phase_sigma_m: float(),
+                stochastic_model: :simple | :rtklib,
                 elevation_weighting: boolean(),
                 min_elevation_sin: float()
               },
@@ -263,6 +266,7 @@ defmodule Orbis.GNSS.RTK do
                 model: :double_difference,
                 code_sigma_m: float(),
                 phase_sigma_m: float(),
+                stochastic_model: :simple | :rtklib,
                 elevation_weighting: boolean(),
                 min_elevation_sin: float()
               },
@@ -465,6 +469,11 @@ defmodule Orbis.GNSS.RTK do
       double-difference covariance where rows sharing the reference satellite
       are correlated. Defaults are `#{@default_code_sigma_m}` and
       `#{@default_phase_sigma_m}`.
+    * `:stochastic_model` - `:simple` (default) uses constant sigmas, optionally
+      scaled by `:elevation_weighting`. `:rtklib` uses RTKLIB's floor-plus-
+      elevation single-difference variance shape, treating `:code_sigma_m` and
+      `:phase_sigma_m` as the model's constant/elevation coefficients in
+      metres.
     * `:on_cycle_slip` - what to do when a base or rover observation carries an
       LLI loss-of-lock bit: `:error` returns
       `{:error, {:cycle_slip_detected, receiver, sat, epoch, [:lli]}}`
@@ -2259,11 +2268,13 @@ defmodule Orbis.GNSS.RTK do
   defp baseline_weights(opts) do
     with {:ok, code_sigma_m} <- measurement_sigma(opts, :code_sigma_m, @default_code_sigma_m),
          {:ok, phase_sigma_m} <- measurement_sigma(opts, :phase_sigma_m, @default_phase_sigma_m),
+         {:ok, stochastic_model} <- stochastic_model(opts),
          {:ok, elevation_weighting?} <- elevation_weighting(opts) do
       {:ok,
        %{
          code_sigma_m: code_sigma_m,
          phase_sigma_m: phase_sigma_m,
+         stochastic_model: stochastic_model,
          elevation_weighting?: elevation_weighting?
        }}
     end
@@ -2281,6 +2292,13 @@ defmodule Orbis.GNSS.RTK do
     case Keyword.get(opts, :elevation_weighting, false) do
       value when is_boolean(value) -> {:ok, value}
       _other -> {:error, {:invalid_option, :elevation_weighting}}
+    end
+  end
+
+  defp stochastic_model(opts) do
+    case Keyword.get(opts, :stochastic_model, @default_stochastic_model) do
+      value when value in [:simple, :rtklib] -> {:ok, value}
+      _other -> {:error, {:invalid_option, :stochastic_model}}
     end
   end
 
@@ -2788,11 +2806,8 @@ defmodule Orbis.GNSS.RTK do
         :phase -> weights.phase_sigma_m
       end
 
-    sat_sd_variance =
-      single_difference_variance(sigma, weights.elevation_weighting?, base, sat_pos)
-
-    ref_sd_variance =
-      single_difference_variance(sigma, weights.elevation_weighting?, base, ref_pos)
+    sat_sd_variance = single_difference_variance(sigma, weights, base, sat_pos)
+    ref_sd_variance = single_difference_variance(sigma, weights, base, ref_pos)
 
     dd_variance = sat_sd_variance + ref_sd_variance
 
@@ -2803,14 +2818,29 @@ defmodule Orbis.GNSS.RTK do
     }
   end
 
-  defp single_difference_variance(sigma_m, false, _base, _sat_pos) do
+  defp single_difference_variance(
+         sigma_m,
+         %{stochastic_model: :simple, elevation_weighting?: false},
+         _base,
+         _sat_pos
+       ) do
     2.0 * sigma_m * sigma_m
   end
 
-  defp single_difference_variance(sigma_m, true, base, sat_pos) do
+  defp single_difference_variance(
+         sigma_m,
+         %{stochastic_model: :simple, elevation_weighting?: true},
+         base,
+         sat_pos
+       ) do
     sin_el = elevation_sin(base, sat_pos) |> max(@min_elevation_sin)
     scaled_sigma = sigma_m / sin_el
     2.0 * scaled_sigma * scaled_sigma
+  end
+
+  defp single_difference_variance(sigma_m, %{stochastic_model: :rtklib}, base, sat_pos) do
+    sin_el = elevation_sin(base, sat_pos) |> max(@min_elevation_sin)
+    2.0 * (sigma_m * sigma_m + sigma_m * sigma_m / (sin_el * sin_el))
   end
 
   defp design_baseline_row({dx, dy, dz}, ambiguity_id, ambiguity_ids) do
@@ -2926,6 +2956,7 @@ defmodule Orbis.GNSS.RTK do
              model: :double_difference,
              code_sigma_m: weights.code_sigma_m,
              phase_sigma_m: weights.phase_sigma_m,
+             stochastic_model: weights.stochastic_model,
              elevation_weighting: weights.elevation_weighting?,
              min_elevation_sin: @min_elevation_sin
            },
@@ -3390,6 +3421,7 @@ defmodule Orbis.GNSS.RTK do
                model: :double_difference,
                code_sigma_m: weights.code_sigma_m,
                phase_sigma_m: weights.phase_sigma_m,
+               stochastic_model: weights.stochastic_model,
                elevation_weighting: weights.elevation_weighting?,
                min_elevation_sin: @min_elevation_sin
              },
@@ -4018,6 +4050,7 @@ defmodule Orbis.GNSS.RTK do
                model: :double_difference,
                code_sigma_m: weights.code_sigma_m,
                phase_sigma_m: weights.phase_sigma_m,
+               stochastic_model: weights.stochastic_model,
                elevation_weighting: weights.elevation_weighting?,
                min_elevation_sin: @min_elevation_sin
              }
