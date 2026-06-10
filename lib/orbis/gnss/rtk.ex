@@ -1835,29 +1835,88 @@ defmodule Orbis.GNSS.RTK do
     with {:ok, policy} <- rtk_cycle_slip_policy(opts) do
       slips = cycle_slip_events(epochs)
 
-      case {policy, slips} do
-        {_policy, []} ->
-          {:ok, epochs, empty_cycle_slip_meta()}
+      result =
+        case {policy, slips} do
+          {_policy, []} ->
+            {:ok, epochs, empty_cycle_slip_meta()}
 
-        {:error, [slip | _]} ->
-          {:error,
-           {:cycle_slip_detected, slip.receiver, slip.satellite_id, slip.epoch, slip.reasons}}
+          {:error, [slip | _]} ->
+            {:error,
+             {:cycle_slip_detected, slip.receiver, slip.satellite_id, slip.epoch, slip.reasons}}
 
-        {:drop_satellite, slips} ->
-          dropped = slips |> Enum.map(& &1.satellite_id) |> Enum.uniq() |> Enum.sort()
-          {:ok, drop_cycle_slip_sats(epochs, dropped), %{dropped_sats: dropped, split_arcs: []}}
+          {:drop_satellite, slips} ->
+            dropped = slips |> Enum.map(& &1.satellite_id) |> Enum.uniq() |> Enum.sort()
+            {:ok, drop_cycle_slip_sats(epochs, dropped), %{dropped_sats: dropped, split_arcs: []}}
 
-        {:split_arc, slips} ->
-          split_keys = MapSet.new(slips, &{&1.receiver, &1.satellite_id})
-          split_epochs = split_cycle_slip_arcs(epochs, split_keys)
+          {:split_arc, slips} ->
+            split_keys = MapSet.new(slips, &{&1.receiver, &1.satellite_id})
+            split_epochs = split_cycle_slip_arcs(epochs, split_keys)
 
-          {:ok, split_epochs,
-           %{dropped_sats: [], split_arcs: cycle_slip_split_metadata(split_epochs, split_keys)}}
+            {:ok, split_epochs,
+             %{dropped_sats: [], split_arcs: cycle_slip_split_metadata(split_epochs, split_keys)}}
+        end
+
+      # A satellite that disappears (sets below the horizon, or loses lock with no
+      # LLI flag) and later reappears must NOT reuse its previous carrier-phase
+      # ambiguity: lock was lost during the outage, so the integer can differ.
+      # This is ALWAYS a fresh ambiguity arc, independent of the LLI cycle-slip
+      # policy above — reusing the pre-outage ambiguity corrupts the solution
+      # (the sequential filter would hold a stale integer). Continuous arcs are
+      # left unchanged.
+      case result do
+        {:ok, prepared, meta} -> {:ok, segment_reacquired_arcs(prepared), meta}
+        {:error, _reason} = err -> err
       end
     end
   end
 
   defp empty_cycle_slip_meta, do: %{dropped_sats: [], split_arcs: []}
+
+  defp segment_reacquired_arcs(epochs) do
+    epochs
+    |> segment_receiver_reacquisitions(:base)
+    |> segment_receiver_reacquisitions(:rover)
+  end
+
+  # Walk one receiver's observation stream in order; each time a satellite
+  # reappears after being absent, bump its arc counter and rewrite its
+  # `ambiguity_id` so the post-outage arc is a distinct ambiguity. A satellite's
+  # first arc keeps its original id, so continuous tracking is unaffected.
+  defp segment_receiver_reacquisitions(epochs, receiver) do
+    {epochs, _state} =
+      Enum.map_reduce(epochs, %{present_last: MapSet.new(), arcs: %{}}, fn epoch, state ->
+        observations = Map.fetch!(epoch, receiver)
+        present = observations |> Map.keys() |> MapSet.new()
+
+        {observations, arcs} =
+          Enum.reduce(observations, {observations, state.arcs}, fn {sat, obs},
+                                                                   {observations, arcs} ->
+            reacquired? =
+              Map.has_key?(arcs, sat) and not MapSet.member?(state.present_last, sat)
+
+            arc = Map.get(arcs, sat, 0) + if(reacquired?, do: 1, else: 0)
+            arcs = Map.put(arcs, sat, arc)
+
+            observations =
+              if arc > 0 do
+                Map.put(observations, sat, %{
+                  obs
+                  | ambiguity_id: reacquired_ambiguity_id(obs.ambiguity_id, arc)
+                })
+              else
+                observations
+              end
+
+            {observations, arcs}
+          end)
+
+        {Map.put(epoch, receiver, observations), %{present_last: present, arcs: arcs}}
+      end)
+
+    epochs
+  end
+
+  defp reacquired_ambiguity_id(ambiguity_id, arc), do: "#{ambiguity_id}~ra#{arc}"
 
   defp prepare_baseline_epochs(base, epochs, opts) do
     with :ok <- ensure_nonempty_epochs(epochs),

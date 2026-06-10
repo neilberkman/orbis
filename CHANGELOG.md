@@ -49,6 +49,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The sequential RTK filter now starts a fresh ambiguity arc when a satellite
+  reappears after an outage (set below the horizon, or lost lock without an LLI
+  flag). Previously only an explicit LLI cycle slip broke an arc, so a re-risen
+  satellite reused its pre-outage carrier-phase ambiguity — a stale integer that
+  could differ from the truth and corrupt the static baseline. Re-acquisition is
+  now always treated as a new arc, independent of the `:on_cycle_slip` policy;
+  continuous arcs are unaffected.
 - RTK APIs now reject unknown/misspelled options at the public boundary instead
   of silently falling back to defaults, and RTK residual finalization returns a
   tagged error if an internal row set is missing either the code or phase member

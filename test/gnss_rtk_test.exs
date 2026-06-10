@@ -903,6 +903,70 @@ defmodule Orbis.GNSS.RTKTest do
       end
     end
 
+    test "re-initializes the ambiguity of a satellite that sets and re-rises" do
+      ref = "G01"
+      sats = ["G01", "G02", "G03", "G04", "G05"]
+      base_positions = hd(@sat_positions)
+
+      others_m = %{
+        "G02" => 5 * @l1_wavelength_m,
+        "G03" => -7 * @l1_wavelength_m,
+        "G04" => 12 * @l1_wavelength_m
+      }
+
+      # G05's carrier integer changes across the outage (lock lost): -4 -> +9.
+      g05_pre_m = -4 * @l1_wavelength_m
+      g05_post_m = 9 * @l1_wavelength_m
+
+      epochs =
+        for idx <- 0..14 do
+          positions =
+            Map.new(sats, fn sat ->
+              {x, y, z} = Map.fetch!(base_positions, sat)
+              {sat, {x + idx * 1_000.0, y - idx * 800.0, z + idx * 1_200.0}}
+            end)
+
+          {positions, ambiguities_m} =
+            cond do
+              # G05 has set below the horizon for three epochs.
+              idx in 6..8 -> {Map.delete(positions, "G05"), others_m}
+              idx <= 5 -> {positions, Map.put(others_m, "G05", g05_pre_m)}
+              # Re-risen with a DIFFERENT integer and NO loss-of-lock flag.
+              true -> {positions, Map.put(others_m, "G05", g05_post_m)}
+            end
+
+          synthetic_baseline_epoch(@base, @truth_baseline, positions,
+            epoch: idx,
+            base_clock_m: 15.0 + idx,
+            rover_clock_m: -8.0 + idx,
+            ambiguities_m: ambiguities_m
+          )
+        end
+
+      assert {:ok, sol} =
+               RTK.solve_filter_baseline_epochs(@base, epochs,
+                 reference_satellite_id: ref,
+                 ambiguity_wavelength_m: @l1_wavelength_m,
+                 initial_baseline_m: {-40.0, 35.0, 12.0}
+               )
+
+      # A stale G05 ambiguity held from the pre-outage arc (N=-4) conflicts with
+      # the post-outage truth (N=+9); if the filter does not start a fresh arc on
+      # re-rise it corrupts the static baseline.
+      assert position_error(sol.baseline_m, @truth_baseline) < 1.0e-3
+
+      # G05 must resolve as TWO separate ambiguity arcs: the pre-outage arc keeps
+      # its true integer (-4) and the post-outage arc resolves to its own true
+      # integer (+9). With the stale-carry bug, G05 stays a single arc pinned to
+      # -4 and the baseline is corrupted (asserted above).
+      g05_fixed =
+        for {id, cycles} <- sol.fixed_ambiguities_cycles,
+            String.starts_with?(id, "G05"),
+            do: cycles
+
+      assert Enum.sort(g05_fixed) == [-4, 9]
+    end
+
     test "bad filter options are tagged" do
       epoch = synthetic_baseline_epoch(@base, @truth_baseline, hd(@sat_positions))
 
