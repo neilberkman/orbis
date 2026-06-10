@@ -48,9 +48,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Tests
 
 - Added a vendored RTKLIB `rnx2rtkp` oracle fixture for the WTZR/WTZZ real RTK
-  arc. The fixture pins the L1+SP3 fix-and-hold reference target (119/120 fixed,
-  first fix at 2020-06-25 00:00:30 GPST, millimetre final ARP baseline error)
-  plus L1 instantaneous, L1 float, and L1/L2 comparison summaries.
+  arc. The fixture pins the L1+broadcast fix-and-hold reference target (119/120
+  fixed, first fix at 2020-06-25 00:00:30 GPST, millimetre final ARP baseline
+  error) plus L1 instantaneous, L1 float, and L1/L2 comparison summaries. The
+  provenance now records that RTKLIB defaults to broadcast ephemeris unless
+  `pos1-sateph = precise` is set, so this fixture is not mislabeled as an SP3
+  parity oracle.
 
 ## [0.15.1] - 2026-06-09
 

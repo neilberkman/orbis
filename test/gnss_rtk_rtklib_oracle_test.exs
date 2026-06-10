@@ -3,7 +3,7 @@ defmodule Orbis.GNSS.RTKRTKLIBOracleTest do
 
   @oracle_path Path.join(__DIR__, "fixtures/rtk/wtzr_wtzz_rtklib_oracle.json")
 
-  test "WTZR/WTZZ RTKLIB oracle fixture pins the L1+SP3 reference target" do
+  test "WTZR/WTZZ RTKLIB oracle fixture pins the L1+broadcast reference target" do
     oracle =
       @oracle_path
       |> File.read!()
@@ -14,7 +14,7 @@ defmodule Orbis.GNSS.RTKRTKLIBOracleTest do
     reference = oracle["reference"]
     epochs = oracle["per_epoch"]
 
-    assert reference["label"] == "l1_sp3_fix_and_hold"
+    assert reference["label"] == "l1_brdc_fix_and_hold"
     assert reference["epochs"] == 120
     assert reference["fixed_epochs"] == 119
     assert reference["first_fixed_index"] == 1
@@ -36,6 +36,6 @@ defmodule Orbis.GNSS.RTKRTKLIBOracleTest do
     assert modes["l1_instantaneous"]["fixed_epochs"] == 93
     assert modes["l1_instantaneous"]["first_fixed_time"] == "2020-06-25T00:02:00"
     assert modes["l1_float"]["fixed_epochs"] == 0
-    assert modes["l1_l2_sp3_fix_and_hold"]["fixed_epochs"] == 120
+    assert modes["l1_l2_brdc_fix_and_hold"]["fixed_epochs"] == 120
   end
 end

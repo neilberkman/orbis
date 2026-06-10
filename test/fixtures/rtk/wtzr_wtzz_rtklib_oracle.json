@@ -22,8 +22,8 @@
     }
   },
   "reference": {
-    "label": "l1_sp3_fix_and_hold",
-    "source_pos": "modes/l1_sp3.pos",
+    "label": "l1_brdc_fix_and_hold",
+    "source_pos": "l1_brdc.pos",
     "epochs": 120,
     "fixed_epochs": 119,
     "first_fixed_index": 1,
@@ -1513,8 +1513,8 @@
       "final_truth_error_m": 0.007537456329
     },
     {
-      "label": "l1_l2_sp3_fix_and_hold",
-      "source_pos": "l12_sp3.pos",
+      "label": "l1_l2_brdc_fix_and_hold",
+      "source_pos": "l12_brdc.pos",
       "epochs": 120,
       "fixed_epochs": 120,
       "first_fixed_index": 0,

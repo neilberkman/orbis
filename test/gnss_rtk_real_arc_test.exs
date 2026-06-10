@@ -214,7 +214,7 @@ defmodule Orbis.GNSS.RTKRealArcTest do
   end
 
   @tag timeout: 180_000
-  test "RTKLIB fixes the two-epoch prefix that the current batch partial fix gets wrong" do
+  test "broadcast-mode RTKLIB fixes the two-epoch prefix that batch partial AR gets wrong" do
     oracle =
       @rtklib_oracle_path
       |> File.read!()
@@ -267,10 +267,10 @@ defmodule Orbis.GNSS.RTKRealArcTest do
 
     # This pins the current gap: a batch partial-AR solve can pass the ratio
     # test on the two-epoch prefix while landing far from the same ARP truth that
-    # RTKLIB fixes at epoch 2. Matching RTKLIB's 10-degree elevation mask removes
-    # the low-elevation G08/G18/G27 contributors and improves the result, but the
-    # sequential filter must still eliminate the remaining false confidence, not
-    # merely produce a fixed status.
+    # RTKLIB's broadcast-mode run fixes at epoch 2. Matching its 10-degree
+    # elevation mask removes the low-elevation G08/G18/G27 contributors and
+    # improves the result, but the sequential filter must still eliminate the
+    # remaining false confidence, not merely produce a fixed status.
     error_m = position_error(sol.baseline_m, antenna_baseline)
     assert error_m > 0.3
     assert error_m < 0.5
@@ -305,10 +305,11 @@ defmodule Orbis.GNSS.RTKRealArcTest do
                integer_candidate_limit: 200_000
              )
 
-    # RTKLIB's variance shape is part of the parity lane, but it is not enough
-    # by itself to justify a fix on the two-epoch prefix. The remaining gap is
-    # the observable/correction model, not a ratio-threshold or covariance-form
-    # tweak.
+    # RTKLIB's variance shape is part of the comparison lane, but it is not
+    # enough by itself to justify a fix on the two-epoch prefix. The committed
+    # RTKLIB fixture is broadcast-mode, while these Orbis epochs are SP3-backed;
+    # the remaining gap is ephemeris/correction-model alignment, not a
+    # ratio-threshold or covariance-form tweak.
     assert rtklib_weighted_filter.metadata.measurement_covariance.stochastic_model == :rtklib
     assert rtklib_weighted_filter.metadata.first_fixed_index == nil
     assert Enum.all?(rtklib_weighted_filter.epochs, &(&1.integer_status == :not_fixed))
