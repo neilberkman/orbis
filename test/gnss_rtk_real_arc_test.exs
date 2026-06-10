@@ -336,6 +336,8 @@ defmodule Orbis.GNSS.RTKRealArcTest do
     assert last_epoch.integer_best_score < last_epoch.integer_second_best_score
     assert last_epoch.ambiguity_search.order != []
     assert Map.keys(last_epoch.ambiguity_search.float_cycles) == last_epoch.ambiguity_search.order
+    assert length(last_epoch.residuals_m) == length(last_epoch.ambiguity_search.order)
+    assert Enum.all?(last_epoch.residuals_m, &(&1.reference_satellite_id == "G30"))
   end
 
   defp real_gps_l1_rtk_epochs(sp3, base_obs, rover_obs, count) do

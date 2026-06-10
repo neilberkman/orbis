@@ -328,6 +328,7 @@ defmodule Orbis.GNSS.RTK do
             integer_second_best_score: float() | nil,
             integer_candidates: non_neg_integer() | nil,
             ambiguity_search: map() | nil,
+            residuals_m: [FloatBaselineSolution.residual()],
             newly_fixed_ambiguities: [String.t()],
             fixed_ambiguities: [String.t()]
           }
@@ -3529,7 +3530,19 @@ defmodule Orbis.GNSS.RTK do
              wavelengths,
              offsets,
              integer_opts
-           ) do
+           ),
+         {:ok, residual_rows} <-
+           build_epoch_sequential_baseline_rows(
+             base,
+             epoch,
+             reference_sat,
+             physical_sats,
+             sd_ambiguity_ids,
+             dd_ambiguity_pairs,
+             state,
+             weights
+           ),
+         {:ok, residuals} <- baseline_residuals(residual_rows, reference_sat) do
       newly_fixed =
         fixed_cycles |> Map.keys() |> Kernel.--(Map.keys(acc.fixed_cycles)) |> Enum.sort()
 
@@ -3546,6 +3559,7 @@ defmodule Orbis.GNSS.RTK do
         integer_second_best_score: Map.get(search_meta, :integer_second_best_score),
         integer_candidates: Map.get(search_meta, :integer_candidates),
         ambiguity_search: Map.get(search_meta, :ambiguity_search),
+        residuals_m: residuals,
         newly_fixed_ambiguities: newly_fixed,
         fixed_ambiguities: all_fixed
       }

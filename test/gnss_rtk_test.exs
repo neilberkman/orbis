@@ -889,6 +889,10 @@ defmodule Orbis.GNSS.RTKTest do
       assert length(fixed_epoch.ambiguity_search.covariance_inverse_cycles) ==
                length(fixed_epoch.ambiguity_search.order)
 
+      assert length(fixed_epoch.residuals_m) == length(expected_order)
+      assert Enum.all?(fixed_epoch.residuals_m, &(&1.reference_satellite_id == "G01"))
+      assert Enum.all?(fixed_epoch.residuals_m, &is_number(&1.phase_normalized))
+
       for {sat, expected_cycles} <- Map.delete(@fixed_cycles, "G01") do
         assert Map.fetch!(sol.fixed_ambiguities_cycles, sat) == expected_cycles
       end
