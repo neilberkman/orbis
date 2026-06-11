@@ -27,6 +27,7 @@ type StateTerm = (
     Vec<(String, i64)>,
     Vec<(String, f64)>,
 );
+type UpdateTerm = (StateTerm, f64, bool, Vec<String>, Vec<String>);
 type ModelTerm = (f64, f64, String, bool, bool);
 type UpdateOptsTerm = (f64, f64, f64, usize, f64);
 
@@ -77,17 +78,61 @@ pub fn rtk_filter_update_epoch<'a>(
         Err(err) => return Ok((atoms::error(), encode_update_error(env, err)).encode(env)),
     };
 
-    Ok((
-        atoms::ok(),
-        (
-            encode_state(update.state),
-            update.integer_ratio,
-            update.integer_fixed,
-            update.newly_fixed,
-            update.fixed_ids,
-        ),
+    Ok((atoms::ok(), encode_update(update)).encode(env))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+#[allow(clippy::too_many_arguments)]
+pub fn rtk_filter_update_epochs<'a>(
+    env: Env<'a>,
+    state_term: StateTerm,
+    epoch_terms: Vec<EpochTerm>,
+    base: Vec3,
+    model_term: ModelTerm,
+    wavelengths: Vec<(String, f64)>,
+    offsets: Vec<(String, f64)>,
+    opts_term: UpdateOptsTerm,
+) -> NifResult<Term<'a>> {
+    let Some(model) = decode_model(model_term) else {
+        return Ok((atoms::error(), atoms::invalid_stochastic_model()).encode(env));
+    };
+
+    let base = vec3(base);
+    let wavelengths = wavelengths.into_iter().collect::<BTreeMap<_, _>>();
+    let offsets = offsets.into_iter().collect::<BTreeMap<_, _>>();
+    let opts = decode_opts(opts_term);
+    let mut state = decode_state(state_term);
+    let mut updates = Vec::with_capacity(epoch_terms.len());
+
+    for epoch_term in epoch_terms {
+        let update = match update_epoch(
+            state,
+            &decode_epoch(epoch_term),
+            base,
+            &model,
+            &wavelengths,
+            &offsets,
+            &opts,
+        ) {
+            Ok(update) => update,
+            Err(err) => return Ok((atoms::error(), encode_update_error(env, err)).encode(env)),
+        };
+
+        state = update.state.clone();
+        updates.push(encode_update(update));
+    }
+
+    Ok((atoms::ok(), updates).encode(env))
+}
+
+fn encode_update(update: astrodynamics_gnss::rtk_filter::EpochUpdate) -> UpdateTerm {
+    (
+        encode_state(update.state),
+        update.integer_ratio,
+        update.integer_fixed,
+        update.newly_fixed,
+        update.fixed_ids,
     )
-        .encode(env))
 }
 
 fn encode_update_error<'a>(env: Env<'a>, err: UpdateError) -> Term<'a> {

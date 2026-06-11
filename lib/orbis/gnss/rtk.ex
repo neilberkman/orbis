@@ -3580,35 +3580,49 @@ defmodule Orbis.GNSS.RTK do
       epochs: []
     }
 
-    runner =
-      case filter_kernel do
-        :elixir -> &sequential_filter_epoch/15
-        :rust -> &sequential_filter_epoch_rust/15
-      end
+    case filter_kernel do
+      :elixir ->
+        epochs
+        |> Enum.reduce_while({:ok, initial}, fn epoch, {:ok, acc} ->
+          case sequential_filter_epoch(
+                 base,
+                 epoch,
+                 reference_sat,
+                 physical_sats,
+                 sd_ambiguity_ids,
+                 dd_ambiguity_ids,
+                 dd_ambiguity_pairs,
+                 dd_ambiguity_satellites,
+                 wavelengths,
+                 offsets,
+                 weights,
+                 solve_opts,
+                 integer_opts,
+                 filter_opts,
+                 acc
+               ) do
+            {:ok, next} -> {:cont, {:ok, next}}
+            {:error, _reason} = err -> {:halt, err}
+          end
+        end)
 
-    epochs
-    |> Enum.reduce_while({:ok, initial}, fn epoch, {:ok, acc} ->
-      case runner.(
-             base,
-             epoch,
-             reference_sat,
-             physical_sats,
-             sd_ambiguity_ids,
-             dd_ambiguity_ids,
-             dd_ambiguity_pairs,
-             dd_ambiguity_satellites,
-             wavelengths,
-             offsets,
-             weights,
-             solve_opts,
-             integer_opts,
-             filter_opts,
-             acc
-           ) do
-        {:ok, next} -> {:cont, {:ok, next}}
-        {:error, _reason} = err -> {:halt, err}
-      end
-    end)
+      :rust ->
+        sequential_filter_epochs_rust(
+          base,
+          epochs,
+          reference_sat,
+          physical_sats,
+          dd_ambiguity_pairs,
+          dd_ambiguity_satellites,
+          wavelengths,
+          offsets,
+          weights,
+          solve_opts,
+          integer_opts,
+          filter_opts,
+          initial
+        )
+    end
     |> case do
       {:ok, acc} ->
         baseline = acc.state.baseline
@@ -3792,13 +3806,11 @@ defmodule Orbis.GNSS.RTK do
     end
   end
 
-  defp sequential_filter_epoch_rust(
+  defp sequential_filter_epochs_rust(
          base,
-         epoch,
+         epochs,
          reference_sat,
          physical_sats,
-         _sd_ambiguity_ids,
-         _dd_ambiguity_ids,
          dd_ambiguity_pairs,
          dd_ambiguity_satellites,
          wavelengths,
@@ -3811,18 +3823,51 @@ defmodule Orbis.GNSS.RTK do
        ) do
     rust_wavelengths = rust_sd_keyed_values(dd_ambiguity_pairs, wavelengths)
     rust_offsets = rust_sd_keyed_values(dd_ambiguity_pairs, offsets)
+    rust_epochs = Enum.map(epochs, &rust_epoch_term(&1, reference_sat, physical_sats))
 
-    with {:ok, {rust_state, ratio, fixed?, newly_fixed_sd, fixed_sd_ids}} <-
-           NIF.rtk_filter_update_epoch(
+    with {:ok, updates} <-
+           NIF.rtk_filter_update_epochs(
              acc.rust_state,
-             rust_epoch_term(epoch, reference_sat, physical_sats),
+             rust_epochs,
              base,
              rust_model_term(weights),
              rust_wavelengths,
              rust_offsets,
              rust_update_opts_term(filter_opts, solve_opts, integer_opts)
-           ),
-         {:ok, state, information, sd_fixed_cycles, sd_fixed_m, sd_ambiguity_ids} <-
+           ) do
+      epochs
+      |> Enum.zip(updates)
+      |> Enum.reduce_while({:ok, acc}, fn {epoch, update}, {:ok, acc} ->
+        case apply_rust_filter_update(
+               update,
+               base,
+               epoch,
+               reference_sat,
+               physical_sats,
+               dd_ambiguity_pairs,
+               dd_ambiguity_satellites,
+               weights,
+               acc
+             ) do
+          {:ok, next} -> {:cont, {:ok, next}}
+          {:error, _reason} = err -> {:halt, err}
+        end
+      end)
+    end
+  end
+
+  defp apply_rust_filter_update(
+         {rust_state, ratio, fixed?, newly_fixed_sd, fixed_sd_ids},
+         base,
+         epoch,
+         reference_sat,
+         physical_sats,
+         dd_ambiguity_pairs,
+         dd_ambiguity_satellites,
+         weights,
+         acc
+       ) do
+    with {:ok, state, information, sd_fixed_cycles, sd_fixed_m, sd_ambiguity_ids} <-
            rust_filter_state_to_elixir(rust_state),
          ref_sd_id = single_difference(epoch, reference_sat).ambiguity_id,
          {:ok, fixed_cycles} <-

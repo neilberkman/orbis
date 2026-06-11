@@ -992,28 +992,31 @@ defmodule Orbis.GNSS.RTKTest do
           )
         end
 
-      assert {:ok, sol} =
-               RTK.solve_filter_baseline_epochs(@base, epochs,
-                 reference_satellite_id: ref,
-                 ambiguity_wavelength_m: @l1_wavelength_m,
-                 initial_baseline_m: {-40.0, 35.0, 12.0}
-               )
+      for kernel <- [:elixir, :rust] do
+        assert {:ok, sol} =
+                 RTK.solve_filter_baseline_epochs(@base, epochs,
+                   reference_satellite_id: ref,
+                   ambiguity_wavelength_m: @l1_wavelength_m,
+                   initial_baseline_m: {-40.0, 35.0, 12.0},
+                   filter_kernel: kernel
+                 )
 
-      # A stale G05 ambiguity held from the pre-outage arc (N=-4) conflicts with
-      # the post-outage truth (N=+9); if the filter does not start a fresh arc on
-      # re-rise it corrupts the static baseline.
-      assert position_error(sol.baseline_m, @truth_baseline) < 1.0e-3
+        # A stale G05 ambiguity held from the pre-outage arc (N=-4) conflicts with
+        # the post-outage truth (N=+9); if the filter does not start a fresh arc on
+        # re-rise it corrupts the static baseline.
+        assert position_error(sol.baseline_m, @truth_baseline) < 1.0e-3
 
-      # G05 must resolve as TWO separate ambiguity arcs: the pre-outage arc keeps
-      # its true integer (-4) and the post-outage arc resolves to its own true
-      # integer (+9). With the stale-carry bug, G05 stays a single arc pinned to
-      # -4 and the baseline is corrupted (asserted above).
-      g05_fixed =
-        for {id, cycles} <- sol.fixed_ambiguities_cycles,
-            String.starts_with?(id, "G05"),
-            do: cycles
+        # G05 must resolve as TWO separate ambiguity arcs: the pre-outage arc keeps
+        # its true integer (-4) and the post-outage arc resolves to its own true
+        # integer (+9). With the stale-carry bug, G05 stays a single arc pinned to
+        # -4 and the baseline is corrupted (asserted above).
+        g05_fixed =
+          for {id, cycles} <- sol.fixed_ambiguities_cycles,
+              String.starts_with?(id, "G05"),
+              do: cycles
 
-      assert Enum.sort(g05_fixed) == [-4, 9]
+        assert Enum.sort(g05_fixed) == [-4, 9]
+      end
     end
 
     test "bad filter options are tagged" do
