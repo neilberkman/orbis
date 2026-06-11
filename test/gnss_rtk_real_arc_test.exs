@@ -22,6 +22,10 @@ defmodule Orbis.GNSS.RTKRealArcTest do
                                 __DIR__,
                                 "fixtures/rtk/wtzr_wtzz_rtklib_precise_oracle.json"
                               )
+  @rtklib_kinematic_oracle_path Path.join(
+                                  __DIR__,
+                                  "fixtures/rtk/wtzr_wtzz_kinematic_gps_rtklib_oracle.json"
+                                )
   @c_m_s 299_792_458.0
   @gps_l1_hz 1_575_420_000.0
   @gps_l2_hz 1_227_600_000.0
@@ -354,6 +358,75 @@ defmodule Orbis.GNSS.RTKRealArcTest do
         assert delta < 1.0e-5 * max(elixir_epoch.integer_ratio, 1.0)
       end
     end
+  end
+
+  @tag timeout: 180_000
+  test "kinematic-mode RTK filter reproduces the RTKLIB kinematic oracle on the static arc" do
+    oracle = @rtklib_kinematic_oracle_path |> File.read!() |> Jason.decode!()
+
+    sp3 = SP3.load!(@cod_sp3_path)
+    base_obs = Observations.load!(@wtzr_obs_path)
+    rover_obs = Observations.load!(@wtzz_obs_path)
+    base_arp = arp_position(@wtzr_marker, antenna_height_m(base_obs))
+    rover_arp = arp_position(@wtzz_marker, antenna_height_m(rover_obs))
+    antenna_baseline = sub3(rover_arp, base_arp)
+
+    epochs = real_gps_l1_rtk_epochs(sp3, base_obs, rover_obs, oracle["reference"]["epochs"])
+    assert length(epochs) == oracle["reference"]["epochs"]
+
+    # The oracle was generated at RTKLIB elmask 15; the Elixir harness runs at
+    # mask 10 (its proven full-arc setting). Different masks select different
+    # satellite sets, so this gate compares baseline-to-truth and fix fraction —
+    # NOT exact per-epoch satellite counts — per the oracle-set-difference note.
+    base_opts = [
+      initial_baseline_m: {0.0, 0.0, 0.0},
+      max_iterations: 10,
+      on_cycle_slip: :split_arc,
+      elevation_mask_deg: 10.0,
+      stochastic_model: :rtklib,
+      code_sigma_m: 0.3,
+      phase_sigma_m: 0.003,
+      ambiguity_wavelength_m: @gps_l1_wavelength_m,
+      integer_candidate_limit: 200_000
+    ]
+
+    # Static accumulation (process noise off) is the existing default; kinematic
+    # adds the between-epoch Q-inflation time update on the baseline block.
+    assert {:ok, static} = RTK.solve_filter_baseline_epochs(base_arp, epochs, base_opts)
+
+    assert {:ok, kinematic} =
+             RTK.solve_filter_baseline_epochs(
+               base_arp,
+               epochs,
+               [process_noise_baseline_sigma_m: 30.0] ++ base_opts
+             )
+
+    # The time update is genuinely exercised: loosening the baseline prior each
+    # epoch moves the trajectory off the static accumulation.
+    assert position_error(kinematic.baseline_m, static.baseline_m) > 0.0
+
+    # RTKLIB kinematic fixes 119/120 on this arc; the baseline loosening can cost
+    # a few fixes, so gate on the oracle's fixed count with margin.
+    kin_fixed = Enum.count(kinematic.epochs, &(&1.integer_status == :fixed))
+
+    assert kin_fixed >= oracle["reference"]["fixed_epochs"] - 5
+
+    # Final baseline stays in RTKLIB's converged class (~mm).
+    assert position_error(kinematic.baseline_m, antenna_baseline) < 0.01
+
+    # Per-epoch accuracy AFTER the cold-start transient. Both filters are
+    # transient in the first epochs in different ways: the oracle floats epoch 1
+    # (~1 m), while the Elixir filter cold-fixes epoch 0 to a wrong integer and
+    # recovers by epoch 2 (a pre-existing static-filter behavior — epoch 0 is
+    # identical with and without process noise, since the time update is skipped
+    # on the first epoch). Past the warm-up, every fixed baseline is cm-class.
+    converged_errors =
+      kinematic.epochs
+      |> Enum.filter(&(&1.integer_status == :fixed and &1.index >= 2))
+      |> Enum.map(&position_error(&1.baseline_m, antenna_baseline))
+
+    assert Enum.max(converged_errors) < 0.02
+    assert Enum.sum(converged_errors) / length(converged_errors) < 0.01
   end
 
   defp real_gps_l1_rtk_epochs(sp3, base_obs, rover_obs, count) do

@@ -81,6 +81,7 @@ defmodule Orbis.GNSS.RTK do
   @default_filter_baseline_prior_sigma_m 100.0
   @default_filter_ambiguity_prior_sigma_m 1_000.0
   @default_filter_hold_sigma_m 1.0e-4
+  @default_filter_process_noise_baseline_sigma_m 0.0
   @rtk_filter_state_version 1
   @min_elevation_sin 0.05
   @double_difference_options [:reference_satellite_id]
@@ -117,6 +118,7 @@ defmodule Orbis.GNSS.RTK do
                                :baseline_prior_sigma_m,
                                :ambiguity_prior_sigma_m,
                                :hold_sigma_m,
+                               :process_noise_baseline_sigma_m,
                                :filter_kernel
                              ]
   @dual_wide_lane_options [
@@ -2388,12 +2390,19 @@ defmodule Orbis.GNSS.RTK do
              @default_filter_ambiguity_prior_sigma_m
            ),
          {:ok, hold_sigma_m} <-
-           positive_option(opts, :hold_sigma_m, @default_filter_hold_sigma_m) do
+           positive_option(opts, :hold_sigma_m, @default_filter_hold_sigma_m),
+         {:ok, process_noise_baseline_sigma_m} <-
+           nonnegative_option(
+             opts,
+             :process_noise_baseline_sigma_m,
+             @default_filter_process_noise_baseline_sigma_m
+           ) do
       {:ok,
        %{
          baseline_prior_sigma_m: baseline_prior_sigma_m,
          ambiguity_prior_sigma_m: ambiguity_prior_sigma_m,
-         hold_sigma_m: hold_sigma_m
+         hold_sigma_m: hold_sigma_m,
+         process_noise_baseline_sigma_m: process_noise_baseline_sigma_m
        }}
     end
   end
@@ -2409,6 +2418,14 @@ defmodule Orbis.GNSS.RTK do
     value = Keyword.get(opts, key, default)
 
     if is_number(value) and value > 0.0,
+      do: {:ok, value / 1.0},
+      else: {:error, {:invalid_option, key}}
+  end
+
+  defp nonnegative_option(opts, key, default) do
+    value = Keyword.get(opts, key, default)
+
+    if is_number(value) and value >= 0.0,
       do: {:ok, value / 1.0},
       else: {:error, {:invalid_option, key}}
   end
@@ -3730,6 +3747,8 @@ defmodule Orbis.GNSS.RTK do
          filter_opts,
          acc
        ) do
+    acc = time_update_information(acc, filter_opts)
+
     with {:ok, state, information, rows} <-
            iterate_sequential_filter_epoch(
              base,
@@ -4195,6 +4214,43 @@ defmodule Orbis.GNSS.RTK do
           )
       end
     end
+  end
+
+  # Kinematic process-noise time update (predict step). Between epochs, inflate
+  # the baseline (position) block of the prior covariance by Q = sigma^2 while
+  # leaving the carried ambiguities tight. This is the information<->covariance
+  # round-trip: Lambda -> P, P[baseline] += Q, P -> Lambda'. The prior mean
+  # (acc.state) is unchanged (constant-position model), and `sequential_prior_rhs`
+  # pairs the loosened information with that mean consistently.
+  #
+  # Skipped on the first epoch (no prior motion) and when process noise is off
+  # (sigma == 0, the static default). A singular round-trip falls back to the
+  # un-inflated prior rather than failing the epoch.
+  defp time_update_information(acc, filter_opts) do
+    sigma = Map.get(filter_opts, :process_noise_baseline_sigma_m, 0.0)
+
+    if acc.epochs != [] and sigma > 0.0 do
+      q = sigma * sigma
+
+      with {:ok, covariance} <- invert_matrix(acc.information),
+           {:ok, information} <- invert_matrix(inflate_baseline_covariance(covariance, q)) do
+        %{acc | information: information}
+      else
+        _ -> acc
+      end
+    else
+      acc
+    end
+  end
+
+  # Add process-noise variance q to the 3x3 baseline (position) diagonal of the
+  # covariance, leaving the ambiguity block and all cross-covariances untouched.
+  defp inflate_baseline_covariance(covariance, q) do
+    covariance
+    |> Enum.with_index()
+    |> Enum.map(fn {row, i} ->
+      if i < 3, do: List.update_at(row, i, &(&1 + q)), else: row
+    end)
   end
 
   defp sequential_initial_information(n, baseline_sigma_m, ambiguity_sigma_m) do
