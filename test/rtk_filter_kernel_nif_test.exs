@@ -32,6 +32,23 @@ defmodule Orbis.RTKFilterKernelNIFTest do
     offsets = for {id, _pos, _cycles} <- tl(sats), do: {id, 0.0}
     opts = {1.0, 1.0e-3, 1.0e-6, 10, 3.0}
 
+    bad_reference_state =
+      {{1, "G99", [], 10_000.0}, {-30.0, 25.0, -10.0}, [], prior_information(10_000.0), [], []}
+
+    assert {:error, {:reference_changed, "G99", "G01"}} =
+             NIF.rtk_filter_update_epoch(
+               bad_reference_state,
+               epoch,
+               base,
+               model,
+               wavelengths,
+               offsets,
+               opts
+             )
+
+    assert {:error, {:missing_wavelength, "G02"}} =
+             NIF.rtk_filter_update_epoch(state, epoch, base, model, [], offsets, opts)
+
     assert {:ok, {next_state, ratio, true, ["G02", "G03", "G04", "G05"], fixed_ids}} =
              NIF.rtk_filter_update_epoch(state, epoch, base, model, wavelengths, offsets, opts)
 

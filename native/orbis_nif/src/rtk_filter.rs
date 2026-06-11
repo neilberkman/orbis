@@ -6,7 +6,8 @@
 //! into Rust without introducing a second Elixir struct layer.
 
 use astrodynamics_gnss::rtk_filter::{
-    update_epoch, Epoch, FilterState, MeasModel, SatMeas, SearchOpts, StochasticModel, UpdateOpts,
+    update_epoch, Epoch, FilterState, MeasModel, SatMeas, SearchOpts, StochasticModel, UpdateError,
+    UpdateOpts,
 };
 use rustler::{Encoder, Env, NifResult, Term};
 use std::collections::BTreeMap;
@@ -33,8 +34,17 @@ mod atoms {
     rustler::atoms! {
         ok,
         error,
-        update_failed,
-        invalid_stochastic_model
+        invalid_stochastic_model,
+        reference_changed,
+        missing_ambiguity_column,
+        missing_wavelength,
+        missing_offset,
+        singular_geometry,
+        no_integer_candidates,
+        too_many_integer_candidates,
+        invalid_dimensions,
+        non_finite_input,
+        search_limit_exceeded
     }
 }
 
@@ -54,7 +64,7 @@ pub fn rtk_filter_update_epoch<'a>(
         return Ok((atoms::error(), atoms::invalid_stochastic_model()).encode(env));
     };
 
-    let Some(update) = update_epoch(
+    let update = match update_epoch(
         decode_state(state_term),
         &decode_epoch(epoch_term),
         vec3(base),
@@ -62,8 +72,9 @@ pub fn rtk_filter_update_epoch<'a>(
         &wavelengths.into_iter().collect::<BTreeMap<_, _>>(),
         &offsets.into_iter().collect::<BTreeMap<_, _>>(),
         &decode_opts(opts_term),
-    ) else {
-        return Ok((atoms::error(), atoms::update_failed()).encode(env));
+    ) {
+        Ok(update) => update,
+        Err(err) => return Ok((atoms::error(), encode_update_error(env, err)).encode(env)),
     };
 
     Ok((
@@ -77,6 +88,40 @@ pub fn rtk_filter_update_epoch<'a>(
         ),
     )
         .encode(env))
+}
+
+fn encode_update_error<'a>(env: Env<'a>, err: UpdateError) -> Term<'a> {
+    match err {
+        UpdateError::ReferenceChanged { expected, actual } => {
+            (atoms::reference_changed(), expected, actual).encode(env)
+        }
+        UpdateError::MissingAmbiguityColumn(id) => {
+            (atoms::missing_ambiguity_column(), id).encode(env)
+        }
+        UpdateError::MissingWavelength(id) => (atoms::missing_wavelength(), id).encode(env),
+        UpdateError::MissingOffset(id) => (atoms::missing_offset(), id).encode(env),
+        UpdateError::SingularGeometry => atoms::singular_geometry().encode(env),
+        UpdateError::Ils(err) => encode_ils_error(env, err),
+    }
+}
+
+fn encode_ils_error<'a>(env: Env<'a>, err: astrodynamics_gnss::ils::IlsError) -> Term<'a> {
+    match err {
+        astrodynamics_gnss::ils::IlsError::Singular => atoms::singular_geometry().encode(env),
+        astrodynamics_gnss::ils::IlsError::NoCandidates(n) => {
+            (atoms::no_integer_candidates(), n).encode(env)
+        }
+        astrodynamics_gnss::ils::IlsError::TooManyCandidates { evaluated, limit } => {
+            (atoms::too_many_integer_candidates(), evaluated, limit).encode(env)
+        }
+        astrodynamics_gnss::ils::IlsError::InvalidDimensions { n, rows } => {
+            (atoms::invalid_dimensions(), n, rows).encode(env)
+        }
+        astrodynamics_gnss::ils::IlsError::NonFinite => atoms::non_finite_input().encode(env),
+        astrodynamics_gnss::ils::IlsError::SearchLimitExceeded => {
+            atoms::search_limit_exceeded().encode(env)
+        }
+    }
 }
 
 fn decode_state(term: StateTerm) -> FilterState {
