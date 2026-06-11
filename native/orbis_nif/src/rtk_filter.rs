@@ -104,7 +104,7 @@ pub fn rtk_filter_update_epochs<'a>(
     let mut state = decode_state(state_term);
     let mut updates = Vec::with_capacity(epoch_terms.len());
 
-    for epoch_term in epoch_terms {
+    for (idx, epoch_term) in epoch_terms.into_iter().enumerate() {
         let update = match update_epoch(
             state,
             &decode_epoch(epoch_term),
@@ -115,7 +115,11 @@ pub fn rtk_filter_update_epochs<'a>(
             &opts,
         ) {
             Ok(update) => update,
-            Err(err) => return Ok((atoms::error(), encode_update_error(env, err)).encode(env)),
+            // Carry the failing epoch index so a long-arc failure is a lookup,
+            // not a debugging session: {:error, epoch_index, reason}.
+            Err(err) => {
+                return Ok((atoms::error(), idx, encode_update_error(env, err)).encode(env))
+            }
         };
 
         state = update.state.clone();
