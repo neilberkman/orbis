@@ -307,6 +307,30 @@ defmodule Orbis.GNSS.RTKRealArcTest do
 
     assert full_fixed_epochs >= precise_oracle["reference"]["fixed_epochs"] - 1
     assert position_error(full_filter.baseline_m, antenna_baseline) < 0.01
+
+    assert {:ok, rust_full_filter} =
+             RTK.solve_filter_baseline_epochs(base_arp, full_epochs,
+               initial_baseline_m: {0.0, 0.0, 0.0},
+               max_iterations: 10,
+               on_cycle_slip: :split_arc,
+               elevation_mask_deg: 10.0,
+               stochastic_model: :rtklib,
+               code_sigma_m: 0.3,
+               phase_sigma_m: 0.003,
+               ambiguity_wavelength_m: @gps_l1_wavelength_m,
+               integer_candidate_limit: 200_000,
+               filter_kernel: :rust
+             )
+
+    rust_fixed_epochs = Enum.count(rust_full_filter.epochs, &(&1.integer_status == :fixed))
+
+    assert rust_full_filter.metadata.filter_kernel == :rust
+
+    assert rust_full_filter.metadata.first_fixed_index <=
+             precise_oracle["reference"]["first_fixed_index"] + 1
+
+    assert rust_fixed_epochs >= precise_oracle["reference"]["fixed_epochs"] - 1
+    assert position_error(rust_full_filter.baseline_m, antenna_baseline) < 0.01
   end
 
   defp real_gps_l1_rtk_epochs(sp3, base_obs, rover_obs, count) do

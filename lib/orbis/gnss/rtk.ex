@@ -62,6 +62,7 @@ defmodule Orbis.GNSS.RTK do
   alias Orbis.GNSS.{CarrierPhase, IonosphereFree}
   alias Orbis.GNSS.Core.{Constants, Types}
   alias Orbis.GNSS.Core.IntegerLeastSquares
+  alias Orbis.NIF
 
   @default_max_iterations 8
   @default_position_tolerance_m 1.0e-4
@@ -80,6 +81,7 @@ defmodule Orbis.GNSS.RTK do
   @default_filter_baseline_prior_sigma_m 100.0
   @default_filter_ambiguity_prior_sigma_m 1_000.0
   @default_filter_hold_sigma_m 1.0e-4
+  @rtk_filter_state_version 1
   @min_elevation_sin 0.05
   @double_difference_options [:reference_satellite_id]
   @float_baseline_options [
@@ -114,7 +116,8 @@ defmodule Orbis.GNSS.RTK do
                              [
                                :baseline_prior_sigma_m,
                                :ambiguity_prior_sigma_m,
-                               :hold_sigma_m
+                               :hold_sigma_m,
+                               :filter_kernel
                              ]
   @dual_wide_lane_options [
     :wide_lane_min_epochs,
@@ -656,6 +659,8 @@ defmodule Orbis.GNSS.RTK do
       (default `#{@default_filter_ambiguity_prior_sigma_m}`).
     * `:hold_sigma_m` - pseudo-measurement sigma for fixed ambiguity holds
       (default `#{@default_filter_hold_sigma_m}`).
+    * `:filter_kernel` - `:elixir` (default) or `:rust`; the Rust kernel path
+      is opt-in while its trace parity gates mature.
 
   Returns `{:ok, %FilterBaselineSolution{}}` or a tagged error.
   """
@@ -669,6 +674,7 @@ defmodule Orbis.GNSS.RTK do
     with :ok <- validate_options(opts, @filter_baseline_options),
          {:ok, base} <- Types.normalize_ecef(base_position, :invalid_base_position),
          {:ok, filter_opts} <- sequential_filter_options(opts),
+         {:ok, filter_kernel} <- filter_kernel(opts),
          {:ok, normalized_epochs, prep_meta} <- prepare_baseline_epochs(base, epochs, float_opts),
          {:ok, common_sats, _not_common_sats} <- common_epoch_sats(normalized_epochs),
          {:ok, all_sats} <- all_epoch_sats(normalized_epochs),
@@ -706,7 +712,8 @@ defmodule Orbis.GNSS.RTK do
         integer_opts,
         filter_opts,
         initial_baseline,
-        prep_meta
+        prep_meta,
+        filter_kernel
       )
     end
   end
@@ -2391,6 +2398,13 @@ defmodule Orbis.GNSS.RTK do
     end
   end
 
+  defp filter_kernel(opts) do
+    case Keyword.get(opts, :filter_kernel, :elixir) do
+      value when value in [:elixir, :rust] -> {:ok, value}
+      _other -> {:error, {:invalid_option, :filter_kernel}}
+    end
+  end
+
   defp positive_option(opts, key, default) do
     value = Keyword.get(opts, key, default)
 
@@ -3534,7 +3548,8 @@ defmodule Orbis.GNSS.RTK do
          integer_opts,
          filter_opts,
          initial_baseline,
-         prep_meta
+         prep_meta,
+         filter_kernel
        ) do
     n = baseline_unknown_count(sd_ambiguity_ids)
 
@@ -3554,12 +3569,26 @@ defmodule Orbis.GNSS.RTK do
         ),
       fixed_cycles: %{},
       fixed_m: %{},
+      rust_state:
+        rust_initial_filter_state(
+          epochs,
+          reference_sat,
+          initial_baseline,
+          filter_opts.baseline_prior_sigma_m,
+          filter_opts.ambiguity_prior_sigma_m
+        ),
       epochs: []
     }
 
+    runner =
+      case filter_kernel do
+        :elixir -> &sequential_filter_epoch/15
+        :rust -> &sequential_filter_epoch_rust/15
+      end
+
     epochs
     |> Enum.reduce_while({:ok, initial}, fn epoch, {:ok, acc} ->
-      case sequential_filter_epoch(
+      case runner.(
              base,
              epoch,
              reference_sat,
@@ -3567,6 +3596,7 @@ defmodule Orbis.GNSS.RTK do
              sd_ambiguity_ids,
              dd_ambiguity_ids,
              dd_ambiguity_pairs,
+             dd_ambiguity_satellites,
              wavelengths,
              offsets,
              weights,
@@ -3625,7 +3655,8 @@ defmodule Orbis.GNSS.RTK do
              baseline_prior_sigma_m: filter_opts.baseline_prior_sigma_m,
              ambiguity_prior_sigma_m: filter_opts.ambiguity_prior_sigma_m,
              ambiguity_initialization: :phase_code,
-             initialized_ambiguity_count: initial_ambiguity_count
+             initialized_ambiguity_count: initial_ambiguity_count,
+             filter_kernel: filter_kernel
            }
          }}
 
@@ -3676,6 +3707,7 @@ defmodule Orbis.GNSS.RTK do
          sd_ambiguity_ids,
          dd_ambiguity_ids,
          dd_ambiguity_pairs,
+         _dd_ambiguity_satellites,
          wavelengths,
          offsets,
          weights,
@@ -3757,6 +3789,290 @@ defmodule Orbis.GNSS.RTK do
            fixed_m: fixed_m,
            epochs: [epoch_result | acc.epochs]
        }}
+    end
+  end
+
+  defp sequential_filter_epoch_rust(
+         base,
+         epoch,
+         reference_sat,
+         physical_sats,
+         _sd_ambiguity_ids,
+         _dd_ambiguity_ids,
+         dd_ambiguity_pairs,
+         dd_ambiguity_satellites,
+         wavelengths,
+         offsets,
+         weights,
+         solve_opts,
+         integer_opts,
+         filter_opts,
+         acc
+       ) do
+    rust_wavelengths = rust_sd_keyed_values(dd_ambiguity_pairs, wavelengths)
+    rust_offsets = rust_sd_keyed_values(dd_ambiguity_pairs, offsets)
+
+    with {:ok, {rust_state, ratio, fixed?, newly_fixed_sd, fixed_sd_ids}} <-
+           NIF.rtk_filter_update_epoch(
+             acc.rust_state,
+             rust_epoch_term(epoch, reference_sat, physical_sats),
+             base,
+             rust_model_term(weights),
+             rust_wavelengths,
+             rust_offsets,
+             rust_update_opts_term(filter_opts, solve_opts, integer_opts)
+           ),
+         {:ok, state, information, sd_fixed_cycles, sd_fixed_m, sd_ambiguity_ids} <-
+           rust_filter_state_to_elixir(rust_state),
+         ref_sd_id = single_difference(epoch, reference_sat).ambiguity_id,
+         {:ok, fixed_cycles} <-
+           rust_sd_fixed_map_to_dd_ids(
+             sd_fixed_cycles,
+             dd_ambiguity_pairs,
+             dd_ambiguity_satellites,
+             reference_sat,
+             ref_sd_id
+           ),
+         {:ok, fixed_m} <-
+           rust_sd_fixed_map_to_dd_ids(
+             sd_fixed_m,
+             dd_ambiguity_pairs,
+             dd_ambiguity_satellites,
+             reference_sat,
+             ref_sd_id
+           ),
+         {:ok, newly_fixed} <-
+           rust_sd_ids_to_dd_ids(
+             newly_fixed_sd,
+             dd_ambiguity_pairs,
+             dd_ambiguity_satellites,
+             reference_sat,
+             ref_sd_id
+           ),
+         {:ok, all_fixed} <-
+           rust_sd_ids_to_dd_ids(
+             fixed_sd_ids,
+             dd_ambiguity_pairs,
+             dd_ambiguity_satellites,
+             reference_sat,
+             ref_sd_id
+           ),
+         {:ok, residual_rows} <-
+           build_epoch_sequential_baseline_rows(
+             base,
+             epoch,
+             reference_sat,
+             physical_sats,
+             sd_ambiguity_ids,
+             dd_ambiguity_pairs,
+             state,
+             weights
+           ),
+         {:ok, residuals} <- baseline_residuals(residual_rows, reference_sat) do
+      epoch_result = %{
+        epoch: epoch.epoch,
+        index: epoch.idx,
+        baseline_m: ecef_map(state.baseline),
+        integer_status: if(fixed?, do: :fixed, else: :not_fixed),
+        integer_ratio: ratio,
+        integer_best_score: nil,
+        integer_second_best_score: nil,
+        integer_candidates: nil,
+        ambiguity_search: nil,
+        residuals_m: residuals,
+        newly_fixed_ambiguities: newly_fixed,
+        fixed_ambiguities: all_fixed
+      }
+
+      {:ok,
+       %{
+         acc
+         | state: state,
+           information: information,
+           fixed_cycles: fixed_cycles,
+           fixed_m: fixed_m,
+           rust_state: rust_state,
+           epochs: [epoch_result | acc.epochs]
+       }}
+    end
+  end
+
+  defp rust_initial_filter_state(
+         [first_epoch | _],
+         reference_sat,
+         initial_baseline,
+         baseline_prior_sigma_m,
+         ambiguity_prior_sigma_m
+       ) do
+    ref_sd_id = single_difference(first_epoch, reference_sat).ambiguity_id
+
+    information =
+      sequential_initial_information(3, baseline_prior_sigma_m, ambiguity_prior_sigma_m)
+
+    {
+      {@rtk_filter_state_version, ref_sd_id, [], ambiguity_prior_sigma_m},
+      initial_baseline,
+      [],
+      List.flatten(information),
+      [],
+      []
+    }
+  end
+
+  defp rust_epoch_term(epoch, reference_sat, physical_sats) do
+    reference = rust_sat_term(epoch, reference_sat)
+
+    nonref =
+      epoch
+      |> epoch_available_nonrefs(reference_sat, physical_sats)
+      |> Enum.map(&rust_sat_term(epoch, &1))
+
+    {reference, nonref}
+  end
+
+  defp rust_sat_term(epoch, sat) do
+    base = Map.fetch!(epoch.base, sat)
+    rover = Map.fetch!(epoch.rover, sat)
+
+    {
+      {sat, single_difference_ambiguity_id(sat, base, rover)},
+      {base.code_m, base.phase_m, rover.code_m, rover.phase_m},
+      {
+        Map.fetch!(epoch.base_positions, sat),
+        Map.fetch!(epoch.rover_positions, sat),
+        Map.fetch!(epoch.positions, sat)
+      }
+    }
+  end
+
+  defp rust_model_term(weights) do
+    {
+      weights.code_sigma_m,
+      weights.phase_sigma_m,
+      Atom.to_string(weights.stochastic_model),
+      weights.elevation_weighting?,
+      weights.sagnac?
+    }
+  end
+
+  defp rust_update_opts_term(filter_opts, solve_opts, integer_opts) do
+    {
+      filter_opts.hold_sigma_m,
+      solve_opts.position_tolerance_m,
+      solve_opts.ambiguity_tolerance_m,
+      solve_opts.max_iterations,
+      integer_opts.ratio_threshold
+    }
+  end
+
+  defp rust_sd_keyed_values(dd_ambiguity_pairs, values) do
+    dd_ambiguity_pairs
+    |> Map.new(fn {dd_id, %{sat_sd_id: sat_sd_id}} ->
+      {sat_sd_id, Map.fetch!(values, dd_id)}
+    end)
+    |> Enum.sort()
+  end
+
+  defp rust_filter_state_to_elixir(
+         {{@rtk_filter_state_version, _reference_sat, sd_ids, _ambiguity_prior_sigma_m}, baseline,
+          sd_ambiguities, information, fixed_cycles, fixed_m}
+       )
+       when length(sd_ids) == length(sd_ambiguities) do
+    n = 3 + length(sd_ids)
+
+    if length(information) == n * n do
+      {:ok,
+       %{
+         baseline: baseline,
+         ambiguities: sd_ids |> Enum.zip(sd_ambiguities) |> Map.new()
+       }, unflatten_matrix(information, n), Map.new(fixed_cycles), Map.new(fixed_m), sd_ids}
+    else
+      {:error, {:invalid_rust_filter_state, :information_dimension}}
+    end
+  end
+
+  defp rust_filter_state_to_elixir(_state), do: {:error, {:invalid_rust_filter_state, :shape}}
+
+  defp unflatten_matrix(values, n), do: Enum.chunk_every(values, n)
+
+  defp rust_sd_fixed_map_to_dd_ids(
+         values,
+         dd_ambiguity_pairs,
+         dd_ambiguity_satellites,
+         reference_sat,
+         ref_sd_id
+       ) do
+    values
+    |> Enum.reduce_while({:ok, %{}}, fn {sat_sd_id, value}, {:ok, acc} ->
+      case rust_sd_id_to_dd_id(
+             sat_sd_id,
+             dd_ambiguity_pairs,
+             dd_ambiguity_satellites,
+             reference_sat,
+             ref_sd_id
+           ) do
+        {:ok, dd_id} -> {:cont, {:ok, Map.put(acc, dd_id, value)}}
+        {:error, _reason} = err -> {:halt, err}
+      end
+    end)
+  end
+
+  defp rust_sd_ids_to_dd_ids(
+         ids,
+         dd_ambiguity_pairs,
+         dd_ambiguity_satellites,
+         reference_sat,
+         ref_sd_id
+       ) do
+    ids
+    |> Enum.reduce_while({:ok, []}, fn sat_sd_id, {:ok, acc} ->
+      case rust_sd_id_to_dd_id(
+             sat_sd_id,
+             dd_ambiguity_pairs,
+             dd_ambiguity_satellites,
+             reference_sat,
+             ref_sd_id
+           ) do
+        {:ok, dd_id} -> {:cont, {:ok, [dd_id | acc]}}
+        {:error, _reason} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, dd_ids} -> {:ok, Enum.sort(dd_ids)}
+      {:error, _reason} = err -> err
+    end
+  end
+
+  defp rust_sd_id_to_dd_id(
+         sat_sd_id,
+         dd_ambiguity_pairs,
+         dd_ambiguity_satellites,
+         reference_sat,
+         ref_sd_id
+       ) do
+    case Enum.find(dd_ambiguity_pairs, fn {_dd_id, pair} ->
+           pair.sat_sd_id == sat_sd_id and pair.ref_sd_id == ref_sd_id
+         end) do
+      {dd_id, _pair} ->
+        {:ok, dd_id}
+
+      nil ->
+        sat =
+          Enum.find_value(dd_ambiguity_pairs, fn {dd_id, pair} ->
+            if pair.sat_sd_id == sat_sd_id do
+              Map.fetch!(dd_ambiguity_satellites, dd_id)
+            end
+          end)
+
+        if sat do
+          {:ok,
+           double_difference_ambiguity_id(sat, sat_sd_id, %{
+             satellite_id: reference_sat,
+             ambiguity_id: ref_sd_id
+           })}
+        else
+          {:error, {:unknown_rust_ambiguity_id, sat_sd_id}}
+        end
     end
   end
 

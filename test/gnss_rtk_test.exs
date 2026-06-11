@@ -903,6 +903,55 @@ defmodule Orbis.GNSS.RTKTest do
       end
     end
 
+    test "Rust filter kernel matches the Elixir sequential filter" do
+      ambiguities_m =
+        Map.new(@fixed_cycles, fn {sat, cycles} -> {sat, cycles * @l1_wavelength_m} end)
+
+      epochs =
+        @sat_positions
+        |> Enum.with_index()
+        |> Enum.map(fn {positions, idx} ->
+          synthetic_baseline_epoch(@base, @truth_baseline, positions,
+            epoch: idx,
+            base_clock_m: 15.0 + idx,
+            rover_clock_m: -8.0 + idx,
+            ambiguities_m: ambiguities_m
+          )
+        end)
+
+      opts = [
+        reference_satellite_id: "G01",
+        ambiguity_wavelength_m: @l1_wavelength_m,
+        initial_baseline_m: {-40.0, 35.0, 12.0}
+      ]
+
+      assert {:ok, elixir_sol} = RTK.solve_filter_baseline_epochs(@base, epochs, opts)
+
+      assert {:ok, rust_sol} =
+               RTK.solve_filter_baseline_epochs(@base, epochs, opts ++ [filter_kernel: :rust])
+
+      assert rust_sol.metadata.filter_kernel == :rust
+      assert rust_sol.metadata.first_fixed_index == elixir_sol.metadata.first_fixed_index
+      assert rust_sol.metadata.fixed_epoch_count == elixir_sol.metadata.fixed_epoch_count
+      assert rust_sol.fixed_ambiguities_cycles == elixir_sol.fixed_ambiguities_cycles
+      assert length(rust_sol.epochs) == length(elixir_sol.epochs)
+
+      for {rust_epoch, elixir_epoch} <- Enum.zip(rust_sol.epochs, elixir_sol.epochs) do
+        assert rust_epoch.index == elixir_epoch.index
+        assert rust_epoch.integer_status == elixir_epoch.integer_status
+        assert rust_epoch.newly_fixed_ambiguities == elixir_epoch.newly_fixed_ambiguities
+        assert rust_epoch.fixed_ambiguities == elixir_epoch.fixed_ambiguities
+        assert ecef_delta_norm(rust_epoch.baseline_m, elixir_epoch.baseline_m) < 1.0e-6
+
+        if is_number(rust_epoch.integer_ratio) and is_number(elixir_epoch.integer_ratio) do
+          assert abs(rust_epoch.integer_ratio - elixir_epoch.integer_ratio) < 1.0e-6
+        end
+      end
+
+      assert ecef_delta_norm(rust_sol.baseline_m, elixir_sol.baseline_m) < 1.0e-6
+      assert position_error(rust_sol.baseline_m, @truth_baseline) < 2.0e-4
+    end
+
     test "re-initializes the ambiguity of a satellite that sets and re-rises" do
       ref = "G01"
       sats = ["G01", "G02", "G03", "G04", "G05"]
@@ -992,6 +1041,11 @@ defmodule Orbis.GNSS.RTKTest do
                ambiguity_wavelength_m: @l1_wavelength_m,
                partial_ambiguity_resolution: true
              ) == {:error, {:unsupported_option, :partial_ambiguity_resolution}}
+
+      assert RTK.solve_filter_baseline_epochs(@base, [epoch],
+               ambiguity_wavelength_m: @l1_wavelength_m,
+               filter_kernel: :python
+             ) == {:error, {:invalid_option, :filter_kernel}}
     end
   end
 
@@ -1251,6 +1305,13 @@ defmodule Orbis.GNSS.RTKTest do
 
   defp position_error(%{x_m: x, y_m: y, z_m: z}, {tx, ty, tz}) do
     :math.sqrt((x - tx) * (x - tx) + (y - ty) * (y - ty) + (z - tz) * (z - tz))
+  end
+
+  defp ecef_delta_norm(%{x_m: x1, y_m: y1, z_m: z1}, %{x_m: x2, y_m: y2, z_m: z2}) do
+    dx = x1 - x2
+    dy = y1 - y2
+    dz = z1 - z2
+    :math.sqrt(dx * dx + dy * dy + dz * dz)
   end
 
   defp nonzero_off_diagonal?(matrix) do
