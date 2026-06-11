@@ -342,10 +342,16 @@ defmodule Orbis.GNSS.RTKRealArcTest do
       assert position_error(rust_epoch.baseline_m, elixir_epoch.baseline_m) < 1.0e-6
 
       if is_number(rust_epoch.integer_ratio) and is_number(elixir_epoch.integer_ratio) do
-        # The Rust path uses the kernel's Sherman-Morrison covariance path while
-        # the Elixir reference keeps the dense-matrix path. Fix decisions and
-        # fixed sets must match exactly; ratios are agreement-level diagnostics.
-        assert abs(rust_epoch.integer_ratio - elixir_epoch.integer_ratio) < 1.0e-2
+        # The kernels agree on the ratio to ~1e-6 RELATIVE (measured on this
+        # arc: 7.3e-8 at the ratio-3.03 decision epoch, 7.2e-7 at ratio 4816).
+        # The absolute delta scales with the ratio because a clean fix drives
+        # the best LAMBDA score toward zero and the quotient amplifies the
+        # kernels' ~1e-6 state-level FP differences (Sherman-Morrison vs dense
+        # inverse, elevation op order). A relative gate stays tight at the
+        # fix/no-fix decision boundary (ratio ~ threshold) where an absolute
+        # one would be 100_000x looser than the actual agreement.
+        delta = abs(rust_epoch.integer_ratio - elixir_epoch.integer_ratio)
+        assert delta < 1.0e-5 * max(elixir_epoch.integer_ratio, 1.0)
       end
     end
   end
