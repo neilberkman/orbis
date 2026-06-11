@@ -11,6 +11,7 @@ mod lambert;
 mod propagation;
 mod reduced_orbit;
 mod rinex_obs;
+mod rtk_filter;
 mod sp3;
 mod spp;
 mod tropo;
