@@ -23,7 +23,8 @@ dependencies = [
 [[package]]
 name = "astrodynamics"
 version = "0.9.0"
-source = "git+https://github.com/neilberkman/astrodynamics?rev=c3b8a61cf9cb427d2918cf4594b277ce5505cac6#c3b8a61cf9cb427d2918cf4594b277ce5505cac6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0221eaf7e5b01aec23e72a20d315e2bdfb9e09b63b598b2380ce3177ad5ef53c"
 dependencies = [
  "cc",
  "nalgebra",
@@ -33,8 +34,9 @@ dependencies = [
 
 [[package]]
 name = "astrodynamics-gnss"
-version = "0.9.9"
-source = "git+https://github.com/neilberkman/astrodynamics?rev=c3b8a61cf9cb427d2918cf4594b277ce5505cac6#c3b8a61cf9cb427d2918cf4594b277ce5505cac6"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "489a668e9aa75f7874b887b8053e1da0daa34fa3bffcddb72c7f89ce347345d7"
 dependencies = [
  "astrodynamics",
  "nalgebra",
@@ -552,11 +554,3 @@ checksum = "7837d08f69c77cf6b07689544538e017c1bfcf57e34b4c0ff58e6c2cd3b37091"
 dependencies = [
  "windows-link",
 ]
-
-[[patch.unused]]
-name = "astrodynamics"
-version = "0.9.0"
-
-[[patch.unused]]
-name = "astrodynamics-gnss"
-version = "0.9.9"

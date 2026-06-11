@@ -6,6 +6,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-06-11
+
+### Added
+
+- `Orbis.GNSS.RTK.solve_filter_baseline_epochs/3` gains an opt-in Rust filter
+  kernel via `filter_kernel: :rust` (default remains `:elixir`). The kernel
+  reproduces the Elixir sequential RTK information filter — iterated
+  Gauss-Newton update with correlated double-difference measurement covariance,
+  SD→DD ambiguity transform, LAMBDA search-and-hold, and the elevation-weighted
+  / RTKLIB stochastic models — and is verified epoch-for-epoch against the
+  Elixir path on real Wettzell arcs. Existing callers are unaffected.
+
+### Changed
+
+- The native NIF now builds against the published `astrodynamics-gnss` 0.10.0
+  crate (was a git-rev pin), which carries the RTK filter kernel. The kernel
+  hot path holds a measured baseline of ~210k single-core solves/sec on a
+  6-satellite epoch with a CI-gated allocations-per-solve regression bound.
+
 ## [0.16.0] - 2026-06-10
 
 ### Added
