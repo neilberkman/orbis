@@ -325,12 +325,29 @@ defmodule Orbis.GNSS.RTKRealArcTest do
     rust_fixed_epochs = Enum.count(rust_full_filter.epochs, &(&1.integer_status == :fixed))
 
     assert rust_full_filter.metadata.filter_kernel == :rust
+    assert length(rust_full_filter.epochs) == length(full_filter.epochs)
 
     assert rust_full_filter.metadata.first_fixed_index <=
              precise_oracle["reference"]["first_fixed_index"] + 1
 
     assert rust_fixed_epochs >= precise_oracle["reference"]["fixed_epochs"] - 1
     assert position_error(rust_full_filter.baseline_m, antenna_baseline) < 0.01
+    assert position_error(rust_full_filter.baseline_m, full_filter.baseline_m) < 1.0e-6
+
+    for {rust_epoch, elixir_epoch} <- Enum.zip(rust_full_filter.epochs, full_filter.epochs) do
+      assert rust_epoch.index == elixir_epoch.index
+      assert rust_epoch.integer_status == elixir_epoch.integer_status
+      assert rust_epoch.newly_fixed_ambiguities == elixir_epoch.newly_fixed_ambiguities
+      assert rust_epoch.fixed_ambiguities == elixir_epoch.fixed_ambiguities
+      assert position_error(rust_epoch.baseline_m, elixir_epoch.baseline_m) < 1.0e-6
+
+      if is_number(rust_epoch.integer_ratio) and is_number(elixir_epoch.integer_ratio) do
+        # The Rust path uses the kernel's Sherman-Morrison covariance path while
+        # the Elixir reference keeps the dense-matrix path. Fix decisions and
+        # fixed sets must match exactly; ratios are agreement-level diagnostics.
+        assert abs(rust_epoch.integer_ratio - elixir_epoch.integer_ratio) < 1.0e-2
+      end
+    end
   end
 
   defp real_gps_l1_rtk_epochs(sp3, base_obs, rover_obs, count) do
@@ -570,6 +587,14 @@ defmodule Orbis.GNSS.RTKRealArcTest do
   defp enu_map_to_tuple(%{"east" => east, "north" => north, "up" => up}), do: {east, north, up}
 
   defp position_error(%{x_m: x, y_m: y, z_m: z}, {truth_x, truth_y, truth_z}) do
+    :math.sqrt(
+      (x - truth_x) * (x - truth_x) +
+        (y - truth_y) * (y - truth_y) +
+        (z - truth_z) * (z - truth_z)
+    )
+  end
+
+  defp position_error(%{x_m: x, y_m: y, z_m: z}, %{x_m: truth_x, y_m: truth_y, z_m: truth_z}) do
     :math.sqrt(
       (x - truth_x) * (x - truth_x) +
         (y - truth_y) * (y - truth_y) +
