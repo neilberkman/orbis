@@ -27,7 +27,7 @@ type StateTerm = (
     Vec<(String, i64)>,
     Vec<(String, f64)>,
 );
-type UpdateTerm = (StateTerm, f64, bool, Vec<String>, Vec<String>);
+type UpdateTerm = (StateTerm, Vec3, f64, bool, Vec<String>, Vec<String>);
 type ModelTerm = (f64, f64, String, bool, bool);
 type UpdateOptsTerm = (f64, f64, f64, usize, f64);
 
@@ -132,6 +132,7 @@ pub fn rtk_filter_update_epochs<'a>(
 fn encode_update(update: astrodynamics_gnss::rtk_filter::EpochUpdate) -> UpdateTerm {
     (
         encode_state(update.state),
+        tuple3(update.reported_baseline_m),
         update.integer_ratio,
         update.integer_fixed,
         update.newly_fixed,

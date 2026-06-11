@@ -3780,6 +3780,24 @@ defmodule Orbis.GNSS.RTK do
              offsets,
              integer_opts
            ),
+         newly_fixed =
+           fixed_cycles |> Map.keys() |> Kernel.--(Map.keys(acc.fixed_cycles)) |> Enum.sort(),
+         {:ok, report_state} <-
+           conditioned_fixed_state(
+             state,
+             newly_fixed,
+             base,
+             epoch,
+             reference_sat,
+             physical_sats,
+             sd_ambiguity_ids,
+             dd_ambiguity_pairs,
+             acc,
+             fixed_m,
+             weights,
+             solve_opts,
+             filter_opts
+           ),
          {:ok, residual_rows} <-
            build_epoch_sequential_baseline_rows(
              base,
@@ -3788,20 +3806,17 @@ defmodule Orbis.GNSS.RTK do
              physical_sats,
              sd_ambiguity_ids,
              dd_ambiguity_pairs,
-             state,
+             report_state,
              weights
            ),
          {:ok, residuals} <- baseline_residuals(residual_rows, reference_sat) do
-      newly_fixed =
-        fixed_cycles |> Map.keys() |> Kernel.--(Map.keys(acc.fixed_cycles)) |> Enum.sort()
-
       all_fixed = fixed_cycles |> Map.keys() |> Enum.sort()
       fixed? = all_fixed != []
 
       epoch_result = %{
         epoch: epoch.epoch,
         index: epoch.idx,
-        baseline_m: ecef_map(state.baseline),
+        baseline_m: ecef_map(report_state.baseline),
         integer_status: if(fixed?, do: :fixed, else: :not_fixed),
         integer_ratio: Map.get(search_meta, :integer_ratio),
         integer_best_score: Map.get(search_meta, :integer_best_score),
@@ -3876,7 +3891,7 @@ defmodule Orbis.GNSS.RTK do
   end
 
   defp apply_rust_filter_update(
-         {rust_state, ratio, fixed?, newly_fixed_sd, fixed_sd_ids},
+         {rust_state, reported_baseline, ratio, fixed?, newly_fixed_sd, fixed_sd_ids},
          base,
          epoch,
          reference_sat,
@@ -3888,6 +3903,9 @@ defmodule Orbis.GNSS.RTK do
        ) do
     with {:ok, state, information, sd_fixed_cycles, sd_fixed_m, sd_ambiguity_ids} <-
            rust_filter_state_to_elixir(rust_state),
+         # The carried state keeps the float baseline; the reported solution is
+         # the kernel's ambiguity-conditioned baseline (matches the Elixir path).
+         report_state = %{state | baseline: reported_baseline},
          ref_sd_id = single_difference(epoch, reference_sat).ambiguity_id,
          {:ok, fixed_cycles} <-
            rust_sd_fixed_map_to_dd_ids(
@@ -3929,14 +3947,14 @@ defmodule Orbis.GNSS.RTK do
              physical_sats,
              sd_ambiguity_ids,
              dd_ambiguity_pairs,
-             state,
+             report_state,
              weights
            ),
          {:ok, residuals} <- baseline_residuals(residual_rows, reference_sat) do
       epoch_result = %{
         epoch: epoch.epoch,
         index: epoch.idx,
-        baseline_m: ecef_map(state.baseline),
+        baseline_m: ecef_map(report_state.baseline),
         integer_status: if(fixed?, do: :fixed, else: :not_fixed),
         integer_ratio: ratio,
         integer_best_score: nil,
@@ -4251,6 +4269,70 @@ defmodule Orbis.GNSS.RTK do
     |> Enum.map(fn {row, i} ->
       if i < 3, do: List.update_at(row, i, &(&1 + q)), else: row
     end)
+  end
+
+  # Ambiguity-conditioned ("fixed") baseline for the reported solution. The float
+  # state carried between epochs is the Kalman/information posterior; when AR
+  # newly succeeds this epoch, re-solve THIS epoch with the new integers held so
+  # the reported baseline reflects the fix in the same epoch — matching RTKLIB's
+  # fixed solution. Without this, the first fixed epoch (no prior hold yet)
+  # reports its float baseline while claiming `:fixed` (the cold-start false
+  # confidence: ~0.9 m at epoch 0, recovering only once the next epoch applies the
+  # hold). The float `state`/`information` are still what gets carried forward.
+  #
+  # No newly-fixed ambiguities => the float state already incorporates every held
+  # integer (the prior iterate used the same fixed_m), so it is already the
+  # conditioned solution. A failed re-solve falls back to the float state.
+  defp conditioned_fixed_state(
+         float_state,
+         [],
+         _b,
+         _e,
+         _r,
+         _p,
+         _sd,
+         _dd,
+         _acc,
+         _fm,
+         _w,
+         _so,
+         _fo
+       ), do: {:ok, float_state}
+
+  defp conditioned_fixed_state(
+         float_state,
+         _newly_fixed,
+         base,
+         epoch,
+         reference_sat,
+         physical_sats,
+         sd_ambiguity_ids,
+         dd_ambiguity_pairs,
+         acc,
+         fixed_m,
+         weights,
+         solve_opts,
+         filter_opts
+       ) do
+    case iterate_sequential_filter_epoch(
+           base,
+           epoch,
+           reference_sat,
+           physical_sats,
+           sd_ambiguity_ids,
+           dd_ambiguity_pairs,
+           acc.state,
+           acc.state,
+           acc.information,
+           fixed_m,
+           weights,
+           solve_opts,
+           filter_opts,
+           1
+         ) do
+      {:ok, conditioned, _information, _rows} -> {:ok, conditioned}
+      _ -> {:ok, float_state}
+    end
   end
 
   defp sequential_initial_information(n, baseline_sigma_m, ambiguity_sigma_m) do

@@ -414,19 +414,17 @@ defmodule Orbis.GNSS.RTKRealArcTest do
     # Final baseline stays in RTKLIB's converged class (~mm).
     assert position_error(kinematic.baseline_m, antenna_baseline) < 0.01
 
-    # Per-epoch accuracy AFTER the cold-start transient. Both filters are
-    # transient in the first epochs in different ways: the oracle floats epoch 1
-    # (~1 m), while the Elixir filter cold-fixes epoch 0 to a wrong integer and
-    # recovers by epoch 2 (a pre-existing static-filter behavior — epoch 0 is
-    # identical with and without process noise, since the time update is skipped
-    # on the first epoch). Past the warm-up, every fixed baseline is cm-class.
-    converged_errors =
+    # Every fixed epoch — including epoch 0 — reports a cm-class baseline. The
+    # reported baseline is the ambiguity-conditioned (fixed) solution, so the
+    # first fixed epoch no longer reports its float baseline while claiming
+    # `:fixed` (the cold-start false confidence that this gate first surfaced).
+    fixed_errors =
       kinematic.epochs
-      |> Enum.filter(&(&1.integer_status == :fixed and &1.index >= 2))
+      |> Enum.filter(&(&1.integer_status == :fixed))
       |> Enum.map(&position_error(&1.baseline_m, antenna_baseline))
 
-    assert Enum.max(converged_errors) < 0.02
-    assert Enum.sum(converged_errors) / length(converged_errors) < 0.01
+    assert Enum.max(fixed_errors) < 0.02
+    assert Enum.sum(fixed_errors) / length(fixed_errors) < 0.01
   end
 
   defp real_gps_l1_rtk_epochs(sp3, base_obs, rover_obs, count) do

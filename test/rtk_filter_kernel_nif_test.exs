@@ -49,11 +49,14 @@ defmodule Orbis.RTKFilterKernelNIFTest do
     assert {:error, {:missing_wavelength, "G02"}} =
              NIF.rtk_filter_update_epoch(state, epoch, base, model, [], offsets, opts)
 
-    assert {:ok, {next_state, ratio, true, ["G02", "G03", "G04", "G05"], fixed_ids}} =
+    assert {:ok,
+            {next_state, reported_baseline, ratio, true, ["G02", "G03", "G04", "G05"], fixed_ids}} =
              NIF.rtk_filter_update_epoch(state, epoch, base, model, wavelengths, offsets, opts)
 
     assert ratio >= 3.0
     assert fixed_ids == ["G02", "G03", "G04", "G05"]
+    # The reported (ambiguity-conditioned) baseline tracks truth on the fixing epoch.
+    assert distance(reported_baseline, truth) < 1.0e-3
 
     assert {{1, "G01", ["G01", "G02", "G03", "G04", "G05"], 10_000.0}, baseline, _, _, cycles,
             metres} = next_state
@@ -66,7 +69,7 @@ defmodule Orbis.RTKFilterKernelNIFTest do
              abs(metres - expected * lambda) < 1.0e-9
            end)
 
-    assert {:ok, {second_state, second_ratio, true, [], ^fixed_ids}} =
+    assert {:ok, {second_state, _second_reported, second_ratio, true, [], ^fixed_ids}} =
              NIF.rtk_filter_update_epoch(
                next_state,
                epoch,
@@ -114,8 +117,9 @@ defmodule Orbis.RTKFilterKernelNIFTest do
 
     assert {:ok,
             [
-              {first_state, first_ratio, true, ["G02", "G03", "G04", "G05"], first_fixed_ids},
-              {second_state, second_ratio, true, [], second_fixed_ids}
+              {first_state, first_reported, first_ratio, true, ["G02", "G03", "G04", "G05"],
+               first_fixed_ids},
+              {second_state, _second_reported, second_ratio, true, [], second_fixed_ids}
             ]} =
              NIF.rtk_filter_update_epochs(
                state,
@@ -129,6 +133,7 @@ defmodule Orbis.RTKFilterKernelNIFTest do
 
     assert first_ratio >= 3.0
     assert first_fixed_ids == ["G02", "G03", "G04", "G05"]
+    assert distance(first_reported, truth) < 1.0e-3
     assert second_ratio == 0.0
     assert second_fixed_ids == first_fixed_ids
 
