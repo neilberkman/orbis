@@ -179,3 +179,51 @@ hold weight, not on the held integer RHS values. Phase 3 should reduce wrong
 fixes, but correct tight holds can still drive this single-system DD gauge
 cancellation unless the filter gains an explicit gauge constraint, scaling, or a
 more numerically stable solve/update form.
+
+## Phase 3a truth gate (2026-06-12): receiver antenna corrections, batch cells
+
+Script: `cd_phase3a_truth_gate_2026_06.exs` (committed alongside this report;
+stock solver, no library code modified). Four batch cells on the full vendored
+PASA/SCOA L1 arc (240 epochs), built exactly as the Phase 2 harness builds
+them. Corrections come from the vendored IGS20 ANTEX via
+`Orbis.GNSS.Antex` and the `:receiver_antenna_corrections` option:
+base `TRM55971.00     NONE` (SCOA), rover `LEIAR20         LEIM` (PASA),
+frequency `G01`. Errors are 3D vs the propagated C2385 marker truth
+(marker = ARP for both stations). Oracle context: RTKLIB L1 fix-and-hold
+mean error `0.1070m`, final error `0.0524m`; Amendment-1 credibility floor
+`2 x 0.1070 = 0.2141m`.
+
+| Cell | Solve | Corrections | Error vs truth | Integer status | Ratio | Fixed ambiguities |
+|---|---|---|---:|---|---:|---:|
+| (a) | batch float | no | `0.1455m` | - | - | - |
+| (b) | batch float | yes | `0.1066m` | - | - | - |
+| (c) | batch fixed | no | `0.0156m` | `not_fixed` | `1.4026` | 9 |
+| (d) | batch fixed | yes | `0.0594m` | `not_fixed` | `1.3994` | 9 |
+
+Thesis verdicts:
+
+- **Float thesis: CONFIRMED.** Corrections move the batch float solution
+  `0.1455m -> 0.1066m`, an improvement of `0.0389m`, matching the term
+  ledger's predicted ~`0.04m` antenna contribution almost exactly. The
+  corrected float error lands on the oracle-class mean (`0.1070m`).
+- **Fixed thesis: NULL.** Corrections change neither the selected integers
+  (the same 9 values in both cells, including the split `G18` arc) nor the
+  ratio-test outcome (`1.4026 -> 1.3994`, both refused at the `3.0` bar, so
+  both fixed baselines are returned `not_fixed` and unvalidated). The
+  corrected fixed point solution is farther from truth (`0.0594m` vs
+  `0.0156m`).
+
+Reading the null honestly: with identical integers on both sides, the
+`(c)`/`(d)` error difference is purely the corrections' displacement of the
+integer-constrained re-solve, and the uncorrected solution sitting at
+`0.0156m` says these integers are very likely the correct ones already; the
+batch joint solve over 240 epochs averages enough geometry to pick correct
+integers even without antenna modeling. The ratio refusal in both cells, with
+correct integers in hand, is consistent with the Phase 2 ledger: the
+remaining unmodeled terms (iono ~`0.03m`, tides) inflate the second-best
+candidate's competitiveness regardless of antenna handling. The wrong-fix
+poisoning measured in Phase 2 is a property of the SEQUENTIAL per-epoch
+fix-and-hold path, not of the full-arc batch search, and this gate does not
+test that path: the sequential gate (does the per-epoch search with
+corrections stop locking wrong integers early in the arc?) is the natural
+next measurement, after the remaining ledger terms.
