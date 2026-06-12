@@ -74,3 +74,22 @@ Solid earth tide note: a full DEHANTTIDEINEL evaluation is not implemented in th
 | 2 | C-PCO/PCV application | receiver antenna PCO/PCV differential: 0.040611 m |
 | 3 | D-iono handling | residual double-difference ionosphere: 0.032312 m |
 | 4 | C-solid-tides station displacement | solid earth tide differential: 0.004622 m |
+
+## Gap diagnosis addendum (2026-06-13): wrong-fix poisoning CONFIRMED
+
+Float-only probe (batch `solve_float_baseline_epochs` over the full L1 arc,
+identical regime options, AR absent by construction): final baseline error
+**0.1455 m** vs truth — RTKLIB-class (oracle mean 0.107 m) — against 0.768 m
+when AR runs. The L1 gap is therefore wrong integers being fixed and held,
+not float-model error. The Phase 2 ledger's 0.078 m predicted physics sum is
+re-interpreted: it is not 8 cm of direct error but an ambiguity-domain bias
+straddling the L1 half-wavelength decision boundary (0.095 m), flipping
+integer fixes whose holds then cost ~0.19 m per wrong cycle through geometry.
+
+Phase 3 premise (amended by this evidence): the Track C terms are implemented
+to bring the float bias decisively below the AR decision boundary so integer
+fixing is RIGHT — measured by the fixed-solution error joining the oracle
+class and the refusal invariant going clean, not by the float median moving.
+
+Still open from this diagnosis: the continuous-filter singularity at epoch
+124 (bisection pending).
