@@ -1,19 +1,19 @@
 defmodule Orbis.GNSS.SP3MergeNetworkTest do
   # Live smoke test for `Orbis.GNSS.Data.fetch_merged_sp3/3` against the REAL
-  # public GSSC ultra-rapid archives (ftp://gssc.esa.int/gnss/products/...).
+  # public HTTPS ultra-rapid archives.
   #
   # Tagged `:network` so it is EXCLUDED by default — see test/test_helper.exs:
   #   ExUnit.start(exclude: [:skyfield_parity, :spk_file, :celestrak, :network])
   # Run it explicitly with:
   #   mix test test/sp3_merge_network_test.exs --include network
   #
-  # Not async: it reaches out over FTP and writes into a private cache dir.
+  # Not async: it reaches out over HTTPS and writes into a private cache dir.
   use ExUnit.Case, async: false
 
   alias Orbis.GNSS.Data
   alias Orbis.GNSS.SP3
 
-  @centers [:igs_ult, :cod_ult, :gfz_ult, :esa_ult, :grg_ult]
+  @centers [:igs_ult, :esa_ult]
 
   setup do
     # A fresh, unique cache dir per test, removed afterwards. Never the user
@@ -28,7 +28,7 @@ defmodule Orbis.GNSS.SP3MergeNetworkTest do
     {:ok, cache_dir: cache_dir}
   end
 
-  describe "fetch_merged_sp3/3 against the real GSSC ultra-rapid archives" do
+  describe "fetch_merged_sp3/3 against the real HTTPS ultra-rapid archives" do
     @tag :network
     @tag timeout: 300_000
     test "fetches, merges, and reports across the live multi-center ultra products",
@@ -55,7 +55,7 @@ defmodule Orbis.GNSS.SP3MergeNetworkTest do
       result =
         Data.fetch_merged_sp3(target, @centers,
           cache_dir: cache_dir,
-          # Keep a slow/empty FTP center from hanging the whole sweep forever.
+          # Keep a slow/empty HTTPS center from hanging the whole sweep forever.
           retries: 2,
           backoff_ms: 500
         )
@@ -94,23 +94,17 @@ defmodule Orbis.GNSS.SP3MergeNetworkTest do
 
         {:error, {:no_products, reasons}} ->
           # No center yielded a product. With a live archive this should be rare
-          # (it usually means a transient FTP outage or that EVERY center is at
+          # (it usually means a transient outage or that EVERY center is at
           # the publication frontier), but it is not a logic failure — make it
           # loud and informative rather than a bare assertion crash.
           assert is_list(reasons)
           assert Enum.map(reasons, & &1.center) == @centers
 
           flunk_informative(
-            "No ultra-rapid product was retrievable from ANY of the five " <>
-              "centers for #{inspect(target)} — likely a transient GSSC/FTP " <>
+            "No ultra-rapid product was retrievable from ANY requested " <>
+              "center for #{inspect(target)} — likely a transient archive " <>
               "outage or every center sitting at the publication frontier.\n" <>
               "Per-center reasons:\n" <> format_reasons(reasons)
-          )
-
-        {:error, other} ->
-          flunk_informative(
-            "Unexpected error shape from fetch_merged_sp3/3 (not " <>
-              ":incompatible_sources / :no_products): #{inspect(other)}"
           )
       end
     end
@@ -122,7 +116,7 @@ defmodule Orbis.GNSS.SP3MergeNetworkTest do
     # Returned an SP3 with at least one contributor.
     assert %SP3{} = merged
 
-    # Report shape required by the task.
+    # Report fields required by the task.
     assert Map.has_key?(report, :contributors)
     assert Map.has_key?(report, :absent)
     assert Map.has_key?(report, :source_count)
@@ -158,7 +152,7 @@ defmodule Orbis.GNSS.SP3MergeNetworkTest do
     assert ids != [], "the merged ultra product should expose at least one satellite"
 
     # Informational: print what the live archive actually gave us this run, so a
-    # human can see whether all five centers' coordinate frames agreed (i.e. the
+    # human can see whether all requested centers' coordinate frames agreed (i.e. the
     # multi-center merge actually exercised, NOT just a single-product fallthrough).
     IO.puts("""
     [fetch_merged_sp3 live] contributors=#{inspect(contributor_centers)} \

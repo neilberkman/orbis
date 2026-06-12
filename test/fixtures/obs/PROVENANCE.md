@@ -114,8 +114,8 @@ the network by default.
   12-satellite epoch-line wrap (20 satellites in epoch 1) and the
   five-observations-per-line wrap (8 observation types).
 - **Upstream source:** the full daily file
-  `gnss/data/daily/2015/001/algo0010.15d.Z` from the ESA GSSC archive
-  (`ftp://gssc.esa.int`).
+  `gnss/data/daily/2015/001/algo0010.15d.Z` from the historical ESA GSSC
+  archive.
 - **Trim:** decompressed, decoded, kept the verbatim header plus the first two
   epochs, then re-compressed with `rnx2crx` so the committed `.crx`
   re-initializes cleanly at epoch 1. The `.rnx` is the `crx2rnx` decode of the

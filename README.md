@@ -200,14 +200,14 @@ sp3 = Orbis.GNSS.SP3.load!("GBM0MGXRAP_20201760000_01D_05M_ORB.SP3")
 # Merge SP3 products from several analysis centers into one consistent dataset:
 # union coverage, robust per-(sat, epoch) consensus, outliers quarantined
 # rather than silently averaged.
-{:ok, merged, _report} = Orbis.GNSS.SP3.merge([sp3_cod, sp3_gfz, sp3_grg])
+{:ok, merged, _report} = Orbis.GNSS.SP3.merge([sp3_esa, sp3_gfz, sp3_igs])
 
 # ...and write the merged product back out as a single standard SP3 file
 # (read → merge → write; atomic, optionally gzipped):
 {:ok, _path} = Orbis.GNSS.Data.write_sp3(merged, "merged.sp3")
 
 # Or broadcast navigation — GPS, Galileo, BeiDou, GLONASS (RINEX 3.x/4.xx)
-eph = Orbis.GNSS.Broadcast.load!("BRDC00IGS_20201770000_01D_MN.rnx")
+eph = Orbis.GNSS.Broadcast.load!("BRDC00WRD_R_20201770000_01D_MN.rnx")
 
 # Single-point position from one epoch of pseudoranges
 observations = [{"G07", 24_602_022.18}, {"G08", 23_676_569.52}, {"E05", 27_038_058.35}]
@@ -237,7 +237,7 @@ ultra = Orbis.GNSS.Data.ops_ultra_sp3(:igs_ult, DateTime.utc_now())
 
 # Or fetch several centers and merge whatever has published so far.
 {:ok, merged, report} =
-  Orbis.GNSS.Data.fetch_merged_sp3(DateTime.utc_now(), [:igs_ult, :cod_ult, :gfz_ult])
+  Orbis.GNSS.Data.fetch_merged_sp3(DateTime.utc_now(), [:igs_ult, :gfz_ult, :esa_ult])
 ```
 
 Parse a station's RINEX observation file (Hatanaka `.crx` or plain `.rnx`),

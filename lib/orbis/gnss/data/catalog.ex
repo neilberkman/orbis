@@ -12,48 +12,46 @@ defmodule Orbis.GNSS.Data.Catalog do
 
   ## Analysis centers
 
-  Each center maps to a transfer protocol (`:https` or `:ftp`), an archive host,
-  the product token it publishes, and the directory layout for each content
-  type. Only centers and paths that resolve against a live, anonymous archive
-  are listed; every entry below has been checked against its server.
+  Each center maps to the HTTPS archive host, the product token it publishes,
+  and the directory layout for each content type. Only centers and paths that
+  resolve against a live, anonymous HTTPS archive are listed; every entry below
+  has been checked against its server.
 
-  | Code   | Center                          | Protocol | Host                |
-  |--------|---------------------------------|----------|---------------------|
-  | `:gfz`     | GFZ Potsdam (operational rapid) | HTTPS | `isdc-data.gfz.de` |
-  | `:cod`     | CODE / University of Bern (MGEX)| FTP   | `gssc.esa.int`     |
-  | `:grg`     | CNES/CLS (MGEX, final)          | FTP   | `gssc.esa.int`     |
-  | `:wum`     | Wuhan University (MGEX, final)  | FTP   | `gssc.esa.int`     |
-  | `:igs`     | IGS combined (broadcast / IONEX)| FTP   | `gssc.esa.int`     |
-  | `:*_ult`   | IGS/COD/ESA/GFZ/GRG ultra-rapid | FTP   | `gssc.esa.int`     |
+  | Code       | Center                               | Host                         |
+  |------------|--------------------------------------|------------------------------|
+  | `:gfz`     | GFZ Potsdam operational rapid        | `isdc-data.gfz.de`           |
+  | `:esa`     | ESA Navigation Office final products | `navigation-office.esa.int`  |
+  | `:igs`     | IGS combined broadcast navigation    | `igs.bkg.bund.de`            |
+  | `:igs_ult` | IGS combined ultra-rapid             | `igs.bkg.bund.de`            |
+  | `:esa_ult` | ESA ultra-rapid                      | `navigation-office.esa.int`  |
+  | `:gfz_ult` | GFZ ultra-rapid                      | `isdc-data.gfz.de`           |
 
-  The ESA Galileo Science Support Centre (`gssc.esa.int`) mirrors the IGS/MGEX
-  archive over anonymous FTP and is the source for the MGEX precise products,
-  the merged broadcast navigation file, and the global ionosphere maps. GFZ's
-  own HTTPS server (`isdc-data.gfz.de`) carries its operational rapid SP3/CLK.
+  Products that were only reachable through the deprecated ESA GSSC anonymous
+  archive are intentionally not listed. Requests for those former products
+  return `{:error, {:no_open_mirror, {center, content}}}`.
 
   ## Content types and what each center serves
 
     * `:sp3`, `:clk` — precise orbits and clocks. `:gfz` (operational rapid),
-      `:cod`, `:grg`, `:wum` (MGEX final), and the ultra-rapid center aliases
-      `:igs_ult`, `:cod_ult`, `:esa_ult`, `:gfz_ult`, `:grg_ult`. The GFZ rapid
-      token is `GFZ0OPSRAP`; the MGEX final tokens are `COD0MGXFIN`,
-      `GRG0MGXFIN`, `WUM0MGXFIN`; the ultra-rapid tokens are `IGS0OPSULT`,
-      `COD0OPSULT`, `ESA0OPSULT`, `GFZ0OPSULT`, and `GRG0OPSULT`.
+      `:esa` (final products), and the ultra-rapid center aliases
+      `:igs_ult`, `:esa_ult`, and `:gfz_ult`. The GFZ rapid token is
+      `GFZ0OPSRAP`; the ESA final token is `ESA0MGNFIN`; the ultra-rapid tokens
+      are `IGS0OPSULT`, `ESA0OPSULT`, and `GFZ0OPSULT`.
     * `:nav` — the IGS merged multi-GNSS broadcast navigation file
-      (`BRDC00IGS_R_..._MN.rnx`). Only `:igs` publishes it.
-    * `:ionex` — the global ionosphere TEC map (`..._GIM.INX`). `:igs` serves the
-      combined `IGS0OPSFIN` map; `:cod` serves `COD0OPSFIN`. IONEX cadence is
-      sub-daily, so the default sampling is `01H`/`02H`, not `01D`.
+      (`BRDC00WRD_R_..._MN.rnx`). Only `:igs` publishes it.
+    * `:ionex` — the global ionosphere TEC map (`..._GIM.INX`). `:esa` serves
+      `ESA0OPSFIN` over HTTPS. IONEX cadence is sub-daily, so the default
+      sampling is `02H`, not `01D`.
 
   ## Filename conventions
 
   Precise products and IONEX follow the IGS long-name convention
   `AAAVPPPTTT_YYYYDDDHHMM_LEN_SMP_CNT.EXT` (e.g.
   `GFZ0OPSRAP_20201760000_01D_15M_ORB.SP3`). Ultra-rapid SP3 uses the same
-  shape with a sub-daily issue time and a two-day span, e.g.
+  form with a sub-daily issue time and a two-day span, e.g.
   `IGS0OPSULT_20242470600_02D_15M_ORB.SP3`. Broadcast navigation uses the
   RINEX long-name `SSSSMRCCC_R_YYYYDDDHHMM_LEN_CNT.fmt` with **no** sampling
-  field and a lowercase extension (e.g. `BRDC00IGS_R_20201770000_01D_MN.rnx`).
+  field and a lowercase extension (e.g. `BRDC00WRD_R_20201770000_01D_MN.rnx`).
   """
 
   @gps_epoch_jdn 2_444_245
@@ -62,11 +60,11 @@ defmodule Orbis.GNSS.Data.Catalog do
 
   # Each center definition:
   #   :name      human-readable name
-  #   :protocol  :https | :ftp
+  #   :protocol  :https
   #   :host      archive host (the SSRF allow-list source)
   #   :root      archive root URL (no trailing slash)
   #   :tokens    %{content => token_prefix} where the token already includes the
-  #              solution code (e.g. "GFZ0OPSRAP", "COD0MGXFIN", "BRDC00IGS").
+  #              solution code (e.g. "GFZ0OPSRAP", "ESA0MGNFIN", "BRDC00WRD").
   #   :layouts   %{content => layout} describing the directory tree per content.
   #   :spans     optional %{content => span}; defaults to "01D".
   #   :samples   optional default samples per content for convenience builders.
@@ -78,103 +76,77 @@ defmodule Orbis.GNSS.Data.Catalog do
       host: "isdc-data.gfz.de",
       root: "https://isdc-data.gfz.de/gnss/products",
       tokens: %{sp3: "GFZ0OPSRAP", clk: "GFZ0OPSRAP"},
-      layouts: %{sp3: :gfz_class_week, clk: :gfz_class_week},
+      layouts: %{sp3: :gfz_rapid_week, clk: :gfz_rapid_week},
       samples: %{sp3: "15M", clk: "30S"}
     },
-    cod: %{
-      name: "Center for Orbit Determination in Europe (CODE), University of Bern",
-      protocol: :ftp,
-      host: "gssc.esa.int",
-      root: "ftp://gssc.esa.int/gnss",
-      tokens: %{sp3: "COD0MGXFIN", clk: "COD0MGXFIN", ionex: "COD0OPSFIN"},
-      layouts: %{sp3: :products_week, clk: :products_week, ionex: :ionex_year_doy},
-      samples: %{sp3: "05M", clk: "30S", ionex: "01H"}
-    },
-    grg: %{
-      name: "CNES/CLS Analysis Center (MGEX)",
-      protocol: :ftp,
-      host: "gssc.esa.int",
-      root: "ftp://gssc.esa.int/gnss",
-      tokens: %{sp3: "GRG0MGXFIN", clk: "GRG0MGXFIN"},
-      layouts: %{sp3: :products_week, clk: :products_week},
-      samples: %{sp3: "05M", clk: "30S"}
-    },
-    wum: %{
-      name: "Wuhan University GNSS Analysis Center (MGEX)",
-      protocol: :ftp,
-      host: "gssc.esa.int",
-      root: "ftp://gssc.esa.int/gnss",
-      tokens: %{sp3: "WUM0MGXFIN", clk: "WUM0MGXFIN"},
-      layouts: %{sp3: :products_week, clk: :products_week},
-      samples: %{sp3: "05M", clk: "30S"}
+    esa: %{
+      name: "ESA Navigation Office GNSS products",
+      protocol: :https,
+      host: "navigation-office.esa.int",
+      root: "https://navigation-office.esa.int/products/gnss-products",
+      tokens: %{sp3: "ESA0MGNFIN", clk: "ESA0MGNFIN", ionex: "ESA0OPSFIN"},
+      layouts: %{sp3: :gps_week, clk: :gps_week, ionex: :gps_week},
+      samples: %{sp3: "05M", clk: "30S", ionex: "02H"}
     },
     igs_ult: %{
       name: "IGS combined ultra-rapid precise products",
-      protocol: :ftp,
-      host: "gssc.esa.int",
-      root: "ftp://gssc.esa.int/gnss",
+      protocol: :https,
+      host: "igs.bkg.bund.de",
+      root: "https://igs.bkg.bund.de/root_ftp/IGS",
       tokens: %{sp3: "IGS0OPSULT"},
-      layouts: %{sp3: :products_week},
+      layouts: %{sp3: :bkg_products_week},
       spans: %{sp3: "02D"},
       samples: %{sp3: "15M"},
       issues: @opsult_issues
     },
-    cod_ult: %{
-      name: "CODE ultra-rapid precise products",
-      protocol: :ftp,
-      host: "gssc.esa.int",
-      root: "ftp://gssc.esa.int/gnss",
-      tokens: %{sp3: "COD0OPSULT"},
-      layouts: %{sp3: :products_week},
-      spans: %{sp3: "02D"},
-      samples: %{sp3: "05M"},
-      issues: @opsult_issues
-    },
     esa_ult: %{
       name: "ESA ultra-rapid precise products",
-      protocol: :ftp,
-      host: "gssc.esa.int",
-      root: "ftp://gssc.esa.int/gnss",
+      protocol: :https,
+      host: "navigation-office.esa.int",
+      root: "https://navigation-office.esa.int/products/gnss-products",
       tokens: %{sp3: "ESA0OPSULT"},
-      layouts: %{sp3: :products_week},
+      layouts: %{sp3: :gps_week},
       spans: %{sp3: "02D"},
       samples: %{sp3: "15M"},
       issues: @opsult_issues
     },
     gfz_ult: %{
       name: "GFZ ultra-rapid precise products",
-      protocol: :ftp,
-      host: "gssc.esa.int",
-      root: "ftp://gssc.esa.int/gnss",
+      protocol: :https,
+      host: "isdc-data.gfz.de",
+      root: "https://isdc-data.gfz.de/gnss/products",
       tokens: %{sp3: "GFZ0OPSULT"},
-      layouts: %{sp3: :products_week},
+      layouts: %{sp3: :gfz_ultra_week},
       spans: %{sp3: "02D"},
       samples: %{sp3: "05M"},
       issues: @opsult_issues
     },
-    grg_ult: %{
-      name: "CNES/CLS ultra-rapid precise products",
-      protocol: :ftp,
-      host: "gssc.esa.int",
-      root: "ftp://gssc.esa.int/gnss",
-      tokens: %{sp3: "GRG0OPSULT", clk: "GRG0OPSULT"},
-      layouts: %{sp3: :products_week, clk: :products_week},
-      spans: %{sp3: "02D", clk: "02D"},
-      samples: %{sp3: "05M", clk: "05M"},
-      issues: @opsult_issues
-    },
     igs: %{
       name: "IGS Combined Analysis Center",
-      protocol: :ftp,
-      host: "gssc.esa.int",
-      root: "ftp://gssc.esa.int/gnss",
-      tokens: %{nav: "BRDC00IGS", ionex: "IGS0OPSFIN"},
-      layouts: %{nav: :data_daily_year_doy, ionex: :ionex_year_doy},
-      samples: %{nav: "01D", ionex: "01H"}
+      protocol: :https,
+      host: "igs.bkg.bund.de",
+      root: "https://igs.bkg.bund.de/root_ftp/IGS",
+      tokens: %{nav: "BRDC00WRD"},
+      layouts: %{nav: :bkg_brdc_year_doy},
+      samples: %{nav: "01D"}
     }
   }
 
-  # Content type -> filename shape.
+  @no_open_mirrors MapSet.new([
+                     {:cod, :sp3},
+                     {:cod, :clk},
+                     {:cod, :ionex},
+                     {:grg, :sp3},
+                     {:grg, :clk},
+                     {:wum, :sp3},
+                     {:wum, :clk},
+                     {:cod_ult, :sp3},
+                     {:grg_ult, :sp3},
+                     {:grg_ult, :clk},
+                     {:igs, :ionex}
+                   ])
+
+  # Content type -> filename form.
   #   :code   the 2- or 3-letter content code
   #   :ext    the file extension (case as published)
   #   :kind   :sampled (AAAVPPPTTT_DATE_LEN_SMP_CNT.EXT) or
@@ -186,6 +158,10 @@ defmodule Orbis.GNSS.Data.Catalog do
     ionex: %{code: "GIM", ext: "INX", kind: :sampled},
     obs: %{code: "MO", ext: "crx", kind: :obs_station}
   }
+
+  @type error ::
+          {:error, {:unsupported_product, term()}}
+          | {:error, {:no_open_mirror, {atom(), atom()}}}
 
   @doc """
   All supported analysis-center codes.
@@ -237,13 +213,14 @@ defmodule Orbis.GNSS.Data.Catalog do
       iex> Orbis.GNSS.Data.Catalog.default_sample(:igs_ult, :sp3)
       {:ok, "15M"}
 
-      iex> Orbis.GNSS.Data.Catalog.default_sample(:cod_ult, :sp3)
+      iex> Orbis.GNSS.Data.Catalog.default_sample(:gfz_ult, :sp3)
       {:ok, "05M"}
   """
-  @spec default_sample(atom(), atom()) ::
-          {:ok, String.t()} | {:error, {:unsupported_product, term()}}
+  @spec default_sample(atom(), atom()) :: {:ok, String.t()} | error()
   def default_sample(center, content) do
-    with {:ok, cdef} <- center(center),
+    with {:ok, _descriptor} <- content(content),
+         :ok <- open_mirror(center, content),
+         {:ok, cdef} <- center(center),
          {:ok, samples} <- Map.fetch(cdef, :samples),
          {:ok, sample} <- Map.fetch(samples, content) do
       {:ok, sample}
@@ -318,7 +295,7 @@ defmodule Orbis.GNSS.Data.Catalog do
   `SSSSMRCCC_R_YYYYDDDHHMM_LEN_CNT.ext`. The center must actually publish the
   requested content type.
 
-  Returns `{:ok, filename}` or an `{:error, {:unsupported_product, _}}` tuple.
+  Returns `{:ok, filename}` or a tagged error tuple.
 
   ## Examples
 
@@ -326,10 +303,10 @@ defmodule Orbis.GNSS.Data.Catalog do
       {:ok, "GFZ0OPSRAP_20201760000_01D_15M_ORB.SP3"}
 
       iex> Orbis.GNSS.Data.Catalog.canonical_filename(:igs, :nav, ~D[2020-06-25], "01D")
-      {:ok, "BRDC00IGS_R_20201770000_01D_MN.rnx"}
+      {:ok, "BRDC00WRD_R_20201770000_01D_MN.rnx"}
   """
   @spec canonical_filename(atom(), atom(), Date.t(), String.t()) ::
-          {:ok, String.t()} | {:error, {:unsupported_product, term()}}
+          {:ok, String.t()} | error()
   def canonical_filename(center, content, %Date{} = date, sample)
       when is_atom(center) and is_atom(content) and is_binary(sample) do
     canonical_filename(center, content, date, sample, nil)
@@ -351,11 +328,12 @@ defmodule Orbis.GNSS.Data.Catalog do
       {:ok, "IGS0OPSULT_20242470600_02D_15M_ORB.SP3"}
   """
   @spec canonical_filename(atom(), atom(), Date.t(), String.t(), String.t() | nil) ::
-          {:ok, String.t()} | {:error, {:unsupported_product, term()}}
+          {:ok, String.t()} | error()
   def canonical_filename(center, content, %Date{} = date, sample, issue)
       when is_atom(center) and is_atom(content) and is_binary(sample) do
-    with {:ok, cdef} <- center(center),
-         {:ok, descriptor} <- content(content),
+    with {:ok, descriptor} <- content(content),
+         :ok <- open_mirror(center, content),
+         {:ok, cdef} <- center(center),
          {:ok, token} <- token_for(cdef, content),
          :ok <- validate_sample(sample),
          {:ok, issue} <- issue_for(cdef, issue),
@@ -380,9 +358,10 @@ defmodule Orbis.GNSS.Data.Catalog do
       [%{date: ~D[2024-09-03], issue: "1200"}, %{date: ~D[2024-09-03], issue: "0600"}, %{date: ~D[2024-09-03], issue: "0000"}]
   """
   @spec ultra_issue_candidates(atom(), NaiveDateTime.t() | DateTime.t()) ::
-          [%{date: Date.t(), issue: String.t()}] | {:error, {:unsupported_product, term()}}
+          [%{date: Date.t(), issue: String.t()}] | error()
   def ultra_issue_candidates(center, target) do
-    with {:ok, cdef} <- center(center),
+    with :ok <- open_mirror(center, :sp3),
+         {:ok, cdef} <- center(center),
          {:ok, issues} <- issues_for(cdef),
          {:ok, target_ndt} <- normalize_target(target) do
       target_date = NaiveDateTime.to_date(target_ndt)
@@ -420,7 +399,7 @@ defmodule Orbis.GNSS.Data.Catalog do
           nil | [%{date: Date.t(), issue: String.t()} | {Date.t(), String.t()}]
         ) ::
           {:ok, %{date: Date.t(), issue: String.t()}}
-          | {:error, {:unsupported_product, term()}}
+          | error()
   def latest_ultra_issue(center, target, available \\ nil) do
     with candidates when is_list(candidates) <- ultra_issue_candidates(center, target),
          {:ok, available_set} <- available_issue_set(available) do
@@ -460,20 +439,19 @@ defmodule Orbis.GNSS.Data.Catalog do
 
   @doc """
   Build the full, compressed (`.gz`) archive URL for a daily station observation
-  product on the ESA GSSC anonymous archive (the same daily data tree the
-  broadcast navigation file uses).
+  product on the public BKG IGS observation tree.
 
   ## Examples
 
-      iex> Orbis.GNSS.Data.Catalog.station_obs_url("ESBC00DNK", ~D[2020-06-25], "30S")
-      {:ok, "ftp://gssc.esa.int/gnss/data/daily/2020/177/ESBC00DNK_R_20201770000_01D_30S_MO.crx.gz"}
+      iex> Orbis.GNSS.Data.Catalog.station_obs_url("WTZR00DEU", ~D[2020-06-25], "30S")
+      {:ok, "https://igs.bkg.bund.de/root_ftp/IGS/obs/2020/177/WTZR00DEU_R_20201770000_01D_30S_MO.crx.gz"}
   """
   @spec station_obs_url(String.t(), Date.t(), String.t()) ::
           {:ok, String.t()} | {:error, {:unsupported_product, term()}}
   def station_obs_url(station, %Date{} = date, sample) do
     with {:ok, filename} <- station_obs_filename(station, date, sample) do
-      root = "ftp://gssc.esa.int/gnss"
-      {:ok, "#{root}/#{dir_path(:data_daily_year_doy, date)}/#{filename}.gz"}
+      root = "https://igs.bkg.bund.de/root_ftp/IGS"
+      {:ok, "#{root}/#{dir_path(:bkg_obs_year_doy, date)}/#{filename}.gz"}
     end
   end
 
@@ -484,7 +462,7 @@ defmodule Orbis.GNSS.Data.Catalog do
   long-name plus a `.gz` suffix. The host is always one of the catalog hosts,
   never caller-supplied input.
 
-  Returns `{:ok, url}` or an `{:error, {:unsupported_product, _}}` tuple.
+  Returns `{:ok, url}` or a tagged error tuple.
 
   ## Examples
 
@@ -492,10 +470,10 @@ defmodule Orbis.GNSS.Data.Catalog do
       {:ok, "https://isdc-data.gfz.de/gnss/products/rapid/w2111/GFZ0OPSRAP_20201760000_01D_15M_ORB.SP3.gz"}
 
       iex> Orbis.GNSS.Data.Catalog.archive_url(:igs, :nav, ~D[2020-06-25], "01D")
-      {:ok, "ftp://gssc.esa.int/gnss/data/daily/2020/177/BRDC00IGS_R_20201770000_01D_MN.rnx.gz"}
+      {:ok, "https://igs.bkg.bund.de/root_ftp/IGS/BRDC/2020/177/BRDC00WRD_R_20201770000_01D_MN.rnx.gz"}
   """
   @spec archive_url(atom(), atom(), Date.t(), String.t()) ::
-          {:ok, String.t()} | {:error, {:unsupported_product, term()}}
+          {:ok, String.t()} | error()
   def archive_url(center, content, %Date{} = date, sample) do
     archive_url(center, content, date, sample, nil)
   end
@@ -510,13 +488,13 @@ defmodule Orbis.GNSS.Data.Catalog do
   ## Examples
 
       iex> Orbis.GNSS.Data.Catalog.archive_url(:cod_ult, :sp3, ~D[2024-09-03], "05M", "0600")
-      {:ok, "ftp://gssc.esa.int/gnss/products/2330/COD0OPSULT_20242470600_02D_05M_ORB.SP3.gz"}
+      {:error, {:no_open_mirror, {:cod_ult, :sp3}}}
   """
   @spec archive_url(atom(), atom(), Date.t(), String.t(), String.t() | nil) ::
-          {:ok, String.t()} | {:error, {:unsupported_product, term()}}
+          {:ok, String.t()} | error()
   def archive_url(center, content, %Date{} = date, sample, issue) do
-    with {:ok, cdef} <- center(center),
-         {:ok, filename} <- canonical_filename(center, content, date, sample, issue),
+    with {:ok, filename} <- canonical_filename(center, content, date, sample, issue),
+         {:ok, cdef} <- center(center),
          {:ok, layout} <- layout_for(cdef, content) do
       {:ok, "#{cdef.root}/#{dir_path(layout, date)}/#{filename}.gz"}
     end
@@ -526,9 +504,9 @@ defmodule Orbis.GNSS.Data.Catalog do
     do: {:error, {:unsupported_product, :bad_arguments}}
 
   @doc """
-  The transfer protocol (`:https` or `:ftp`) for a center.
+  The transfer protocol (`:https`) for a center.
   """
-  @spec protocol(atom()) :: {:ok, :https | :ftp} | {:error, {:unsupported_product, term()}}
+  @spec protocol(atom()) :: {:ok, :https} | {:error, {:unsupported_product, term()}}
   def protocol(center) do
     with {:ok, cdef} <- center(center), do: {:ok, cdef.protocol}
   end
@@ -633,21 +611,33 @@ defmodule Orbis.GNSS.Data.Catalog do
   defp available?(_candidate, nil), do: true
   defp available?(%{date: date, issue: issue}, set), do: MapSet.member?(set, {date, issue})
 
+  defp open_mirror(center, content) do
+    if MapSet.member?(@no_open_mirrors, {center, content}) do
+      {:error, {:no_open_mirror, {center, content}}}
+    else
+      :ok
+    end
+  end
+
   # --- directory layouts ---------------------------------------------------
 
   # GFZ HTTPS operational tree: <root>/rapid/w<gpsweek>/<file>.
-  defp dir_path(:gfz_class_week, date), do: "rapid/w#{gps_week(date)}"
+  defp dir_path(:gfz_rapid_week, date), do: "rapid/w#{gps_week(date)}"
 
-  # ESA GSSC flat MGEX products tree: <root>/products/<gpsweek>/<file>.
-  defp dir_path(:products_week, date), do: "products/#{gps_week(date)}"
+  # GFZ HTTPS ultra-rapid tree: <root>/ultra/w<gpsweek>/<file>.
+  defp dir_path(:gfz_ultra_week, date), do: "ultra/w#{gps_week(date)}"
 
-  # ESA GSSC daily broadcast tree: <root>/data/daily/<year>/<doy>/<file>.
-  defp dir_path(:data_daily_year_doy, date),
-    do: "data/daily/#{date.year}/#{pad3(day_of_year(date))}"
+  # ESA Navigation Office tree: <root>/<gpsweek>/<file>.
+  defp dir_path(:gps_week, date), do: "#{gps_week(date)}"
 
-  # ESA GSSC IONEX tree: <root>/products/ionex/<year>/<doy>/<file>.
-  defp dir_path(:ionex_year_doy, date),
-    do: "products/ionex/#{date.year}/#{pad3(day_of_year(date))}"
+  # BKG IGS products tree: <root>/products/<gpsweek>/<file>.
+  defp dir_path(:bkg_products_week, date), do: "products/#{gps_week(date)}"
+
+  # BKG IGS broadcast navigation tree: <root>/BRDC/<year>/<doy>/<file>.
+  defp dir_path(:bkg_brdc_year_doy, date), do: "BRDC/#{date.year}/#{pad3(day_of_year(date))}"
+
+  # BKG IGS station observation tree: <root>/obs/<year>/<doy>/<file>.
+  defp dir_path(:bkg_obs_year_doy, date), do: "obs/#{date.year}/#{pad3(day_of_year(date))}"
 
   # --- validation ----------------------------------------------------------
 
@@ -694,11 +684,10 @@ defmodule Orbis.GNSS.Data.Catalog do
   defp bad_station(s), do: {:error, {:unsupported_product, {:station, s}}}
 
   @doc """
-  The transfer protocol for the daily station observation archive (`:ftp` on the
-  ESA GSSC mirror).
+  The transfer protocol for the daily station observation archive.
   """
-  @spec station_obs_protocol() :: :ftp
-  def station_obs_protocol, do: :ftp
+  @spec station_obs_protocol() :: :https
+  def station_obs_protocol, do: :https
 
   # --- date arithmetic -----------------------------------------------------
 

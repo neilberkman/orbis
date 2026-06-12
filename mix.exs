@@ -22,7 +22,7 @@ defmodule Orbis.MixProject do
   def application do
     [
       mod: {Orbis.Application, []},
-      extra_applications: [:logger, :ftp, :ssl]
+      extra_applications: [:logger, :ssl]
     ]
   end
 

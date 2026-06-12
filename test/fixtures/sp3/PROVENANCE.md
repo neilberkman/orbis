@@ -18,7 +18,7 @@ the full constellation, which the SP3 reader tolerates); no values were altered.
 
 - size 72293 bytes, sha256
   `f77d83a0da91e7112c2890ba7aae29326b8c621cfee58ac18e4243d86e40238b`.
-- Source product: `ftp://ftp.gfz-potsdam.de/pub/GNSS/products/mgex/2111/`.
+- Source product: GFZ Potsdam MGEX products for GPS week 2111.
 - Purpose: the real BeiDou drift gate for `Orbis.GNSS.ReducedOrbit`'s
   `:eccentric_secular` model (the GRG product carries no BeiDou). GEO satellites
   (C01–C05) are excluded — near-equatorial and not orbital-element-friendly. An

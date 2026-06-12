@@ -1,17 +1,16 @@
 defmodule Orbis.GNSS.Data.Download do
-  # Internal: network transfer for GNSS products: HTTPS via `Req` and FTP via the
-  # Erlang stdlib `:ftp` application, with bounded retries, sensible timeouts, and
-  # a strict host allow-list. Not part of the public API — `Orbis.GNSS.Data.fetch/2`
-  # is the entry point.
+  # Internal: network transfer for GNSS products over HTTPS via `Req`, with
+  # bounded retries, sensible timeouts, and a strict host allow-list. Not part of
+  # the public API — `Orbis.GNSS.Data.fetch/2` is the entry point.
   #
   # This module is only reached when `offline: true` is not set and the product
   # is not already cached. It is given a URL built by `Orbis.GNSS.Data.Catalog`
   # and, as defence in depth against SSRF, re-checks before contacting it that
   # the host is on `Catalog.allowed_hosts/0` AND that the URL scheme matches the
   # requested protocol. Cross-host HTTP redirects are refused rather than
-  # followed. Both transports cap the compressed bytes buffered into memory
-  # (`:max_compressed_bytes`), since the remote file is untrusted (FTP is
-  # plaintext, anonymous). All failures are mapped to typed errors.
+  # followed. Downloads cap the compressed bytes buffered into memory
+  # (`:max_compressed_bytes`), since the remote file is untrusted. All failures
+  # are mapped to typed errors.
   @moduledoc false
 
   alias Orbis.GNSS.Data.Catalog
@@ -25,7 +24,7 @@ defmodule Orbis.GNSS.Data.Download do
   # response before the (output-side) decompression cap is even reached.
   @default_max_compressed_bytes 64 * 1024 * 1024
 
-  # Download the bytes at `url` using `protocol` (`:https` or `:ftp`). Options:
+  # Download the bytes at `url` using `protocol` (`:https`). Options:
   #   :timeout_ms (per-attempt, default 30_000), :retries (transient-error
   #   attempts, default 3), :backoff_ms (base backoff, doubled per attempt,
   #   default 500; 0 in tests), :max_compressed_bytes (buffered payload cap,
@@ -33,23 +32,18 @@ defmodule Orbis.GNSS.Data.Download do
   # Returns {:ok, compressed_bytes} or a typed error. 404/file-not-found is
   # permanent (not retried); transient network errors (incl. 408/429) are.
   @doc false
-  @spec get(String.t(), :https | :ftp, keyword()) :: {:ok, binary()} | {:error, term()}
-  def get(url, protocol, opts \\ []) when is_binary(url) and protocol in [:https, :ftp] do
-    # The Erlang `:ftp` transport needs its application (and its `:ftp_sup`
-    # supervisor) running. `extra_applications` covers the normal case, but a
-    # consumer that uses Orbis without starting the `:orbis` app tree (an
-    # escript, a bare script, a release that does not start the dep) would hit
-    # `(EXIT) no process: :ftp_sup` on the first fetch. Start it here so the
-    # caller never has to start Erlang transports by hand. Idempotent, and no
-    # outbound connection happens until `check_host` has passed the allow-list.
-    if protocol == :ftp, do: Application.ensure_all_started(:ftp)
+  @spec get(String.t(), atom(), keyword()) :: {:ok, binary()} | {:error, term()}
+  def get(url, protocol, opts \\ [])
 
+  def get(url, :https = protocol, opts) when is_binary(url) do
     with :ok <- check_host(url, protocol) do
       retries = Keyword.get(opts, :retries, @default_retries)
       backoff = Keyword.get(opts, :backoff_ms, @default_backoff_ms)
       attempt(url, protocol, opts, retries, backoff)
     end
   end
+
+  def get(_url, protocol, _opts), do: {:error, {:unsupported_product, {:protocol, protocol}}}
 
   @doc """
   Whether HTTPS downloads are enabled. `Req` is a required dependency; the app
@@ -81,7 +75,7 @@ defmodule Orbis.GNSS.Data.Download do
     end
   end
 
-  # 404 / missing files are permanent; everything else network-shaped retries.
+  # 404 / missing files are permanent; everything else network-related retries.
   defp transient?({:file_not_found, _}), do: false
   # 408 (Request Timeout) and 429 (Too Many Requests) are the canonical
   # retry-me responses; the rest of 4xx is a permanent client error.
@@ -91,7 +85,6 @@ defmodule Orbis.GNSS.Data.Download do
   # An oversized payload will be oversized again; do not retry it.
   defp transient?({:download_size_exceeded, _, _}), do: false
   defp transient?({:network, _}), do: true
-  defp transient?({:ftp_error, _}), do: true
   defp transient?(_), do: false
 
   # --- HTTPS ---------------------------------------------------------------
@@ -103,11 +96,6 @@ defmodule Orbis.GNSS.Data.Download do
     else
       {:error, :req_not_available}
     end
-  end
-
-  defp do_get(url, :ftp, opts) do
-    timeout = Keyword.get(opts, :timeout_ms, @default_timeout_ms)
-    ftp_get(url, timeout, max_compressed_bytes(opts))
   end
 
   defp max_compressed_bytes(opts),
@@ -168,70 +156,6 @@ defmodule Orbis.GNSS.Data.Download do
     e -> {:error, {:network, Exception.message(e)}}
   end
 
-  # --- FTP -----------------------------------------------------------------
-
-  defp ftp_get(url, timeout, max_bytes) do
-    %URI{host: host, path: path} = URI.parse(url)
-
-    cond do
-      is_nil(host) -> {:error, {:ftp_error, :no_host}}
-      is_nil(path) -> {:error, {:ftp_error, :no_path}}
-      true -> ftp_fetch(host, path, timeout, max_bytes)
-    end
-  end
-
-  defp ftp_fetch(host, path, timeout, max_bytes) do
-    host_charlist = String.to_charlist(host)
-    remote = String.to_charlist(path)
-
-    case :ftp.open(host_charlist, mode: :passive, timeout: timeout) do
-      {:ok, pid} ->
-        try do
-          ftp_login_and_recv(pid, remote, max_bytes)
-        after
-          :ftp.close(pid)
-        end
-
-      {:error, reason} ->
-        {:error, {:ftp_error, reason}}
-    end
-  end
-
-  # Pull the remote file in bounded chunks instead of `recv_bin/2`, which would
-  # read the whole untrusted file into one binary with no cap.
-  defp ftp_login_and_recv(pid, remote, max_bytes) do
-    with :ok <- :ftp.user(pid, ~c"anonymous", ~c"orbis@example.com"),
-         :ok <- :ftp.type(pid, :binary),
-         :ok <- :ftp.recv_chunk_start(pid, remote) do
-      ftp_recv_chunks(pid, max_bytes, [], 0)
-    else
-      {:error, :epath} -> {:error, {:file_not_found, to_string(remote)}}
-      {:error, reason} -> {:error, {:ftp_error, reason}}
-    end
-  end
-
-  defp ftp_recv_chunks(pid, max_bytes, acc, total) do
-    case :ftp.recv_chunk(pid) do
-      :ok ->
-        {:ok, acc |> Enum.reverse() |> :erlang.iolist_to_binary()}
-
-      {:ok, chunk} ->
-        total = total + byte_size(chunk)
-
-        if total > max_bytes do
-          {:error, {:download_size_exceeded, max_bytes, total}}
-        else
-          ftp_recv_chunks(pid, max_bytes, [chunk | acc], total)
-        end
-
-      {:error, :epath} ->
-        {:error, {:file_not_found, :ftp}}
-
-      {:error, reason} ->
-        {:error, {:ftp_error, reason}}
-    end
-  end
-
   # --- SSRF guard ----------------------------------------------------------
 
   defp check_host(url, protocol) do
@@ -250,5 +174,4 @@ defmodule Orbis.GNSS.Data.Download do
   end
 
   defp scheme_for(:https), do: "https"
-  defp scheme_for(:ftp), do: "ftp"
 end

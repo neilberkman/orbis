@@ -76,7 +76,7 @@ defmodule Orbis.GNSS.FetchMergedSP3FileTest do
       out_dir: out_dir
     } do
       igs = Data.ops_ultra_sp3(:igs_ult, ~D[2024-09-03], issue: "0600")
-      cod = Data.ops_ultra_sp3(:cod_ult, ~D[2024-09-03], issue: "0600")
+      gfz = Data.ops_ultra_sp3(:gfz_ult, ~D[2024-09-03], issue: "0600")
 
       seed(
         cache_dir,
@@ -89,7 +89,7 @@ defmodule Orbis.GNSS.FetchMergedSP3FileTest do
 
       seed(
         cache_dir,
-        cod,
+        gfz,
         sp3_bytes([
           {"G01", [15000.0, -20000.0, 5000.0], 100.0},
           {"G02", [16000.0, -21000.0, 6000.0], 200.0}
@@ -99,7 +99,7 @@ defmodule Orbis.GNSS.FetchMergedSP3FileTest do
       path = Path.join(out_dir, "merged_current_day.sp3")
 
       assert {:ok, ^path, report} =
-               Data.fetch_merged_sp3_file(~D[2024-09-03], [:igs_ult, :cod_ult], path,
+               Data.fetch_merged_sp3_file(~D[2024-09-03], [:igs_ult, :gfz_ult], path,
                  issue: "0600",
                  offline: true,
                  cache_dir: cache_dir
@@ -112,7 +112,7 @@ defmodule Orbis.GNSS.FetchMergedSP3FileTest do
       assert {:ok, loaded} = SP3.load(path)
       assert Enum.sort(SP3.satellite_ids(loaded)) == ["G01", "G02", "G03"]
 
-      assert Enum.map(report.contributors, & &1.center) == [:igs_ult, :cod_ult]
+      assert Enum.map(report.contributors, & &1.center) == [:igs_ult, :gfz_ult]
       assert report.source_count == 2
       refute report.single_product?
     end
@@ -121,18 +121,18 @@ defmodule Orbis.GNSS.FetchMergedSP3FileTest do
       cache_dir: cache_dir,
       out_dir: out_dir
     } do
-      cod = Data.ops_ultra_sp3(:cod_ult, ~D[2024-09-03], issue: "0600")
+      gfz = Data.ops_ultra_sp3(:gfz_ult, ~D[2024-09-03], issue: "0600")
 
       seed(
         cache_dir,
-        cod,
+        gfz,
         sp3_bytes([{"G02", [16000.0, -21000.0, 6000.0], 200.0}])
       )
 
       path = Path.join(out_dir, "merged_current_day.sp3.gz")
 
       assert {:ok, ^path, report} =
-               Data.fetch_merged_sp3_file(~D[2024-09-03], [:cod_ult], path,
+               Data.fetch_merged_sp3_file(~D[2024-09-03], [:gfz_ult], path,
                  issue: "0600",
                  offline: true,
                  cache_dir: cache_dir,
@@ -156,13 +156,13 @@ defmodule Orbis.GNSS.FetchMergedSP3FileTest do
       path = Path.join(out_dir, "should_not_exist.sp3")
 
       assert {:error, {:no_products, reasons}} =
-               Data.fetch_merged_sp3_file(~D[2024-09-03], [:igs_ult, :cod_ult], path,
+               Data.fetch_merged_sp3_file(~D[2024-09-03], [:igs_ult, :gfz_ult], path,
                  issue: "0600",
                  offline: true,
                  cache_dir: cache_dir
                )
 
-      assert Enum.map(reasons, & &1.center) == [:igs_ult, :cod_ult]
+      assert Enum.map(reasons, & &1.center) == [:igs_ult, :gfz_ult]
       assert Enum.all?(reasons, &(&1.reason == :offline_miss))
       refute File.exists?(path)
     end
@@ -189,7 +189,7 @@ defmodule Orbis.GNSS.FetchMergedSP3FileTest do
       target = NaiveDateTime.utc_now()
 
       assert {:ok, ^path, report} =
-               Data.fetch_merged_sp3_file(target, [:igs_ult, :cod_ult, :esa_ult], path,
+               Data.fetch_merged_sp3_file(target, [:igs_ult, :esa_ult], path,
                  cache_dir: cache_dir
                )
 

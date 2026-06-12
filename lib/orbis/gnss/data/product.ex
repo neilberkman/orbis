@@ -11,8 +11,8 @@ defmodule Orbis.GNSS.Data.Product do
 
   ## Fields
 
-    * `:center` — analysis-center code, e.g. `:gfz`, `:cod`, `:grg`, `:wum`,
-      `:igs`, or an ultra-rapid alias such as `:igs_ult`
+    * `:center` — analysis-center code, e.g. `:gfz`, `:esa`, `:igs`, or an
+      ultra-rapid alias such as `:igs_ult`
     * `:content` — content type: `:sp3`, `:clk`, `:nav`, `:ionex`, or `:obs`
       (station observation data, RINEX 3 / CRINEX)
     * `:date` — the product day as a `Date`
@@ -38,10 +38,10 @@ defmodule Orbis.GNSS.Data.Product do
   @doc """
   Build a `Product`, validating the center, content type, and sampling code.
 
-  Returns `{:ok, %Product{}}` or `{:error, {:unsupported_product, _}}`.
+  Returns `{:ok, %Product{}}` or a tagged error tuple.
   """
   @spec new(atom(), atom(), Date.t(), String.t(), keyword()) ::
-          {:ok, t()} | {:error, {:unsupported_product, term()}}
+          {:ok, t()} | Catalog.error()
   def new(center, content, date, sample, opts \\ [])
 
   def new(center, :obs, %Date{} = date, sample, opts)
@@ -80,8 +80,7 @@ defmodule Orbis.GNSS.Data.Product do
   @doc """
   The canonical IGS long-name filename for the product (no `.gz` suffix).
   """
-  @spec canonical_filename(t()) ::
-          {:ok, String.t()} | {:error, {:unsupported_product, term()}}
+  @spec canonical_filename(t()) :: {:ok, String.t()} | Catalog.error()
   def canonical_filename(%__MODULE__{
         content: :obs,
         station: station,
@@ -95,7 +94,7 @@ defmodule Orbis.GNSS.Data.Product do
   @doc """
   The full, compressed archive URL for the product.
   """
-  @spec archive_url(t()) :: {:ok, String.t()} | {:error, {:unsupported_product, term()}}
+  @spec archive_url(t()) :: {:ok, String.t()} | Catalog.error()
   def archive_url(%__MODULE__{content: :obs, station: station, date: date, sample: sample}),
     do: Catalog.station_obs_url(station, date, sample)
 

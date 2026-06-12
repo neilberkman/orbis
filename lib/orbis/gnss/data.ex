@@ -13,7 +13,7 @@ defmodule Orbis.GNSS.Data do
 
   ## Quick start
 
-      product = Orbis.GNSS.Data.mgex_sp3(:cod, ~D[2020-06-24])
+      product = Orbis.GNSS.Data.mgex_sp3(:esa, ~D[2020-06-24])
 
       # Download (or reuse cache) and get a decompressed file path:
       {:ok, path} = Orbis.GNSS.Data.fetch(product)
@@ -29,19 +29,18 @@ defmodule Orbis.GNSS.Data do
   Supported centers and what each publishes:
 
     * `:gfz` — GFZ operational rapid SP3/CLK over HTTPS (`isdc-data.gfz.de`)
-    * `:cod`, `:grg`, `:wum` — CODE / CNES-CLS / Wuhan MGEX precise SP3/CLK over
-      anonymous FTP (ESA GSSC mirror, `gssc.esa.int`); `:cod` also serves IONEX
-    * `:igs_ult`, `:cod_ult`, `:esa_ult`, `:gfz_ult`, `:grg_ult` — ultra-rapid
-      `OPSULT` SP3 products over anonymous FTP for current-day/live-latency use
-      (`:grg_ult` also serves ultra clocks)
-    * `:igs` — the IGS merged broadcast navigation file (`:nav`) and the combined
-      global ionosphere map (`:ionex`), over FTP
+    * `:esa` — ESA Navigation Office final SP3/CLK and IONEX over HTTPS
+      (`navigation-office.esa.int`)
+    * `:igs_ult`, `:esa_ult`, `:gfz_ult` — ultra-rapid `OPSULT` SP3 products
+      over HTTPS for current-day/live-latency use
+    * `:igs` — the IGS merged broadcast navigation file (`:nav`) over HTTPS from
+      the BKG IGS archive
 
   Content types: `:sp3`, `:clk`, `:nav`, `:ionex`, `:obs` (station observation
   data, RINEX 3 / CRINEX). Precise products and IONEX
   follow the IGS long-name convention `AAAVPPPTTT_YYYYDDDHHMM_LEN_SMP_CNT.EXT`;
   broadcast navigation uses the no-sampling RINEX long-name
-  `BRDC00IGS_R_YYYYDDDHHMM_01D_MN.rnx`. See `Orbis.GNSS.Data.Catalog`.
+  `BRDC00WRD_R_YYYYDDDHHMM_01D_MN.rnx`. See `Orbis.GNSS.Data.Catalog`.
 
   ## The fetch pipeline
 
@@ -56,7 +55,7 @@ defmodule Orbis.GNSS.Data do
        discarded and re-downloaded; offline, a corrupt hit is terminal and an
        unverifiable one is returned as the best available.
     3. Otherwise (and only when not `offline:`) download the `.gz` over HTTPS
-       (`Req`, a required dependency) or FTP (`:ftp`) to memory, decompress with a gzip-bomb cap,
+       (`Req`, a required dependency) to memory, decompress with a gzip-bomb cap,
        verify any known checksum, and **atomically** commit the decompressed
        file into the cache (temp file + rename) together with its required
        `.provenance.json` sidecar (the commit fails if the sidecar cannot be
@@ -106,13 +105,14 @@ defmodule Orbis.GNSS.Data do
     * `{:error, {:checksum_mismatch, expected, got}}` — digest verification failed
     * `{:error, {:unsupported_product, detail}}` — unknown center/content/sample,
       or a host outside the catalog
+    * `{:error, {:no_open_mirror, {center, content}}}` — the product was removed
+      because no verified anonymous HTTPS mirror is known
     * `{:error, :req_not_available}` — HTTPS downloads are disabled by config
     * `{:error, {:http_status, code}}` — non-2xx HTTP response
     * `{:error, {:redirect_not_allowed, code}}` — a 3xx redirect was refused
       (redirects are not followed, to keep the SSRF allow-list intact)
     * `{:error, {:file_not_found, url}}` — 404 / missing on the archive
     * `{:error, {:network, detail}}` — connection/timeout/DNS failure
-    * `{:error, {:ftp_error, reason}}` — FTP-level failure
     * `{:error, {:download_size_exceeded, max, got}}` — compressed payload cap hit
     * `{:error, {:decompress_failed, reason}}` — corrupt gzip
     * `{:error, {:decompress_size_exceeded, max, got}}` — gzip-bomb cap hit
@@ -150,22 +150,22 @@ defmodule Orbis.GNSS.Data do
 
   ## Examples
 
-      iex> p = Orbis.GNSS.Data.mgex_sp3(:cod, ~D[2020-06-24])
+      iex> p = Orbis.GNSS.Data.mgex_sp3(:esa, ~D[2020-06-24])
       iex> p.center
-      :cod
+      :esa
       iex> Orbis.GNSS.Data.Product.canonical_filename(p)
-      {:ok, "COD0MGXFIN_20201760000_01D_05M_ORB.SP3"}
+      {:ok, "ESA0MGNFIN_20201760000_01D_05M_ORB.SP3"}
   """
   @spec mgex_sp3(atom(), Date.t(), keyword()) :: Product.t()
   def mgex_sp3(center, %Date{} = date, opts \\ []),
-    do: build!(center, :sp3, date, Keyword.get(opts, :sample, "05M"))
+    do: build!(center, :sp3, date, Keyword.get(opts, :sample) || default_sample!(center, :sp3))
 
   @doc """
   Build an MGEX clock (RINEX clock) product. Defaults to `30S` sampling.
   """
   @spec mgex_clk(atom(), Date.t(), keyword()) :: Product.t()
   def mgex_clk(center, %Date{} = date, opts \\ []),
-    do: build!(center, :clk, date, Keyword.get(opts, :sample, "30S"))
+    do: build!(center, :clk, date, Keyword.get(opts, :sample) || default_sample!(center, :clk))
 
   @doc """
   Build an ultra-rapid OPS SP3 product.
@@ -184,9 +184,9 @@ defmodule Orbis.GNSS.Data do
       {:ok, "IGS0OPSULT_20242470600_02D_15M_ORB.SP3"}
 
       iex> available = [{~D[2024-09-03], "0000"}, {~D[2024-09-03], "0600"}]
-      iex> p = Orbis.GNSS.Data.ops_ultra_sp3(:cod_ult, ~N[2024-09-03 13:00:00], available_issues: available)
+      iex> p = Orbis.GNSS.Data.ops_ultra_sp3(:gfz_ult, ~N[2024-09-03 13:00:00], available_issues: available)
       iex> Orbis.GNSS.Data.Product.canonical_filename(p)
-      {:ok, "COD0OPSULT_20242470600_02D_05M_ORB.SP3"}
+      {:ok, "GFZ0OPSULT_20242470600_02D_05M_ORB.SP3"}
   """
   @spec ops_ultra_sp3(atom(), Date.t() | NaiveDateTime.t() | DateTime.t(), keyword()) ::
           Product.t()
@@ -196,8 +196,9 @@ defmodule Orbis.GNSS.Data do
   @doc """
   Build an ultra-rapid OPS clock product.
 
-  The anonymous GSSC ultra clock line currently covered by the catalog is
-  `:grg_ult` (`GRG0OPSULT`). Issue-time behavior matches `ops_ultra_sp3/3`.
+  Issue-time behavior matches `ops_ultra_sp3/3`. The current HTTPS catalog does
+  not include an ultra-rapid clock product; retired clock products raise
+  `{:no_open_mirror, {center, :clk}}`.
   """
   @spec ops_ultra_clk(atom(), Date.t() | NaiveDateTime.t() | DateTime.t(), keyword()) ::
           Product.t()
@@ -207,7 +208,7 @@ defmodule Orbis.GNSS.Data do
   @doc """
   Build a broadcast-navigation (merged multi-GNSS RINEX NAV) product.
 
-  Only `:igs` publishes this product (`BRDC00IGS_R_..._MN.rnx`). The RINEX
+  Only `:igs` publishes this product (`BRDC00WRD_R_..._MN.rnx`). The RINEX
   navigation long-name carries no sampling field, so the `sample` argument is
   not part of the filename; it defaults to `01D` purely to satisfy validation.
 
@@ -215,47 +216,47 @@ defmodule Orbis.GNSS.Data do
 
       iex> p = Orbis.GNSS.Data.mgex_nav(:igs, ~D[2020-06-25])
       iex> Orbis.GNSS.Data.Product.canonical_filename(p)
-      {:ok, "BRDC00IGS_R_20201770000_01D_MN.rnx"}
+      {:ok, "BRDC00WRD_R_20201770000_01D_MN.rnx"}
   """
   @spec mgex_nav(atom(), Date.t(), keyword()) :: Product.t()
   def mgex_nav(center, %Date{} = date, opts \\ []),
-    do: build!(center, :nav, date, Keyword.get(opts, :sample, "01D"))
+    do: build!(center, :nav, date, Keyword.get(opts, :sample) || default_sample!(center, :nav))
 
   @doc """
   Build an IONEX (global ionosphere TEC map) product.
 
-  Served by `:igs` (`IGS0OPSFIN`) and `:cod` (`COD0OPSFIN`). IONEX maps are
-  sub-daily, so the sampling defaults to `01H`; pass `sample:` to override
-  (e.g. `"02H"`).
+  Served by `:esa` (`ESA0OPSFIN`). IONEX maps are sub-daily, so the catalog
+  sampling defaults to `02H`; pass `sample:` to override.
 
   ## Examples
 
-      iex> p = Orbis.GNSS.Data.mgex_ionex(:igs, ~D[2024-06-24])
+      iex> p = Orbis.GNSS.Data.mgex_ionex(:esa, ~D[2024-06-24])
       iex> Orbis.GNSS.Data.Product.canonical_filename(p)
-      {:ok, "IGS0OPSFIN_20241760000_01D_01H_GIM.INX"}
+      {:ok, "ESA0OPSFIN_20241760000_01D_02H_GIM.INX"}
   """
   @spec mgex_ionex(atom(), Date.t(), keyword()) :: Product.t()
   def mgex_ionex(center, %Date{} = date, opts \\ []),
-    do: build!(center, :ionex, date, Keyword.get(opts, :sample, "01H"))
+    do:
+      build!(center, :ionex, date, Keyword.get(opts, :sample) || default_sample!(center, :ionex))
 
   @doc """
   Build a daily **station observation** product (RINEX 3 CRINEX, 30 s default).
 
   Station observation files are keyed by a 9-character site id (e.g.
-  `"ESBC00DNK"`), not an analysis-center token, and resolve on the ESA GSSC
-  anonymous archive's daily data tree. Override the sampling with `sample:`.
+  `"WTZR00DEU"`), not an analysis-center token, and resolve on the BKG IGS
+  observation tree. Override the sampling with `sample:`.
 
   ## Examples
 
-      iex> p = Orbis.GNSS.Data.station_obs("ESBC00DNK", ~D[2020-06-25])
+      iex> p = Orbis.GNSS.Data.station_obs("WTZR00DEU", ~D[2020-06-25])
       iex> Orbis.GNSS.Data.Product.canonical_filename(p)
-      {:ok, "ESBC00DNK_R_20201770000_01D_30S_MO.crx"}
+      {:ok, "WTZR00DEU_R_20201770000_01D_30S_MO.crx"}
   """
   @spec station_obs(String.t(), Date.t(), keyword()) :: Product.t()
   def station_obs(station, %Date{} = date, opts \\ []) when is_binary(station) do
     sample = Keyword.get(opts, :sample, "30S")
 
-    case Product.new(:gssc, :obs, date, sample, station: station) do
+    case Product.new(:igs, :obs, date, sample, station: station) do
       {:ok, p} -> p
       {:error, reason} -> raise ArgumentError, "invalid station OBS product: #{inspect(reason)}"
     end
@@ -267,7 +268,7 @@ defmodule Orbis.GNSS.Data do
   Use this instead of the bang builders when the inputs may be invalid.
   """
   @spec product(atom(), atom(), Date.t(), String.t()) ::
-          {:ok, Product.t()} | {:error, {:unsupported_product, term()}}
+          {:ok, Product.t()} | Catalog.error()
   def product(center, content, %Date{} = date, sample),
     do: Product.new(center, content, date, sample)
 
@@ -276,7 +277,7 @@ defmodule Orbis.GNSS.Data do
   options such as `issue: "0600"` for ultra-rapid products.
   """
   @spec product(atom(), atom(), Date.t(), String.t(), keyword()) ::
-          {:ok, Product.t()} | {:error, {:unsupported_product, term()}}
+          {:ok, Product.t()} | Catalog.error()
   def product(center, content, %Date{} = date, sample, opts),
     do: Product.new(center, content, date, sample, opts)
 
@@ -472,7 +473,7 @@ defmodule Orbis.GNSS.Data do
 
   ## Examples
 
-      {:ok, merged, _report} = Orbis.GNSS.Data.fetch_merged_sp3(date, [:igs_ult, :cod_ult])
+      {:ok, merged, _report} = Orbis.GNSS.Data.fetch_merged_sp3(date, [:igs_ult, :gfz_ult])
       {:ok, _path} = Orbis.GNSS.Data.write_sp3(merged, "/tmp/merged.sp3")
       {:ok, _path} = Orbis.GNSS.Data.write_sp3(merged, "/tmp/merged.sp3.gz", gzip: true)
   """

@@ -72,14 +72,14 @@ defmodule Orbis.GNSS.DataTest do
 
   describe "fetch/2 offline cache hits" do
     test "returns a cached file without network", %{cache_dir: cache_dir} do
-      product = Data.mgex_sp3(:cod, ~D[2020-06-24])
+      product = Data.mgex_sp3(:esa, ~D[2020-06-24])
       seeded = seed(cache_dir, product, sp3_bytes())
 
       assert {:ok, ^seeded} = Data.fetch(product, offline: true, cache_dir: cache_dir)
     end
 
     test "verifies a known checksum on a cache hit", %{cache_dir: cache_dir} do
-      product = Data.mgex_sp3(:cod, ~D[2020-06-24])
+      product = Data.mgex_sp3(:esa, ~D[2020-06-24])
       bytes = sp3_bytes()
       seed(cache_dir, product, bytes)
       sha = Cache.sha256(bytes)
@@ -89,7 +89,7 @@ defmodule Orbis.GNSS.DataTest do
     end
 
     test "rejects a cache hit whose checksum does not match", %{cache_dir: cache_dir} do
-      product = Data.mgex_sp3(:cod, ~D[2020-06-24])
+      product = Data.mgex_sp3(:esa, ~D[2020-06-24])
       seed(cache_dir, product, sp3_bytes())
       wrong = String.duplicate("0", 64)
 
@@ -100,9 +100,9 @@ defmodule Orbis.GNSS.DataTest do
 
   describe "fetch/2 offline misses and errors" do
     test "returns an offline_miss when the file is absent", %{cache_dir: cache_dir} do
-      product = Data.mgex_sp3(:cod, ~D[2020-06-24])
+      product = Data.mgex_sp3(:esa, ~D[2020-06-24])
 
-      assert {:error, {:offline_miss, "COD0MGXFIN_20201760000_01D_05M_ORB.SP3"}} =
+      assert {:error, {:offline_miss, "ESA0MGNFIN_20201760000_01D_05M_ORB.SP3"}} =
                Data.fetch(product, offline: true, cache_dir: cache_dir)
     end
 
@@ -128,7 +128,7 @@ defmodule Orbis.GNSS.DataTest do
       Application.put_env(:orbis, :gnss_data_offline, true)
       on_exit(fn -> Application.delete_env(:orbis, :gnss_data_offline) end)
 
-      product = Data.mgex_sp3(:cod, ~D[2020-06-24])
+      product = Data.mgex_sp3(:esa, ~D[2020-06-24])
       assert {:error, {:offline_miss, _}} = Data.fetch(product, cache_dir: cache_dir)
     end
 
@@ -160,7 +160,7 @@ defmodule Orbis.GNSS.DataTest do
 
   describe "convenience loaders (offline)" do
     test "sp3/2 returns a queryable SP3 handle", %{cache_dir: cache_dir} do
-      product = Data.mgex_sp3(:cod, ~D[2020-06-24])
+      product = Data.mgex_sp3(:esa, ~D[2020-06-24])
       seed(cache_dir, product, sp3_bytes())
 
       assert {:ok, %Orbis.GNSS.SP3{} = sp3} =
@@ -171,10 +171,10 @@ defmodule Orbis.GNSS.DataTest do
     end
 
     test "broadcast/2 returns a Broadcast handle", %{cache_dir: cache_dir} do
-      # :igs resolves to the real merged-nav name BRDC00IGS_R_20201770000_01D_MN.rnx.
+      # :igs resolves to the real merged-nav name BRDC00WRD_R_20201770000_01D_MN.rnx.
       product = Data.mgex_nav(:igs, ~D[2020-06-25])
 
-      assert {:ok, "BRDC00IGS_R_20201770000_01D_MN.rnx"} =
+      assert {:ok, "BRDC00WRD_R_20201770000_01D_MN.rnx"} =
                Data.Product.canonical_filename(product)
 
       seed(cache_dir, product, File.read!(@nav_fixture))
@@ -184,7 +184,7 @@ defmodule Orbis.GNSS.DataTest do
     end
 
     test "an offline miss propagates through sp3/2", %{cache_dir: cache_dir} do
-      product = Data.mgex_sp3(:cod, ~D[2020-06-24])
+      product = Data.mgex_sp3(:esa, ~D[2020-06-24])
 
       assert {:error, {:offline_miss, _}} =
                Data.sp3(product, offline: true, cache_dir: cache_dir)
@@ -199,7 +199,7 @@ defmodule Orbis.GNSS.DataTest do
                Data.Product.canonical_filename(product)
 
       assert {:ok,
-              "ftp://gssc.esa.int/gnss/data/daily/2020/177/" <>
+              "https://igs.bkg.bund.de/root_ftp/IGS/obs/2020/177/" <>
                 "ESBC00DNK_R_20201770000_01D_30S_MO.crx.gz"} =
                Data.Product.archive_url(product)
     end
@@ -241,7 +241,7 @@ defmodule Orbis.GNSS.DataTest do
 
   describe "atomic commit + provenance" do
     test "commit writes the file and a provenance sidecar", %{cache_dir: cache_dir} do
-      product = Data.mgex_sp3(:cod, ~D[2020-06-24])
+      product = Data.mgex_sp3(:esa, ~D[2020-06-24])
       {:ok, filename} = Data.Product.canonical_filename(product)
       {:ok, path} = Cache.path_for(cache_dir, filename)
 
@@ -364,10 +364,10 @@ defmodule Orbis.GNSS.DataTest do
     end
 
     @tag :network
-    test "downloads a real MGEX SP3 over FTP (chunked recv)", %{cache_dir: cache_dir} do
-      # CODE's MGEX final orbit for 2020-06-24, anonymous FTP on the ESA GSSC
-      # mirror: ftp://gssc.esa.int/gnss/products/2111/COD0MGXFIN_20201760000_01D_05M_ORB.SP3.gz
-      product = Data.mgex_sp3(:cod, ~D[2020-06-24])
+    test "downloads a real ESA MGEX SP3 over HTTPS", %{cache_dir: cache_dir} do
+      # ESA's MGEX final orbit for 2020-06-24:
+      # https://navigation-office.esa.int/products/gnss-products/2111/ESA0MGNFIN_20201760000_01D_05M_ORB.SP3.gz
+      product = Data.mgex_sp3(:esa, ~D[2020-06-24])
 
       assert {:ok, path} = Data.fetch(product, cache_dir: cache_dir)
       assert File.exists?(path)
@@ -375,9 +375,9 @@ defmodule Orbis.GNSS.DataTest do
     end
 
     @tag :network
-    test "downloads the real merged broadcast navigation file over FTP", %{cache_dir: cache_dir} do
-      # IGS merged multi-GNSS broadcast nav for 2020-06-25, anonymous FTP:
-      # ftp://gssc.esa.int/gnss/data/daily/2020/177/BRDC00IGS_R_20201770000_01D_MN.rnx.gz
+    test "downloads the real merged broadcast navigation file over HTTPS", %{cache_dir: cache_dir} do
+      # IGS merged multi-GNSS broadcast nav for 2020-06-25:
+      # https://igs.bkg.bund.de/root_ftp/IGS/BRDC/2020/177/BRDC00WRD_R_20201770000_01D_MN.rnx.gz
       product = Data.mgex_nav(:igs, ~D[2020-06-25])
 
       assert {:ok, path} = Data.fetch(product, cache_dir: cache_dir)
@@ -386,10 +386,10 @@ defmodule Orbis.GNSS.DataTest do
     end
 
     @tag :network
-    test "downloads a real daily station observation file over FTP", %{cache_dir: cache_dir} do
-      # A daily 30 s RINEX-3 observation file on the ESA GSSC anonymous mirror:
-      # ftp://gssc.esa.int/gnss/data/daily/2020/177/MYVA00ISL_R_20201770000_01D_30S_MO.crx.gz
-      product = Data.station_obs("MYVA00ISL", ~D[2020-06-25])
+    test "downloads a real daily station observation file over HTTPS", %{cache_dir: cache_dir} do
+      # A daily 30 s RINEX-3 observation file on the BKG IGS archive:
+      # https://igs.bkg.bund.de/root_ftp/IGS/obs/2020/177/WTZR00DEU_R_20201770000_01D_30S_MO.crx.gz
+      product = Data.station_obs("WTZR00DEU", ~D[2020-06-25])
 
       assert {:ok, %Orbis.GNSS.RINEX.Observations{} = obs} =
                Data.observations(product, cache_dir: cache_dir)

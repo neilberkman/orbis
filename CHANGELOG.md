@@ -6,6 +6,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- GNSS data downloads are HTTPS-only; the deprecated Erlang `:ftp` transport is
+  no longer started or listed as an application dependency.
+- GNSS product URLs now resolve through verified open HTTPS archives:
+  GFZ rapid/ultra via `isdc-data.gfz.de`, ESA final/ultra/IONEX via
+  `navigation-office.esa.int`, and IGS broadcast nav / IGS ultra / station OBS
+  via `igs.bkg.bund.de`.
+
+### Removed
+
+- Removed catalog products that had no verified anonymous HTTPS mirror:
+  `{:cod, :sp3}`, `{:cod, :clk}`, `{:cod, :ionex}`, `{:grg, :sp3}`,
+  `{:grg, :clk}`, `{:wum, :sp3}`, `{:wum, :clk}`, `{:cod_ult, :sp3}`,
+  `{:grg_ult, :sp3}`, `{:grg_ult, :clk}`, and `{:igs, :ionex}` now return
+  `{:error, {:no_open_mirror, {center, content}}}`.
+
 ## [0.18.0] - 2026-06-12
 
 ### Added
