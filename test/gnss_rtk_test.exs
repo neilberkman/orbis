@@ -893,17 +893,24 @@ defmodule Orbis.GNSS.RTKTest do
           )
         end)
 
+      opts = [
+        reference_satellite_id: "G01",
+        ambiguity_wavelength_m: @l1_wavelength_m,
+        initial_baseline_m: {-40.0, 35.0, 12.0}
+      ]
+
+      assert {:ok, default_sol} = RTK.solve_filter_baseline_epochs(@base, epochs, opts)
+      assert default_sol.metadata.filter_kernel == :rust
+      assert position_error(default_sol.baseline_m, @truth_baseline) < 2.0e-4
+
       assert {:ok, sol} =
-               RTK.solve_filter_baseline_epochs(@base, epochs,
-                 reference_satellite_id: "G01",
-                 ambiguity_wavelength_m: @l1_wavelength_m,
-                 initial_baseline_m: {-40.0, 35.0, 12.0}
-               )
+               RTK.solve_filter_baseline_epochs(@base, epochs, opts ++ [filter_kernel: :elixir])
 
       assert sol.reference_satellite_id == "G01"
       assert sol.metadata.integer_method == :sequential_lambda
       assert sol.metadata.ambiguity_state == :single_difference
       assert sol.metadata.ambiguity_initialization == :phase_code
+      assert sol.metadata.filter_kernel == :elixir
 
       assert sol.metadata.initialized_ambiguity_count == map_size(@fixed_cycles)
 
@@ -959,11 +966,13 @@ defmodule Orbis.GNSS.RTKTest do
         initial_baseline_m: {-40.0, 35.0, 12.0}
       ]
 
-      assert {:ok, elixir_sol} = RTK.solve_filter_baseline_epochs(@base, epochs, opts)
+      assert {:ok, elixir_sol} =
+               RTK.solve_filter_baseline_epochs(@base, epochs, opts ++ [filter_kernel: :elixir])
 
       assert {:ok, rust_sol} =
                RTK.solve_filter_baseline_epochs(@base, epochs, opts ++ [filter_kernel: :rust])
 
+      assert elixir_sol.metadata.filter_kernel == :elixir
       assert rust_sol.metadata.filter_kernel == :rust
       assert rust_sol.metadata.first_fixed_index == elixir_sol.metadata.first_fixed_index
       assert rust_sol.metadata.fixed_epoch_count == elixir_sol.metadata.fixed_epoch_count
@@ -1474,6 +1483,7 @@ defmodule Orbis.GNSS.RTKTest do
 
       assert %{"G" => _, "E" => _, "R" => _} = sol.metadata.reference_satellites
       assert sol.metadata.float_only_systems == ["R"]
+      assert sol.metadata.filter_kernel == :rust
       assert sol.metadata.fixed_epoch_count > 0
       assert Enum.all?(sol.epochs, &(&1.integer_status in [:fixed, :not_fixed]))
       assert Enum.any?(sol.epochs, &(&1.integer_status == :fixed))
@@ -1504,11 +1514,13 @@ defmodule Orbis.GNSS.RTKTest do
         initial_baseline_m: {-40.0, 35.0, 12.0}
       ]
 
-      assert {:ok, elixir_sol} = RTK.solve_filter_baseline_epochs(@base, epochs, opts)
+      assert {:ok, elixir_sol} =
+               RTK.solve_filter_baseline_epochs(@base, epochs, opts ++ [filter_kernel: :elixir])
 
       assert {:ok, rust_sol} =
                RTK.solve_filter_baseline_epochs(@base, epochs, opts ++ [filter_kernel: :rust])
 
+      assert elixir_sol.metadata.filter_kernel == :elixir
       assert rust_sol.metadata.filter_kernel == :rust
       assert rust_sol.metadata.reference_satellites == elixir_sol.metadata.reference_satellites
       assert rust_sol.metadata.float_only_systems == ["R"]

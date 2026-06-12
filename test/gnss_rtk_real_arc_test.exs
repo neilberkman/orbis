@@ -275,6 +275,7 @@ defmodule Orbis.GNSS.RTKRealArcTest do
              )
 
     assert filter.metadata.first_fixed_index in [0, 1]
+    assert filter.metadata.filter_kernel == :rust
     assert Enum.any?(filter.epochs, &(&1.integer_status == :fixed))
     assert position_error(filter.baseline_m, antenna_baseline) < 0.01
 
@@ -295,6 +296,7 @@ defmodule Orbis.GNSS.RTKRealArcTest do
     # geometry; it should also fix the prefix instead of reporting the old
     # covariance-matches-state-does-not gap.
     assert rtklib_weighted_filter.metadata.measurement_covariance.stochastic_model == :rtklib
+    assert rtklib_weighted_filter.metadata.filter_kernel == :rust
     assert rtklib_weighted_filter.metadata.first_fixed_index in [0, 1]
     assert Enum.any?(rtklib_weighted_filter.epochs, &(&1.integer_status == :fixed))
     assert position_error(rtklib_weighted_filter.baseline_m, antenna_baseline) < 0.01
@@ -315,7 +317,8 @@ defmodule Orbis.GNSS.RTKRealArcTest do
                code_sigma_m: 0.3,
                phase_sigma_m: 0.003,
                ambiguity_wavelength_m: @gps_l1_wavelength_m,
-               integer_candidate_limit: 200_000
+               integer_candidate_limit: 200_000,
+               filter_kernel: :elixir
              )
 
     full_fixed_epochs = Enum.count(full_filter.epochs, &(&1.integer_status == :fixed))
@@ -328,6 +331,7 @@ defmodule Orbis.GNSS.RTKRealArcTest do
     assert full_filter.metadata.first_fixed_index <=
              precise_oracle["reference"]["first_fixed_index"] + 1
 
+    assert full_filter.metadata.filter_kernel == :elixir
     assert full_fixed_epochs >= precise_oracle["reference"]["fixed_epochs"] - 1
     assert position_error(full_filter.baseline_m, antenna_baseline) < 0.01
 
@@ -403,12 +407,13 @@ defmodule Orbis.GNSS.RTKRealArcTest do
     # Static accumulation (process noise off) is the existing default; kinematic
     # adds the between-epoch Q-inflation time update on the baseline block.
     assert {:ok, static} = RTK.solve_filter_baseline_epochs(base_arp, epochs, base_opts)
+    assert static.metadata.filter_kernel == :rust
 
     assert {:ok, kinematic} =
              RTK.solve_filter_baseline_epochs(
                base_arp,
                epochs,
-               [process_noise_baseline_sigma_m: 30.0] ++ base_opts
+               [process_noise_baseline_sigma_m: 30.0, filter_kernel: :elixir] ++ base_opts
              )
 
     # The time update is genuinely exercised: loosening the baseline prior each
@@ -422,6 +427,7 @@ defmodule Orbis.GNSS.RTKRealArcTest do
     assert kin_fixed >= oracle["reference"]["fixed_epochs"] - 5
 
     # Final baseline stays in RTKLIB's converged class (~mm).
+    assert kinematic.metadata.filter_kernel == :elixir
     assert position_error(kinematic.baseline_m, antenna_baseline) < 0.01
 
     # Every fixed epoch — including epoch 0 — reports a cm-class baseline. The
@@ -492,7 +498,7 @@ defmodule Orbis.GNSS.RTKRealArcTest do
       opts = [process_noise_baseline_sigma_m: process_sigma_m] ++ base_opts
 
       elixir_sol =
-        case RTK.solve_filter_baseline_epochs(base_arp, epochs, opts) do
+        case RTK.solve_filter_baseline_epochs(base_arp, epochs, opts ++ [filter_kernel: :elixir]) do
           {:ok, sol} ->
             sol
 
@@ -513,6 +519,7 @@ defmodule Orbis.GNSS.RTKRealArcTest do
             )
         end
 
+      assert elixir_sol.metadata.filter_kernel == :elixir
       assert rust_sol.metadata.filter_kernel == :rust
       assert_filter_kernel_exact_match(rust_sol, elixir_sol)
 
@@ -589,13 +596,15 @@ defmodule Orbis.GNSS.RTKRealArcTest do
       float_only_systems: ["R"]
     ]
 
-    assert {:ok, sol} = RTK.solve_filter_baseline_epochs(base_arp, epochs, opts)
+    assert {:ok, sol} =
+             RTK.solve_filter_baseline_epochs(base_arp, epochs, opts ++ [filter_kernel: :elixir])
 
     # Each observed system carries its own double-difference reference.
     assert %{"G" => "G" <> _, "R" => "R" <> _, "E" => "E" <> _, "C" => "C" <> _} =
              sol.metadata.reference_satellites
 
     assert sol.metadata.float_only_systems == ["R"]
+    assert sol.metadata.filter_kernel == :elixir
 
     # GLONASS ambiguities never enter a fixed set (FDMA inter-channel biases
     # break the clean DD integer assumption, the oracle ran gloarmode=off).

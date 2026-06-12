@@ -674,10 +674,10 @@ defmodule Orbis.GNSS.RTK do
       (default `#{@default_filter_ambiguity_prior_sigma_m}`).
     * `:hold_sigma_m` - pseudo-measurement sigma for fixed ambiguity holds
       (default `#{@default_filter_hold_sigma_m}`).
-    * `:filter_kernel` - `:elixir` (default) or `:rust`; the Rust kernel path
-      is opt-in while its trace parity gates mature. The kernel carries the
-      per-system references and honors `:float_only_systems`, matching the
-      Elixir filter bit-for-bit.
+    * `:filter_kernel` - `:rust` (default) or `:elixir` — the Elixir reference
+      implementation, bit-identical to the kernel; every kernel capability is
+      gated by === trace tests against it. The kernel carries the per-system
+      references and honors `:float_only_systems`.
 
   Returns `{:ok, %FilterBaselineSolution{}}` or a tagged error.
   """
@@ -2617,7 +2617,7 @@ defmodule Orbis.GNSS.RTK do
   end
 
   defp filter_kernel(opts) do
-    case Keyword.get(opts, :filter_kernel, :elixir) do
+    case Keyword.get(opts, :filter_kernel, :rust) do
       value when value in [:elixir, :rust] -> {:ok, value}
       _other -> {:error, {:invalid_option, :filter_kernel}}
     end

@@ -19,6 +19,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   uses `CODE/<year>/COD0OPSFIN_...`, and `{:cod_ult, :sp3}` uses the recent
   `CODE/COD0OPSULT_...` product. AIUB does not offer HTTPS; transport
   integrity relies on the plain-HTTP channel for these public products.
+- `Orbis.GNSS.RTK.solve_filter_baseline_epochs/3` now defaults to the Rust
+  RTK filter kernel. `:elixir` remains fully supported as the reference
+  implementation.
 
 ### Removed
 
