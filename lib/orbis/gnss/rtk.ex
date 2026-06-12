@@ -82,6 +82,7 @@ defmodule Orbis.GNSS.RTK do
   @default_filter_ambiguity_prior_sigma_m 1_000.0
   @default_filter_hold_sigma_m 1.0e-4
   @default_filter_process_noise_baseline_sigma_m 0.0
+  @default_filter_innovation_screen_min_rows 8
   @rtk_filter_state_version 3
   @min_elevation_sin 0.05
   @double_difference_options [:reference_satellite_id]
@@ -120,6 +121,8 @@ defmodule Orbis.GNSS.RTK do
                                :ambiguity_prior_sigma_m,
                                :hold_sigma_m,
                                :process_noise_baseline_sigma_m,
+                               :innovation_screen_sigma,
+                               :innovation_screen_min_rows,
                                :filter_kernel
                              ]
   @dual_wide_lane_options [
@@ -674,6 +677,13 @@ defmodule Orbis.GNSS.RTK do
       (default `#{@default_filter_ambiguity_prior_sigma_m}`).
     * `:hold_sigma_m` - pseudo-measurement sigma for fixed ambiguity holds
       (default `#{@default_filter_hold_sigma_m}`).
+    * `:innovation_screen_sigma` - optional prototype predicted-residual
+      screen. When set, the Elixir filter rejects epoch rows whose absolute
+      normalized innovation exceeds this sigma value before the measurement
+      update.
+    * `:innovation_screen_min_rows` - minimum accepted row count for the
+      prototype innovation screen. If fewer rows survive, the epoch coasts on
+      the predicted state (default `#{@default_filter_innovation_screen_min_rows}`).
     * `:filter_kernel` - `:rust` (default) or `:elixir` — the Elixir reference
       implementation, bit-identical to the kernel; every kernel capability is
       gated by === trace tests against it. The kernel carries the per-system
@@ -2605,14 +2615,37 @@ defmodule Orbis.GNSS.RTK do
              opts,
              :process_noise_baseline_sigma_m,
              @default_filter_process_noise_baseline_sigma_m
-           ) do
+           ),
+         {:ok, innovation_screen} <- innovation_screen_options(opts) do
       {:ok,
        %{
          baseline_prior_sigma_m: baseline_prior_sigma_m,
          ambiguity_prior_sigma_m: ambiguity_prior_sigma_m,
          hold_sigma_m: hold_sigma_m,
-         process_noise_baseline_sigma_m: process_noise_baseline_sigma_m
+         process_noise_baseline_sigma_m: process_noise_baseline_sigma_m,
+         innovation_screen: innovation_screen
        }}
+    end
+  end
+
+  defp innovation_screen_options(opts) do
+    threshold = Keyword.get(opts, :innovation_screen_sigma)
+
+    min_rows =
+      Keyword.get(opts, :innovation_screen_min_rows, @default_filter_innovation_screen_min_rows)
+
+    cond do
+      not is_nil(threshold) and (not is_number(threshold) or threshold <= 0.0) ->
+        {:error, {:invalid_option, :innovation_screen_sigma}}
+
+      not is_integer(min_rows) or min_rows < 1 ->
+        {:error, {:invalid_option, :innovation_screen_min_rows}}
+
+      is_nil(threshold) ->
+        {:ok, %{enabled?: false, threshold_sigma: nil, min_rows: min_rows}}
+
+      true ->
+        {:ok, %{enabled?: true, threshold_sigma: threshold / 1.0, min_rows: min_rows}}
     end
   end
 
@@ -4036,7 +4069,7 @@ defmodule Orbis.GNSS.RTK do
        ) do
     predicted_acc = time_update_information(acc, filter_opts)
 
-    case do_sequential_filter_epoch(
+    case do_screened_sequential_filter_epoch(
            base,
            epoch,
            refs,
@@ -4057,7 +4090,7 @@ defmodule Orbis.GNSS.RTK do
         if predicted_acc.information == acc.information do
           err
         else
-          do_sequential_filter_epoch(
+          do_screened_sequential_filter_epoch(
             base,
             epoch,
             refs,
@@ -4081,7 +4114,7 @@ defmodule Orbis.GNSS.RTK do
     end
   end
 
-  defp do_sequential_filter_epoch(
+  defp do_screened_sequential_filter_epoch(
          base,
          epoch,
          refs,
@@ -4098,6 +4131,74 @@ defmodule Orbis.GNSS.RTK do
          filter_opts,
          acc
        ) do
+    with {:ok, predicted_rows} <-
+           build_epoch_sequential_baseline_rows(
+             base,
+             epoch,
+             refs,
+             physical_sats,
+             sd_ambiguity_ids,
+             dd_ambiguity_pairs,
+             acc.state,
+             weights
+           ) do
+      case screen_sequential_epoch_rows(predicted_rows, filter_opts) do
+        {:update, screened_row_keys, screen_meta} ->
+          do_sequential_filter_epoch(
+            base,
+            epoch,
+            refs,
+            physical_sats,
+            sd_ambiguity_ids,
+            dd_ambiguity_ids,
+            dd_ambiguity_pairs,
+            float_only_dd_ids,
+            wavelengths,
+            offsets,
+            weights,
+            solve_opts,
+            integer_opts,
+            filter_opts,
+            acc,
+            screened_row_keys,
+            screen_meta
+          )
+
+        {:coast, screen_meta} ->
+          coast_sequential_filter_epoch(
+            base,
+            epoch,
+            refs,
+            physical_sats,
+            sd_ambiguity_ids,
+            dd_ambiguity_pairs,
+            weights,
+            acc,
+            screen_meta
+          )
+      end
+    end
+  end
+
+  defp do_sequential_filter_epoch(
+         base,
+         epoch,
+         refs,
+         physical_sats,
+         sd_ambiguity_ids,
+         dd_ambiguity_ids,
+         dd_ambiguity_pairs,
+         float_only_dd_ids,
+         wavelengths,
+         offsets,
+         weights,
+         solve_opts,
+         integer_opts,
+         filter_opts,
+         acc,
+         screened_row_keys,
+         screen_meta
+       ) do
     with {:ok, state, information, rows} <-
            iterate_sequential_filter_epoch(
              base,
@@ -4113,6 +4214,7 @@ defmodule Orbis.GNSS.RTK do
              weights,
              solve_opts,
              filter_opts,
+             screened_row_keys,
              1
            ),
          {:ok, covariance} <- invert_matrix(information),
@@ -4146,7 +4248,8 @@ defmodule Orbis.GNSS.RTK do
              fixed_m,
              weights,
              solve_opts,
-             filter_opts
+             filter_opts,
+             screened_row_keys
            ),
          {:ok, residual_rows} <-
            build_epoch_sequential_baseline_rows(
@@ -4175,7 +4278,8 @@ defmodule Orbis.GNSS.RTK do
         ambiguity_search: Map.get(search_meta, :ambiguity_search),
         residuals_m: residuals,
         newly_fixed_ambiguities: newly_fixed,
-        fixed_ambiguities: all_fixed
+        fixed_ambiguities: all_fixed,
+        innovation_screen: screen_meta
       }
 
       {:ok,
@@ -4187,6 +4291,51 @@ defmodule Orbis.GNSS.RTK do
            fixed_m: fixed_m,
            epochs: [epoch_result | acc.epochs]
        }}
+    end
+  end
+
+  defp coast_sequential_filter_epoch(
+         base,
+         epoch,
+         refs,
+         physical_sats,
+         sd_ambiguity_ids,
+         dd_ambiguity_pairs,
+         weights,
+         acc,
+         screen_meta
+       ) do
+    with {:ok, residual_rows} <-
+           build_epoch_sequential_baseline_rows(
+             base,
+             epoch,
+             refs,
+             physical_sats,
+             sd_ambiguity_ids,
+             dd_ambiguity_pairs,
+             acc.state,
+             weights
+           ),
+         {:ok, residuals} <- baseline_residuals(residual_rows) do
+      all_fixed = acc.fixed_cycles |> Map.keys() |> Enum.sort()
+
+      epoch_result = %{
+        epoch: epoch.epoch,
+        index: epoch.idx,
+        baseline_m: ecef_map(acc.state.baseline),
+        integer_status: :coasted,
+        integer_ratio: nil,
+        integer_best_score: nil,
+        integer_second_best_score: nil,
+        integer_candidates: nil,
+        ambiguity_search: nil,
+        residuals_m: residuals,
+        newly_fixed_ambiguities: [],
+        fixed_ambiguities: all_fixed,
+        innovation_screen: screen_meta
+      }
+
+      {:ok, %{acc | epochs: [epoch_result | acc.epochs]}}
     end
   end
 
@@ -4578,6 +4727,7 @@ defmodule Orbis.GNSS.RTK do
          weights,
          solve_opts,
          filter_opts,
+         screened_row_keys,
          iter
        ) do
     with {:ok, rows} <-
@@ -4591,6 +4741,7 @@ defmodule Orbis.GNSS.RTK do
              prior_state,
              weights
            ),
+         rows = keep_screened_sequential_rows(rows, screened_row_keys),
          {measurement_information, measurement_rhs} <-
            baseline_normal_equations(rows, baseline_unknown_count(sd_ambiguity_ids)),
          {hold_information, hold_rhs} <-
@@ -4645,11 +4796,64 @@ defmodule Orbis.GNSS.RTK do
             weights,
             solve_opts,
             filter_opts,
+            screened_row_keys,
             iter + 1
           )
       end
     end
   end
+
+  defp screen_sequential_epoch_rows(rows, filter_opts) do
+    case Map.fetch!(filter_opts, :innovation_screen) do
+      %{enabled?: true, threshold_sigma: threshold, min_rows: min_rows} ->
+        {rejected, accepted} =
+          Enum.split_with(rows, fn row ->
+            abs(row.y * row.weight) > threshold
+          end)
+
+        meta = innovation_screen_meta(rows, accepted, rejected, threshold, min_rows)
+
+        if length(accepted) < min_rows do
+          {:coast, %{meta | coasted?: true}}
+        else
+          {:update, MapSet.new(accepted, &sequential_row_key/1), meta}
+        end
+
+      _disabled ->
+        {:update, nil, nil}
+    end
+  end
+
+  defp innovation_screen_meta(rows, accepted, rejected, threshold, min_rows) do
+    all_normalized = Enum.map(rows, &abs(&1.y * &1.weight))
+    rejected_normalized = Enum.map(rejected, &abs(&1.y * &1.weight))
+
+    %{
+      threshold_sigma: threshold,
+      min_rows: min_rows,
+      input_rows: length(rows),
+      accepted_rows: length(accepted),
+      rejected_rows: length(rejected),
+      rejected_code_rows: Enum.count(rejected, &(&1.kind == :code)),
+      rejected_phase_rows: Enum.count(rejected, &(&1.kind == :phase)),
+      max_abs_normalized_innovation: max_value_or_nil(all_normalized),
+      max_rejected_abs_normalized_innovation: max_value_or_nil(rejected_normalized),
+      coasted?: false
+    }
+  end
+
+  defp keep_screened_sequential_rows(rows, nil), do: rows
+
+  defp keep_screened_sequential_rows(rows, screened_row_keys) do
+    Enum.filter(rows, &MapSet.member?(screened_row_keys, sequential_row_key(&1)))
+  end
+
+  defp sequential_row_key(row) do
+    {row.kind, row.epoch_idx, row.sat, row.ref_sat, row.ambiguity_id}
+  end
+
+  defp max_value_or_nil([]), do: nil
+  defp max_value_or_nil(values), do: Enum.max(values)
 
   # Kinematic process-noise time update (predict step). Between epochs, inflate
   # the baseline (position) block of the prior covariance by Q = sigma^2 while
@@ -4772,7 +4976,8 @@ defmodule Orbis.GNSS.RTK do
          _fm,
          _w,
          _so,
-         _fo
+         _fo,
+         _screened_row_keys
        ), do: {:ok, float_state}
 
   defp conditioned_fixed_state(
@@ -4788,7 +4993,8 @@ defmodule Orbis.GNSS.RTK do
          fixed_m,
          weights,
          solve_opts,
-         filter_opts
+         filter_opts,
+         screened_row_keys
        ) do
     case iterate_sequential_filter_epoch(
            base,
@@ -4804,6 +5010,7 @@ defmodule Orbis.GNSS.RTK do
            weights,
            solve_opts,
            filter_opts,
+           screened_row_keys,
            1
          ) do
       {:ok, conditioned, _information, _rows} -> {:ok, conditioned}
