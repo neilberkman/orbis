@@ -10,9 +10,14 @@ output for the vendored WTZR/WTZZ 2020-06-25 120-epoch short-baseline arc.
 - **Input observations:**
   - `test/fixtures/obs/WTZR00DEU_R_20201770000_01D_30S_MO_120epoch.rnx`
   - `test/fixtures/obs/WTZZ00DEU_R_20201770000_01D_30S_MO_120epoch.rnx`
-- **Reference orbit/clock product for the committed RTKLIB solution:** broadcast
-  navigation from `test/fixtures/nav/ESBC00DNK_R_20201770000_01D_MN.rnx`.
-- **Navigation product used by RTKLIB:** `test/fixtures/nav/ESBC00DNK_R_20201770000_01D_MN.rnx`
+- **Reference orbit/clock product for the committed canonical RTKLIB solution:**
+  broadcast navigation from
+  `test/fixtures/nav/ESBC00DNK_R_20201770000_01D_MN.rnx`.
+- **Navigation products used by RTKLIB:**
+  - canonical and Track A:
+    `test/fixtures/nav/ESBC00DNK_R_20201770000_01D_MN.rnx`
+  - Track B multi-GNSS:
+    `test/fixtures/nav/BRDC00WRD_R_20201770000_01D_GREC.rnx`
 - **Primary reference command:** `rnx2rtkp -p 3 -f 1 -h -m 10 ...`
   (kinematic/RTK, L1, fix-and-hold, 10 degree mask). The generated `.pos`
   source was `_planning/rtklib_wettzell/l1_brdc.pos`.
@@ -31,6 +36,17 @@ epoch-2 ambiguity fixture was extracted from an instrumented local RTKLIB trace
 the same precise command. Truth is the antenna-reference-point baseline derived
 from the marker ECEF coordinates and RINEX antenna-height fields already used by
 `test/gnss_rtk_real_arc_test.exs`.
+
+The Track B multi-GNSS oracle
+(`wtzr_wtzz_multignss_static_rtklib_oracle.json`) was regenerated from
+`track_b_static_multignss_l1.conf` with the BKG
+`BRDC00WRD_R_20201770000_01D_GREC.rnx` broadcast fixture so GLONASS is actually
+present in the RTKLIB solve. GLONASS ambiguity resolution remains disabled
+(`pos2-gloarmode = off`). The regenerated oracle fixes 120/120 epochs, first
+fixes at `2020-06-25T00:00:00`, ends with 1.834629036 mm truth error, and has
+14-17 total satellites per epoch. A scratch `rnx2rtkp -y 2` status trace for
+the generation showed GPS 5-6, GLONASS 5-6, Galileo 3-5, and BeiDou 0 used
+satellites per epoch for this RTKLIB 2.4.2 L1 arc.
 
 Important: passing an SP3 file to `rnx2rtkp` does not by itself select precise
 ephemeris; RTKLIB defaults to broadcast (`pos1-sateph = brdc`). The similarly

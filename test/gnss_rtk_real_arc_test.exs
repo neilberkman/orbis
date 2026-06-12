@@ -26,6 +26,10 @@ defmodule Orbis.GNSS.RTKRealArcTest do
                                   __DIR__,
                                   "fixtures/rtk/wtzr_wtzz_kinematic_gps_rtklib_oracle.json"
                                 )
+  @rtklib_multignss_oracle_path Path.join(
+                                  __DIR__,
+                                  "fixtures/rtk/wtzr_wtzz_multignss_static_rtklib_oracle.json"
+                                )
   @c_m_s 299_792_458.0
   @gps_l1_hz 1_575_420_000.0
   @gps_l2_hz 1_227_600_000.0
@@ -427,6 +431,36 @@ defmodule Orbis.GNSS.RTKRealArcTest do
 
     assert Enum.max(converged_errors) < 0.02
     assert Enum.sum(converged_errors) / length(converged_errors) < 0.01
+  end
+
+  test "RTKLIB multi-GNSS static oracle is generated with GLONASS present" do
+    oracle = @rtklib_multignss_oracle_path |> File.read!() |> Jason.decode!()
+    reference = oracle["reference"]
+    epochs = oracle["per_epoch"]
+    satellite_counts = Enum.map(epochs, & &1["satellites"])
+
+    assert reference["label"] == "static_multignss_grec_l1_fix_and_hold"
+    assert reference["epochs"] == 120
+    assert reference["fixed_epochs"] == 120
+    assert reference["first_fixed_index"] == 0
+    assert reference["first_fixed_time"] == "2020-06-25T00:00:00"
+    assert reference["final_status"] == "fixed"
+    assert reference["final_truth_error_m"] < 0.01
+
+    assert length(epochs) == 120
+    assert Enum.count(epochs, &(&1["q"] == 1)) == reference["fixed_epochs"]
+
+    final = List.last(epochs)
+    assert final["baseline_enu_m"] == reference["final_baseline_enu_m"]
+    assert final["ratio"] == reference["final_ratio"]
+
+    # The oracle now uses BRDC00WRD_R_20201770000_01D_GREC.rnx, whose generation
+    # status trace had 5-6 GLONASS satellites per epoch. Keep this count range
+    # tight enough to reject the old no-GLONASS 9-11 satellite oracle, while
+    # avoiding per-satellite identity assertions across the RTKLIB brdc/15 deg
+    # oracle and the Orbis SP3/10 deg real-arc harness.
+    assert Enum.min(satellite_counts) == 14
+    assert Enum.max(satellite_counts) == 17
   end
 
   defp real_gps_l1_rtk_epochs(sp3, base_obs, rover_obs, count) do

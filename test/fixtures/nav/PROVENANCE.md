@@ -123,3 +123,32 @@ parser test and the `Orbis.GNSS.Broadcast` wrapper test.
   check in `gnss_ephemeris_test.exs`.
 - **sha256 (committed `.rnx`):**
   `6f06fda75efefaec555e119806944453de4618b20a92cd7aea4f6ec054fe0f20`
+
+## `BRDC00WRD_R_20201770000_01D_GREC.rnx`
+
+- **Source:** BKG IGS BRDC archive,
+  `https://igs.bkg.bund.de/root_ftp/IGS/BRDC/2020/177/BRDC00WRD_R_20201770000_01D_MN.rnx.gz`.
+- **Product:** IGS combined daily mixed broadcast navigation file for 2020
+  day-of-year 177, RINEX NAV mixed. Used by the RTK Track B multi-GNSS oracle
+  because the earlier `BRDC00IGS_R_20201770000_01D_GEC.rnx` fixture has no
+  GLONASS ephemerides.
+- **sha256** (`.gz`, as fetched, 789036 bytes):
+  `a9e8e7866f3c59dbe787cbba18da7019a6916a271f311cd74e8969930ce1a70c`.
+- **sha256** (decompressed original full mixed product, 4959123 bytes):
+  `17050ea889494b279291fe8cdb375709671b9ae48a2ddb59e3ef09b0130e8532`.
+- **Original record counts:** GPS (G) 446, GLONASS (R) 1152, Galileo (E) 4546,
+  BeiDou (C) 1056, QZSS (J) 100, SBAS (S) 1857.
+- **Committed copy:** the original decompressed product filtered to the
+  GPS/GLONASS/Galileo/BeiDou ephemeris records enabled by the RTK Track B
+  config, with the full original header preserved verbatim. The fixture is not
+  time-trimmed, matching the existing full-day broadcast NAV convention.
+  ```
+  awk 'BEGIN{hdr=1;keep=0}
+       hdr{print; if($0~/END OF HEADER/)hdr=0; next}
+       /^[A-Z][0-9][0-9] /{keep=($0~/^[GREC][0-9][0-9] /)}
+       keep{print}'
+  ```
+- **Committed record counts:** GPS (G) 446, GLONASS (R) 1152, Galileo (E) 4546,
+  BeiDou (C) 1056. `grep -c '^R[0-9][0-9] '` returns 1152.
+- **sha256** (committed `.rnx`, 4292655 bytes):
+  `0f5810c95e7fcb4ad740d8138bbce7d0db776b12d611c9d6c70745bcfa524ae3`.
