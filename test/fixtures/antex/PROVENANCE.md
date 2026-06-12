@@ -17,5 +17,8 @@
 - **Use:** referenced by both `file-satantfile` and `file-rcvantfile` in
   `test/fixtures/rtk/generators/cd_pasa_scoa_l1_static_fixhold.conf` and
   `test/fixtures/rtk/generators/cd_pasa_scoa_l1l2_static.conf`.
+- **Oracle fixture:** `test/fixtures/antex/antex_golden.json` was copied from
+  `.../astrodynamics/crates/astrodynamics-gnss/tests/fixtures/antex/`
+  and includes source-line references for each checked PCO/PCV sample.
 - **Rebuild recipe:**
   `test/fixtures/rtk/generators/cd_phase1_pasa_scoa_2026_120.py`.
