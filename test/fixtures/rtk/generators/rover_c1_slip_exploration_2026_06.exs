@@ -113,7 +113,13 @@ defmodule RoverC1SlipExploration202606 do
   def main(args) do
     {opts, _argv, invalid} =
       OptionParser.parse(args,
-        strict: [work: :string, results: :string, report: :string, limit: :integer],
+        strict: [
+          work: :string,
+          results: :string,
+          report: :string,
+          limit: :integer,
+          gauge_test: :boolean
+        ],
         aliases: [w: :work, r: :results]
       )
 
@@ -129,6 +135,14 @@ defmodule RoverC1SlipExploration202606 do
     report_path =
       Keyword.get(opts, :report, Path.join(generator_dir, "c1-slip-exploration-2026-06.md"))
 
+    if Keyword.get(opts, :gauge_test, false) do
+      run_gauge_test(fixture_dir, work, results_path, report_path)
+    else
+      run_full_exploration(opts, fixture_dir, work, results_path, report_path)
+    end
+  end
+
+  defp run_full_exploration(opts, fixture_dir, work, results_path, report_path) do
     arcs =
       @oracle_fixtures
       |> maybe_limit(Keyword.get(opts, :limit))
@@ -152,6 +166,96 @@ defmodule RoverC1SlipExploration202606 do
 
     IO.puts("wrote #{results_path}")
     IO.puts("wrote #{report_path}")
+  end
+
+  defp run_gauge_test(fixture_dir, work, results_path, report_path) do
+    gps_cases =
+      @oracle_fixtures
+      |> Enum.map(&load_arc(fixture_dir, &1, work))
+      |> Enum.map(&measure_gauge_case(&1, "gps_only", ["G"]))
+
+    control =
+      @oracle_fixtures
+      |> List.first()
+      |> then(&load_arc(fixture_dir, &1, work))
+      |> measure_gauge_case("multi_system_control", @systems)
+
+    result = %{
+      "version" => 1,
+      "generated_at_utc" =>
+        DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601(),
+      "script" => Path.relative_to(__ENV__.file, File.cwd!()),
+      "work_dir" => work,
+      "results_path" => results_path,
+      "brief" => "/tmp/gauge-test-brief.md",
+      "gps_only" => Enum.map(gps_cases, &gauge_case_json/1),
+      "control" => gauge_case_json(control),
+      "verdict" => stringify_keys(gauge_verdict(gps_cases, control))
+    }
+
+    File.write!(results_path, Jason.encode!(result, pretty: true))
+    File.write!(report_path, "\n" <> gauge_report_markdown(result), [:append])
+
+    IO.puts("wrote #{results_path}")
+    IO.puts("appended #{report_path}")
+  end
+
+  defp measure_gauge_case(arc, mode, systems) do
+    IO.puts("gauge test #{mode}: #{arc.label} systems=#{Enum.join(systems, "")}")
+    require_files!([arc.rover_path, arc.base_path, arc.nav_path, arc.oracle_path])
+
+    rover_obs = Observations.load!(arc.rover_path)
+    base_obs = load_rinex2_obs!(arc.base_path)
+    nav = Broadcast.load!(arc.nav_path)
+
+    base_arp = base_arp(base_obs)
+    glonass_slots = Observations.glonass_slots(rover_obs)
+    oracle_by_time = Map.new(arc.oracle["per_epoch"], &{&1["time"], &1})
+
+    {epochs, contexts} =
+      build_filter_epochs(
+        nav,
+        rover_obs,
+        base_obs,
+        glonass_slots,
+        oracle_by_time,
+        base_arp,
+        %{},
+        systems
+      )
+
+    if epochs == [] do
+      raise "no usable Orbis epochs for #{arc.label} systems=#{inspect(systems)}"
+    end
+
+    filter_case =
+      run_filter_case(
+        "#{mode}_sigma_30",
+        epochs,
+        contexts,
+        nav,
+        base_arp,
+        glonass_slots,
+        @max_segment_epochs,
+        diagnostics?: true,
+        diagnostic_epoch_limit: 2,
+        log?: false,
+        process_noise_baseline_sigma_m: 30.0
+      )
+
+    completed = filter_case.solved_epoch_count == length(epochs)
+
+    %{
+      input: arc,
+      mode: mode,
+      systems: systems,
+      built_epoch_count: length(epochs),
+      filter_case: filter_case,
+      completed_arc: completed,
+      epoch2: process_noise_epoch2(filter_case.per_epoch),
+      completed_arc_median_m: if(completed, do: filter_case.orbis.error_3d_median_m),
+      completed_arc_p95_m: if(completed, do: filter_case.orbis.error_3d_p95_m)
+    }
   end
 
   defp maybe_limit(fixtures, nil), do: fixtures
@@ -1236,7 +1340,8 @@ defmodule RoverC1SlipExploration202606 do
          glonass_slots,
          oracle_by_time,
          base_arp,
-         ambiguity_ids \\ %{}
+         ambiguity_ids \\ %{},
+         systems \\ @systems
        ) do
     base_index = base_epoch_index(base_obs)
 
@@ -1252,13 +1357,13 @@ defmodule RoverC1SlipExploration202606 do
             phone_l1_values(
               rover_obs,
               entry.index,
-              @systems,
+              systems,
               glonass_slots,
               time_key,
               ambiguity_ids
             )
 
-          base_values = interpolated_base_l1_values(base_index, epoch, @systems, glonass_slots)
+          base_values = interpolated_base_l1_values(base_index, epoch, systems, glonass_slots)
 
           {filter_epoch, context} =
             build_filter_epoch(
@@ -1457,7 +1562,15 @@ defmodule RoverC1SlipExploration202606 do
       {:ok, sol} ->
         state_diagnostics =
           if diagnostics?,
-            do: filter_state_diagnostics(segment, sol, initial_baseline, opts, base_arp),
+            do:
+              filter_state_diagnostics(
+                segment,
+                sol,
+                initial_baseline,
+                opts,
+                base_arp,
+                Keyword.get(solve_opts, :diagnostic_epoch_limit)
+              ),
             else: []
 
         state_by_time = Map.new(state_diagnostics, &{&1.time, &1})
@@ -1507,9 +1620,18 @@ defmodule RoverC1SlipExploration202606 do
     end
   end
 
-  defp filter_state_diagnostics(segment, sol, initial_baseline, opts, base_arp) do
+  defp filter_state_diagnostics(segment, sol, initial_baseline, opts, base_arp, epoch_limit) do
     epochs = Enum.map(segment, &elem(&1, 0))
     contexts = Enum.map(segment, &elem(&1, 1))
+
+    diagnostic_pairs =
+      case epoch_limit do
+        limit when is_integer(limit) and limit > 0 -> Enum.take(Enum.zip(epochs, contexts), limit)
+        _ -> Enum.zip(epochs, contexts)
+      end
+
+    diagnostic_epochs = Enum.map(diagnostic_pairs, &elem(&1, 0))
+    diagnostic_contexts = Enum.map(diagnostic_pairs, &elem(&1, 1))
 
     all_sats =
       epochs |> Enum.flat_map(&Map.keys(&1.satellite_positions_m)) |> Enum.uniq() |> Enum.sort()
@@ -1521,7 +1643,7 @@ defmodule RoverC1SlipExploration202606 do
     state =
       diagnostic_initial_state(sd_ids, refs, epochs, initial_baseline, initial_ambiguities, opts)
 
-    rust_epochs = Enum.map(epochs, &diagnostic_rust_epoch(&1, refs, all_sats))
+    rust_epochs = Enum.map(diagnostic_epochs, &diagnostic_rust_epoch(&1, refs, all_sats))
 
     wavelengths =
       opts
@@ -1550,8 +1672,8 @@ defmodule RoverC1SlipExploration202606 do
            }
          ) do
       {:ok, updates} ->
-        contexts
-        |> Enum.zip(epochs)
+        diagnostic_contexts
+        |> Enum.zip(diagnostic_epochs)
         |> Enum.zip(updates)
         |> Enum.zip(sol.epochs)
         |> Enum.reduce({[], nil}, fn {{{context, epoch}, update}, result}, {acc, previous} ->
@@ -2758,6 +2880,66 @@ defmodule RoverC1SlipExploration202606 do
     }
   end
 
+  defp gauge_case_json(gauge_case) do
+    %{
+      "mode" => gauge_case.mode,
+      "label" => gauge_case.input.label,
+      "drive" => gauge_case.input.drive,
+      "fixture" => gauge_case.input.fixture,
+      "systems" => gauge_case.systems,
+      "built_epoch_count" => gauge_case.built_epoch_count,
+      "solved_epoch_count" => gauge_case.filter_case.solved_epoch_count,
+      "completed_arc" => gauge_case.completed_arc,
+      "longest_stable_prefix_epochs" => gauge_case.filter_case.longest_stable_prefix_epochs,
+      "first_unstable_time" => gauge_case.filter_case.first_unstable_time,
+      "epoch2" => stringify_keys(gauge_case.epoch2),
+      "orbis" => stringify_keys(gauge_case.filter_case.orbis),
+      "completed_arc_median_m" => gauge_case.completed_arc_median_m,
+      "completed_arc_p95_m" => gauge_case.completed_arc_p95_m
+    }
+  end
+
+  defp gauge_verdict(gps_cases, control) do
+    gps_conditions =
+      gps_cases
+      |> Enum.map(&epoch2_condition/1)
+      |> Enum.reject(&is_nil/1)
+
+    control_condition = epoch2_condition(control)
+    gps_max_condition = max_or_nil(gps_conditions)
+
+    drop_ratio =
+      if is_number(control_condition) and is_number(gps_max_condition) and
+           gps_max_condition != 0.0 do
+        control_condition / gps_max_condition
+      end
+
+    min_prefix =
+      gps_cases |> Enum.map(& &1.filter_case.longest_stable_prefix_epochs) |> Enum.min()
+
+    convicted =
+      is_number(drop_ratio) and drop_ratio >= 1.0e9 and min_prefix > 2
+
+    status = if(convicted, do: "convicted", else: "acquitted")
+
+    rationale =
+      if convicted do
+        "GPS-only removes the multi-system reference-SD gauge rows, drops the epoch-2 condition estimate by about ten orders, and survives beyond epoch 2."
+      else
+        "GPS-only either retained the high epoch-2 condition estimate or failed to survive beyond epoch 2."
+      end
+
+    %{
+      status: status,
+      gps_min_stable_prefix_epochs: min_prefix,
+      gps_epoch2_condition_min: min_or_nil(gps_conditions),
+      gps_epoch2_condition_max: gps_max_condition,
+      control_epoch2_condition: control_condition,
+      condition_drop_ratio: drop_ratio,
+      rationale: rationale
+    }
+  end
+
   defp detector_json(detector) do
     %{
       "raw_epoch_count" => detector.raw_epoch_count,
@@ -2856,6 +3038,76 @@ defmodule RoverC1SlipExploration202606 do
         "raw LLI or independent agreement, capped per satellite for the runnable key experiment"
     }
   end
+
+  defp gauge_report_markdown(result) do
+    verdict = result["verdict"]
+
+    [
+      "## Multi-system gauge micro-experiment",
+      "",
+      "Generated by `mix run test/fixtures/rtk/generators/rover_c1_slip_exploration_2026_06.exs --gauge-test`.",
+      "Per-run JSON was emitted to `#{result["results_path"]}`.",
+      "",
+      "Setup: stock carried-state filter, sigma 30, no detector segmentation. GPS-only rows filter the epoch builder to `G` satellites; the control row uses the same code path with `G/R/E/C`.",
+      "",
+      gauge_result_table(result["gps_only"], result["control"]),
+      "",
+      gauge_verdict_text(verdict),
+      ""
+    ]
+    |> Enum.join("\n")
+  end
+
+  defp gauge_result_table(gps_rows, control) do
+    rows =
+      (gps_rows ++ [control])
+      |> Enum.map(fn row ->
+        [
+          row["mode"],
+          row["label"],
+          Enum.join(row["systems"], ""),
+          row["built_epoch_count"],
+          row["solved_epoch_count"],
+          yes_no(row["completed_arc"]),
+          row["longest_stable_prefix_epochs"],
+          gauge_epoch2_condition_text(row),
+          completed_metric(row, "completed_arc_median_m"),
+          completed_metric(row, "completed_arc_p95_m")
+        ]
+        |> table_row()
+      end)
+
+    Enum.join(
+      [
+        "| Case | Arc | Systems | Built | Solved | Complete | Longest stable prefix | Epoch-2 cond est | Completed median m | Completed p95 m |",
+        "|---|---|---:|---:|---:|---|---:|---:|---:|---:|"
+      ] ++ rows,
+      "\n"
+    )
+  end
+
+  defp gauge_epoch2_condition_text(%{"epoch2" => nil}), do: "n/a"
+
+  defp gauge_epoch2_condition_text(row) do
+    row
+    |> get_in(["epoch2", "information_condition_estimate"])
+    |> fmt_sci()
+  end
+
+  defp gauge_verdict_text(%{"status" => "convicted"} = verdict) do
+    "Verdict: convicted. GPS-only epoch-2 condition estimates span #{fmt_sci(verdict["gps_epoch2_condition_min"])}-#{fmt_sci(verdict["gps_epoch2_condition_max"])} versus the control at #{fmt_sci(verdict["control_epoch2_condition"])}, a #{fmt_ratio(verdict["condition_drop_ratio"])}x drop, and the GPS-only minimum stable prefix is #{epoch_count_text(verdict["gps_min_stable_prefix_epochs"])}. The multi-system reference-SD gauge weight is the structural driver of the 2e14 conditioning spike. Capability candidate: well-conditioned gauge, with the REFERENCE design changing the gauge weight to dominate the nullspace without crushing the ambiguity prior."
+  end
+
+  defp gauge_verdict_text(verdict) do
+    "Verdict: acquitted. GPS-only epoch-2 condition estimates span #{fmt_sci(verdict["gps_epoch2_condition_min"])}-#{fmt_sci(verdict["gps_epoch2_condition_max"])} versus the control at #{fmt_sci(verdict["control_epoch2_condition"])}, a #{fmt_ratio(verdict["condition_drop_ratio"])}x drop, and the GPS-only minimum stable prefix is #{epoch_count_text(verdict["gps_min_stable_prefix_epochs"])}. That leaves intrinsic conditioning / C2 as the standing explanation."
+  end
+
+  defp yes_no(true), do: "yes"
+  defp yes_no(false), do: "no"
+  defp yes_no(_value), do: "n/a"
+
+  defp epoch_count_text(1), do: "1 epoch"
+  defp epoch_count_text(value), do: "#{value} epochs"
 
   defp report_markdown(result, results_path) do
     arcs = result["arcs"]
