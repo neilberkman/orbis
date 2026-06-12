@@ -122,3 +122,28 @@ Classes are assigned only from the emitted epoch diagnostics: satellite counts, 
 | dropout_gap | 172 | 4324121.348-1354253733.009 | Base/rover epoch bridging and outage handling |
 | multipath_outlier | 10 | 4355586.334-9908812.872 | Robust residual gating for isolated phone multipath |
 | other | 20 | 4389662.698-8738293.625 | Manual review of unclassified worst-decile epochs |
+
+## Campaign synthesis (2026-06-12)
+
+| Candidate | Result | Disposition |
+|---|---|---|
+| Process-noise scaling | Flat at all sigma values. Stock carried-state survival stayed at a one-epoch minimum prefix, and detector-segmented rows stayed meter-catastrophic. | Eliminated as the primary mechanism. |
+| Multi-system gauge | Acquitted. Removing the multi-system gauge drops epoch-2 conditioning from about 2.0e14 to about 6e10, which is the phase-weight / ambiguity-prior scale; the failure is intrinsic and Wettzell-survivable. | Not the campaign lever. |
+| Slip segmentation | Survival prefix improves from 1 epoch to 6-10 epochs, but full-arc accuracy is unchanged. | Survival-only mitigation, not accuracy recovery. |
+| Hard innovation screening, k=5 | All arcs complete, pooled median is 10.312 m, and 51.150% of rows are rejected. Survival comes by information starvation; final-100 medians never beat the memoryless row. | Best operational screened cell, still not promotion-grade. |
+| Hatch smoothing | Diverges relative to hard k=5; the phase-continuity assumption is false on the phone data. | Eliminated. |
+| Soft Huber weighting | Best soft row is 337.256 m pooled median; downweighted dirty rows still poison the state. | Eliminated. |
+
+On uncorrected single-frequency phone data at about a 19 km baseline, the carried phase-ambiguity state has no exploitable signal. The memoryless per-epoch solve, at about 9.5 m pooled median, is this filter family's honest operating point. The oracle's about 4.0 m advantage is attributable to per-epoch estimation outside the phase-state mechanism, notably Doppler/velocity-coupled dynamics, an observable not currently ingested.
+
+Gate verdict against the pre-registered spec: comparative bar NOT met. This is an honest fail with a known mechanism. Refusal is invariant under Amendment 1 when the screened k=5 run's fixed populations are evaluated against the amendment's minimum population and credibility floor:
+
+| Scope | Fixed n | Fixed median m | Demo5 median m | 2x demo5 median m | Amendment 1 verdict |
+|---|---:|---:|---:|---:|---|
+| gsdc_2021_08_04_sjc1_pixel5_p222_grec_l1_demo5 | 19 | 23.524 | 4.522 | 9.044 | underpowered |
+| gsdc_svl1_pixel5_p222_grec_l1_demo5 | 60 | 11.114 | 3.977 | 7.954 | FAIL-by-floor |
+| gsdc_2021_12_15_mtv1_pixel5_p222_grec_l1_demo5 | 0 |  | 3.653 | 7.305 | underpowered |
+| gsdc_2021_12_28_mtv1_pixel5_p222_grec_l1_demo5 | 0 |  | 3.974 | 7.948 | underpowered |
+| pooled | 79 | 13.320 | 4.007 | 8.014 | FAIL-by-floor |
+
+Next-capability candidate, no commitment: Doppler ingestion + velocity-state dynamics coupling - a new observable through parser/epoch/filter, materially larger than any capability explored.
