@@ -91,5 +91,22 @@ to bring the float bias decisively below the AR decision boundary so integer
 fixing is RIGHT — measured by the fixed-solution error joining the oracle
 class and the refusal invariant going clean, not by the float median moving.
 
-Still open from this diagnosis: the continuous-filter singularity at epoch
-124 (bisection pending).
+## Gap diagnosis addendum Q2 (2026-06-13): continuous-filter singularity bisection
+
+House-method bisection for the singularity event found the first hard fail at
+index `124` (`2026-04-30T11:02:00`), reason `{:singular_geometry, [epoch_index: 124]}`.
+
+Per-epoch transition check:
+- `solution_count_124 = 124` for `Enum.take(epochs, 124)`, so the boundary is first-fail at epoch 124.
+- Previous solvable epoch (`index=123`) has `integer_status = "fixed"`.
+- Satellite set at index 123: `G02,G07,G08,G10,G16,G18,G23,G26,G27`.
+- Satellite set at index 124: `G02,G07,G08,G10,G16,G18,G23,G26,G27`.
+- Reference at/around the boundary: present and unchanged (no reference drop).
+- Active ambiguity satellites before fail: `G02,G07,G08,G10,G18,G23,G26,G27`.
+- `~ra`/gap-segmentation IDs before and at first bad: `none` detected.
+- Condition metric (from per-epoch house trace rows) showed no discontinuity in state inputs before the fail; the solver transitions from `ok` at `index=123` to `:singular_geometry` at 124.
+
+House verdict per rover-campaign rule: `filter_behavior`
+(reference remains selected and present before failure; no segmentation-id
+missing-reference event). This is a filter-domain geometry/singularity drop,
+not a harness artifact.
