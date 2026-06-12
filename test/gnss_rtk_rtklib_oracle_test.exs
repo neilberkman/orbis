@@ -3,11 +3,153 @@ defmodule Orbis.GNSS.RTKRTKLIBOracleTest do
 
   @oracle_path Path.join(__DIR__, "fixtures/rtk/wtzr_wtzz_rtklib_oracle.json")
   @precise_oracle_path Path.join(__DIR__, "fixtures/rtk/wtzr_wtzz_rtklib_precise_oracle.json")
-  @gsdc_oracle_path Path.join(
-                      __DIR__,
-                      "fixtures/rtk/gsdc_2021_08_24_svl1_pixel5_p222_demo5_rtklib_oracle.json"
-                    )
-  @gsdc_description "RTKLIB demo5 moving-rover oracle for GSDC 2022 train/2021-08-24-US-SVL-1/GooglePixel5 against NOAA CORS P222 (G/R/E/C L1, combined, fix-and-hold, AR ratio gate 3.0). Validated fixes on this phone arc are meter-class, not cm-class; the oracle is an honest trajectory accuracy reference, not a fix-rate target."
+
+  @gsdc_oracles [
+    %{
+      fixture: "gsdc_2021_08_04_sjc1_pixel5_p222_demo5_rtklib_oracle.json",
+      config: "track_a_gsdc_2021_08_04_sjc1_p222_grec_l1.conf",
+      pos: "track_a_gsdc_2021_08_04_sjc1_p222_grec_l1.pos",
+      label: "gsdc_2021_08_04_sjc1_pixel5_p222_grec_l1_demo5",
+      description:
+        "RTKLIB demo5 moving-rover oracle for GSDC 2022 train/2021-08-04-US-SJC-1/GooglePixel5 against NOAA CORS P222 (G/R/E/C L1, combined, fix-and-hold, AR ratio gate 3.0). The 10 fixed epochs do not beat float on 3D median error, so fixed status is not a confidence target; the oracle is an honest trajectory accuracy reference.",
+      drive: "train/2021-08-04-US-SJC-1/GooglePixel5",
+      base_doy: "216",
+      nav_doy: "216",
+      start_date: "2021/08/04",
+      start_time: "20:40:43",
+      end_date: "2021/08/04",
+      end_time: "21:06:40",
+      base_distance_km: 27.403,
+      truth_time_tolerance_ms: 2,
+      epochs: 1554,
+      fixed_epochs: 10,
+      q_counts: %{"1" => 10, "2" => 1538, "4" => 6},
+      first_fixed_index: 85,
+      first_fixed_time: "2021-08-04T20:42:08.449",
+      first_fixed_truth_time_utc: "2021-08-04T20:41:50.449",
+      final_status: "float",
+      fix_rate: 0.006435006435,
+      error_3d_median: 4.5221765,
+      error_3d_p95: 12.296687,
+      horizontal_p95: 6.688258,
+      first_time: "2021-08-04T20:40:43.449",
+      first_truth_time_utc: "2021-08-04T20:40:25.449",
+      last_time: "2021-08-04T21:06:36.450",
+      fixed_3d_median: 5.044745,
+      fixed_3d_p95: 7.332008,
+      float_3d_median: 4.516922,
+      float_3d_p95: 12.296687,
+      fixed_beats_float: false
+    },
+    %{
+      fixture: "gsdc_2021_08_24_svl1_pixel5_p222_demo5_rtklib_oracle.json",
+      config: "track_a_gsdc_p222_grec_l1.conf",
+      pos: "track_a_gsdc_p222_grec_l1.pos",
+      label: "gsdc_svl1_pixel5_p222_grec_l1_demo5",
+      description:
+        "RTKLIB demo5 moving-rover oracle for GSDC 2022 train/2021-08-24-US-SVL-1/GooglePixel5 against NOAA CORS P222 (G/R/E/C L1, combined, fix-and-hold, AR ratio gate 3.0). Validated fixes on this phone arc are meter-class, not cm-class; the oracle is an honest trajectory accuracy reference, not a fix-rate target.",
+      drive: "train/2021-08-24-US-SVL-1/GooglePixel5",
+      base_doy: "236",
+      nav_doy: "236",
+      start_date: "2021/08/24",
+      start_time: "20:33:00",
+      end_date: "2021/08/24",
+      end_time: "21:25:20",
+      base_distance_km: 18.936,
+      truth_time_tolerance_ms: nil,
+      epochs: 3136,
+      fixed_epochs: 10,
+      q_counts: %{"1" => 10, "2" => 3104, "4" => 22},
+      first_fixed_index: 14,
+      first_fixed_time: "2021-08-24T20:33:14.437",
+      first_fixed_truth_time_utc: "2021-08-24T20:32:56.437",
+      final_status: "float",
+      fix_rate: 0.00318877551,
+      error_3d_median: 3.9769565,
+      error_3d_p95: 8.775371,
+      horizontal_p95: 6.034325,
+      first_time: "2021-08-24T20:33:00.437",
+      first_truth_time_utc: "2021-08-24T20:32:42.437",
+      last_time: "2021-08-24T21:25:16.437",
+      fixed_3d_median: 3.476352,
+      fixed_3d_p95: 4.562249,
+      float_3d_median: 3.964981,
+      float_3d_p95: 8.579962,
+      fixed_beats_float: true
+    },
+    %{
+      fixture: "gsdc_2021_12_15_mtv1_pixel5_p222_demo5_rtklib_oracle.json",
+      config: "track_a_gsdc_2021_12_15_mtv1_p222_grec_l1.conf",
+      pos: "track_a_gsdc_2021_12_15_mtv1_p222_grec_l1.pos",
+      label: "gsdc_2021_12_15_mtv1_pixel5_p222_grec_l1_demo5",
+      description:
+        "RTKLIB demo5 moving-rover oracle for GSDC 2022 train/2021-12-15-US-MTV-1/GooglePixel5 against NOAA CORS P222 (G/R/E/C L1, combined, fix-and-hold, AR ratio gate 3.0). This highway phone arc has only one fixed epoch; the split is underpowered and meter-class, so the oracle is an honest trajectory accuracy reference, not a fix-rate target.",
+      drive: "train/2021-12-15-US-MTV-1/GooglePixel5",
+      base_doy: "349",
+      nav_doy: "349",
+      start_date: "2021/12/15",
+      start_time: "18:49:11",
+      end_date: "2021/12/15",
+      end_time: "19:13:40",
+      base_distance_km: 13.815,
+      truth_time_tolerance_ms: 2,
+      epochs: 1465,
+      fixed_epochs: 1,
+      q_counts: %{"1" => 1, "2" => 1436, "4" => 28},
+      first_fixed_index: 1312,
+      first_fixed_time: "2021-12-15T19:11:05.438",
+      first_fixed_truth_time_utc: "2021-12-15T19:10:47.438",
+      final_status: "float",
+      fix_rate: 0.000682593857,
+      error_3d_median: 3.652537,
+      error_3d_p95: 7.909147,
+      horizontal_p95: 4.668259,
+      first_time: "2021-12-15T18:49:11.438",
+      first_truth_time_utc: "2021-12-15T18:48:53.438",
+      last_time: "2021-12-15T19:13:37.438",
+      fixed_3d_median: 3.022934,
+      fixed_3d_p95: 3.022934,
+      float_3d_median: 3.633223,
+      float_3d_p95: 7.466983,
+      fixed_beats_float: true
+    },
+    %{
+      fixture: "gsdc_2021_12_28_mtv1_pixel5_p222_demo5_rtklib_oracle.json",
+      config: "track_a_gsdc_2021_12_28_mtv1_p222_grec_l1.conf",
+      pos: "track_a_gsdc_2021_12_28_mtv1_p222_grec_l1.pos",
+      label: "gsdc_2021_12_28_mtv1_pixel5_p222_grec_l1_demo5",
+      description:
+        "RTKLIB demo5 moving-rover oracle for GSDC 2022 train/2021-12-28-US-MTV-1/GooglePixel5 against NOAA CORS P222 (G/R/E/C L1, combined, fix-and-hold, AR ratio gate 3.0). The fixed split beats float on this repeat highway route, but remains meter-class; the oracle is an honest trajectory accuracy reference, not a fix-rate target.",
+      drive: "train/2021-12-28-US-MTV-1/GooglePixel5",
+      base_doy: "362",
+      nav_doy: "362",
+      start_date: "2021/12/28",
+      start_time: "20:17:25",
+      end_date: "2021/12/28",
+      end_time: "20:44:20",
+      base_distance_km: 13.702,
+      truth_time_tolerance_ms: 2,
+      epochs: 1610,
+      fixed_epochs: 10,
+      q_counts: %{"1" => 10, "2" => 1567, "4" => 33},
+      first_fixed_index: 830,
+      first_fixed_time: "2021-12-28T20:31:18.438",
+      first_fixed_truth_time_utc: "2021-12-28T20:31:00.437",
+      final_status: "float",
+      fix_rate: 0.006211180124,
+      error_3d_median: 3.973879,
+      error_3d_p95: 9.033375,
+      horizontal_p95: 6.674816,
+      first_time: "2021-12-28T20:17:25.438",
+      first_truth_time_utc: "2021-12-28T20:17:07.437",
+      last_time: "2021-12-28T20:44:17.438",
+      fixed_3d_median: 2.642458,
+      fixed_3d_p95: 3.382031,
+      float_3d_median: 3.971948,
+      float_3d_p95: 8.698615,
+      fixed_beats_float: true
+    }
+  ]
 
   test "WTZR/WTZZ RTKLIB oracle fixture pins the L1+broadcast reference target" do
     oracle =
@@ -83,148 +225,165 @@ defmodule Orbis.GNSS.RTKRTKLIBOracleTest do
     assert comparison["max_baseline_delta_m"] < 0.002
   end
 
-  test "GSDC Pixel5/P222 demo5 oracle fixture pins the moving-rover reference" do
-    oracle =
-      @gsdc_oracle_path
-      |> File.read!()
-      |> Jason.decode!()
+  test "GSDC Pixel5/P222 demo5 oracle fixtures pin the moving-rover references" do
+    for arc <- @gsdc_oracles do
+      oracle =
+        __DIR__
+        |> Path.join("fixtures/rtk/#{arc.fixture}")
+        |> File.read!()
+        |> Jason.decode!()
 
-    assert oracle["version"] == 1
-    assert oracle["description"] == @gsdc_description
+      assert oracle["version"] == 1
+      assert oracle["description"] == arc.description
 
-    assert oracle["generator"]["rtklib"] == %{
-             "program" => "rnx2rtkp",
-             "version" => "EX 2.5.0",
-             "commit" => "57d39e7"
-           }
+      assert oracle["generator"]["rtklib"] == %{
+               "program" => "rnx2rtkp",
+               "version" => "EX 2.5.0",
+               "commit" => "57d39e7"
+             }
 
-    assert oracle["truth"]["base_station"]["id"] == "P222"
-    assert oracle["truth"]["gps_utc_offset_s"] == 18
+      assert oracle["truth"]["base_station"]["id"] == "P222"
+      assert oracle["truth"]["gps_utc_offset_s"] == 18
 
-    reference = oracle["reference"]
-    epochs = oracle["per_epoch"]
+      assert oracle["truth"]["base_station"]["distance_from_drive_start_km"] ==
+               arc.base_distance_km
 
-    assert reference["label"] == "gsdc_svl1_pixel5_p222_grec_l1_demo5"
-    assert reference["config"] == "track_a_gsdc_p222_grec_l1.conf"
-    assert reference["epochs"] == 3136
-    assert reference["fixed_epochs"] == 10
-    assert reference["q_counts"] == %{"1" => 10, "2" => 3104, "4" => 22}
-    assert reference["first_fixed_index"] == 14
-    assert reference["first_fixed_time"] == "2021-08-24T20:33:14.437"
-    assert reference["first_fixed_truth_time_utc"] == "2021-08-24T20:32:56.437"
-    assert reference["final_status"] == "float"
+      if arc.truth_time_tolerance_ms do
+        assert oracle["truth"]["time_match_tolerance_ms"] == arc.truth_time_tolerance_ms
+      else
+        refute Map.has_key?(oracle["truth"], "time_match_tolerance_ms")
+      end
 
-    assert_in_delta reference["fix_rate"], 0.00318877551, 1.0e-12
-    assert_in_delta reference["error_3d"]["median_m"], 3.9769565, 1.0e-6
-    assert_in_delta reference["error_3d"]["p95_m"], 8.775371, 1.0e-6
-    assert_in_delta reference["horizontal_error"]["p95_m"], 6.034325, 1.0e-6
+      reference = oracle["reference"]
+      epochs = oracle["per_epoch"]
 
-    assert length(epochs) == reference["epochs"]
-    assert hd(epochs)["time"] == "2021-08-24T20:33:00.437"
-    assert hd(epochs)["truth_time_utc"] == "2021-08-24T20:32:42.437"
-    assert List.last(epochs)["time"] == "2021-08-24T21:25:16.437"
-    assert Enum.count(epochs, &(&1["q"] == 1)) == reference["fixed_epochs"]
+      assert reference["label"] == arc.label
+      assert reference["config"] == arc.config
+      assert reference["source_pos"] == arc.pos
+      assert reference["epochs"] == arc.epochs
+      assert reference["fixed_epochs"] == arc.fixed_epochs
+      assert reference["q_counts"] == arc.q_counts
+      assert reference["first_fixed_index"] == arc.first_fixed_index
+      assert reference["first_fixed_time"] == arc.first_fixed_time
+      assert reference["first_fixed_truth_time_utc"] == arc.first_fixed_truth_time_utc
+      assert reference["final_status"] == arc.final_status
 
-    fixed = Enum.at(epochs, reference["first_fixed_index"])
-    assert fixed["fix_status"] == "fixed"
-    assert fixed["satellites"] >= 4
-    assert fixed["ratio"] >= 3.0
+      assert_in_delta reference["fix_rate"], arc.fix_rate, 1.0e-12
+      assert_in_delta reference["error_3d"]["median_m"], arc.error_3d_median, 1.0e-6
+      assert_in_delta reference["error_3d"]["p95_m"], arc.error_3d_p95, 1.0e-6
+      assert_in_delta reference["horizontal_error"]["p95_m"], arc.horizontal_p95, 1.0e-6
 
-    fixed_3d = status_error_values(epochs, 1, "error_3d_m")
-    float_3d = status_error_values(epochs, 2, "error_3d_m")
+      assert length(epochs) == reference["epochs"]
+      assert hd(epochs)["time"] == arc.first_time
+      assert hd(epochs)["truth_time_utc"] == arc.first_truth_time_utc
+      assert List.last(epochs)["time"] == arc.last_time
+      assert Enum.count(epochs, &(&1["q"] == 1)) == reference["fixed_epochs"]
 
-    assert_in_delta median(fixed_3d), 3.476352, 1.0e-6
-    assert_in_delta percentile(fixed_3d, 0.95), 4.562249, 1.0e-6
-    assert_in_delta median(float_3d), 3.964981, 1.0e-6
-    assert_in_delta percentile(float_3d, 0.95), 8.579962, 1.0e-6
+      fixed = Enum.at(epochs, reference["first_fixed_index"])
+      assert fixed["fix_status"] == "fixed"
+      assert fixed["satellites"] >= 4
+      assert fixed["ratio"] >= 3.0
+
+      fixed_3d = status_error_values(epochs, 1, "error_3d_m")
+      float_3d = status_error_values(epochs, 2, "error_3d_m")
+
+      assert_in_delta median(fixed_3d), arc.fixed_3d_median, 1.0e-6
+      assert_in_delta percentile(fixed_3d, 0.95), arc.fixed_3d_p95, 1.0e-6
+      assert_in_delta median(float_3d), arc.float_3d_median, 1.0e-6
+      assert_in_delta percentile(float_3d, 0.95), arc.float_3d_p95, 1.0e-6
+
+      assert fixed_split_beats_float?(fixed_3d, float_3d) == arc.fixed_beats_float
+    end
   end
 
   @tag :local_data
-  test "GSDC Pixel5/P222 demo5 oracle regenerates byte-identically from local inputs" do
+  test "GSDC Pixel5/P222 demo5 oracles regenerate byte-identically from local inputs" do
     repo = Path.expand("..", __DIR__)
     generator_dir = Path.join(repo, "test/fixtures/rtk/generators")
-    conf = Path.join(generator_dir, "track_a_gsdc_p222_grec_l1.conf")
     script = Path.join(generator_dir, "pos_to_oracle.py")
 
     rnx2rtkp = "/tmp/RTKLIB-demo5/app/consapp/rnx2rtkp/gcc/rnx2rtkp"
     work = "/tmp/gsdc-work"
-    drive = Path.join(work, "train/2021-08-24-US-SVL-1/GooglePixel5")
-    rover = Path.join(drive, "supplemental/gnss_rinex.21o")
-    truth = Path.join(drive, "ground_truth.csv")
-    base = Path.join(work, "cors/p2222360.21o")
-    nav = Path.join(work, "cors/BRDC00WRD_R_20212360000_01D_MN.rnx")
 
-    required = [rnx2rtkp, rover, truth, base, nav]
+    for arc <- @gsdc_oracles do
+      conf = Path.join(generator_dir, arc.config)
+      drive = Path.join(work, arc.drive)
+      rover = Path.join(drive, "supplemental/gnss_rinex.21o")
+      truth = Path.join(drive, "ground_truth.csv")
+      base = Path.join(work, "cors/p222#{arc.base_doy}0.21o")
+      nav = Path.join(work, "cors/BRDC00WRD_R_2021#{arc.nav_doy}0000_01D_MN.rnx")
 
-    if Enum.all?(required, &File.exists?/1) do
-      tmp = Path.join(System.tmp_dir!(), "orbis-gsdc-oracle-test")
-      File.rm_rf!(tmp)
-      File.mkdir_p!(tmp)
+      required = [rnx2rtkp, rover, truth, base, nav]
 
-      pos = Path.join(tmp, "track_a_gsdc_p222_grec_l1.pos")
-      regenerated = Path.join(tmp, "gsdc_2021_08_24_svl1_pixel5_p222_demo5_rtklib_oracle.json")
+      if Enum.all?(required, &File.exists?/1) do
+        tmp = Path.join(System.tmp_dir!(), "orbis-gsdc-oracle-test/#{arc.label}")
+        File.rm_rf!(tmp)
+        File.mkdir_p!(tmp)
 
-      {_, 0} =
-        System.cmd(
-          rnx2rtkp,
-          [
-            "-k",
-            conf,
-            "-ts",
-            "2021/08/24",
-            "20:33:00",
-            "-te",
-            "2021/08/24",
-            "21:25:20",
-            "-o",
-            pos,
-            rover,
-            base,
-            nav
-          ],
-          stderr_to_stdout: true
-        )
+        pos = Path.join(tmp, arc.pos)
+        regenerated = Path.join(tmp, arc.fixture)
 
-      {_, 0} =
-        System.cmd(
-          "python3",
+        {_, 0} =
+          System.cmd(
+            rnx2rtkp,
+            [
+              "-k",
+              conf,
+              "-ts",
+              arc.start_date,
+              arc.start_time,
+              "-te",
+              arc.end_date,
+              arc.end_time,
+              "-o",
+              pos,
+              rover,
+              base,
+              nav
+            ],
+            stderr_to_stdout: true
+          )
+
+        args =
           [
             script,
             pos,
-            "track_a_gsdc_p222_grec_l1.conf",
-            "gsdc_svl1_pixel5_p222_grec_l1_demo5",
-            @gsdc_description,
+            arc.config,
+            arc.label,
+            arc.description,
             regenerated,
             "--moving-truth-csv",
             truth,
             "--truth-source",
-            "train/2021-08-24-US-SVL-1/GooglePixel5/ground_truth.csv",
+            "#{arc.drive}/ground_truth.csv",
             "--drive",
-            "train/2021-08-24-US-SVL-1/GooglePixel5",
+            arc.drive,
             "--rover-source",
-            "train/2021-08-24-US-SVL-1/GooglePixel5/supplemental/gnss_rinex.21o",
+            "#{arc.drive}/supplemental/gnss_rinex.21o",
             "--base-source",
-            "https://geodesy.noaa.gov/corsdata/rinex/2021/236/p222/p2222360.21d.gz",
+            "https://geodesy.noaa.gov/corsdata/rinex/2021/#{arc.base_doy}/p222/p222#{arc.base_doy}0.21d.gz",
             "--nav-source",
-            "https://igs.bkg.bund.de/root_ftp/IGS/BRDC/2021/236/BRDC00WRD_R_20212360000_01D_MN.rnx.gz",
+            "https://igs.bkg.bund.de/root_ftp/IGS/BRDC/2021/#{arc.nav_doy}/BRDC00WRD_R_2021#{arc.nav_doy}0000_01D_MN.rnx.gz",
             "--base-station",
             "P222",
             "--base-ecef-m=-2689639.5060,-4290438.6360,3865050.9560",
             "--base-distance-km",
-            "18.936",
+            "#{arc.base_distance_km}",
             "--rtklib-version",
             "EX 2.5.0",
             "--rtklib-commit",
             "57d39e7"
-          ],
-          stderr_to_stdout: true
-        )
+          ] ++ truth_time_tolerance_args(arc)
 
-      assert File.read!(regenerated) == File.read!(@gsdc_oracle_path)
-    else
-      IO.puts(
-        "Skipping GSDC local-data regeneration; missing #{Enum.reject(required, &File.exists?/1) |> Enum.join(", ")}"
-      )
+        {_, 0} = System.cmd("python3", args, stderr_to_stdout: true)
+
+        expected = Path.join(__DIR__, "fixtures/rtk/#{arc.fixture}")
+        assert File.read!(regenerated) == File.read!(expected)
+      else
+        IO.puts(
+          "Skipping #{arc.fixture} local-data regeneration; missing #{Enum.reject(required, &File.exists?/1) |> Enum.join(", ")}"
+        )
+      end
     end
   end
 
@@ -249,5 +408,16 @@ defmodule Orbis.GNSS.RTKRTKLIBOracleTest do
   defp percentile(values, pct) do
     ordered = Enum.sort(values)
     Enum.at(ordered, trunc(pct * (length(ordered) - 1)))
+  end
+
+  defp fixed_split_beats_float?(fixed_3d, float_3d) do
+    median(fixed_3d) < median(float_3d) and
+      percentile(fixed_3d, 0.95) < percentile(float_3d, 0.95)
+  end
+
+  defp truth_time_tolerance_args(%{truth_time_tolerance_ms: nil}), do: []
+
+  defp truth_time_tolerance_args(%{truth_time_tolerance_ms: tolerance_ms}) do
+    ["--truth-time-tolerance-ms", "#{tolerance_ms}"]
   end
 end

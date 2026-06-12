@@ -141,6 +141,157 @@ The validated fixed epochs are slightly better than float in 3D on this arc,
 but they remain meter-class. The fixture's value is the honest phone trajectory
 accuracy reference, not its fix rate.
 
+### Pre-registered additional rover arcs
+
+The full Track A moving-rover gate uses the vendored SVL1 arc above plus three
+additional arcs selected by metadata only. Solver output is not a selection
+criterion. Route role, device, date, truth/RINEX availability, duration, path
+length, and speed come from the Kaggle corpus paths and `ground_truth.csv`.
+
+| Gate slot | Selected drive | Device | Metadata | Selection reason |
+| --- | --- | --- | --- | --- |
+| 1, existing suburban baseline | `train/2021-08-24-US-SVL-1/GooglePixel5` | Pixel5 | 52.27 min, 24.99 km, p95 speed 17.84 m/s | Already vendored suburban SVL1 arc from the pre-registered set. |
+| 2, highway, different day | `train/2021-12-15-US-MTV-1/GooglePixel5` | Pixel5 | 24.43 min, 30.42 km, p95 speed 35.55 m/s | High-speed MTV1 route, Pixel-class device, ground truth and supplemental RINEX present. |
+| 3, mixed/arterial, different day | `train/2021-08-04-US-SJC-1/GooglePixel5` | Pixel5 | 25.88 min, 14.91 km, p95 speed 27.68 m/s | Shorter SJC route with stop-and-go average speed plus high-speed segments, Pixel-class device, ground truth and supplemental RINEX present. |
+| 4, repeat route for slot 2 | `train/2021-12-28-US-MTV-1/GooglePixel5` | Pixel5 | 26.87 min, 31.09 km, p95 speed 31.19 m/s | Same MTV1 route family as slot 2 on a different day, same Pixel5 device class, ground truth and supplemental RINEX present. |
+
+NOAA CORS `P222` is the closest operational P-code station by start-point
+distance for each selected drive in the local NOAA ITRF2014 station table:
+27.403 km for SJC1 2021-08-04, 18.936 km for SVL1 2021-08-24, 13.815 km for
+MTV1 2021-12-15, and 13.702 km for MTV1 2021-12-28. Its RINEX header ARP is
+`-2689639.5060, -4290438.6360, 3865050.9560` m for every downloaded day.
+Nearby non-P station `SLAC` is closer in straight-line distance, but the
+pre-registered spec requires a P-class CORS base.
+
+All three added configs are solver-identical to
+`track_a_gsdc_p222_grec_l1.conf` after comments are removed. The only changes
+are filenames and comments for the arc-specific regeneration recipes. The
+committed settings keep `pos2-arthres`, `pos2-arthresmin`, and
+`pos2-arthresmax` at `3.0`; GLONASS ambiguity resolution remains off
+(`pos2-gloarmode = off`). The three added oracles use
+`--truth-time-tolerance-ms 2` during JSON generation to match RTKLIB demo5's
+rounded millisecond output to GSDC truth rows; this affects truth lookup only,
+not the RTKLIB solve.
+
+Additional source and artifact checksums:
+
+#### `train/2021-08-04-US-SJC-1/GooglePixel5`
+
+- extracted GSDC rover `gnss_rinex.21o`:
+  `0c7c5d62a4439a68a80d5ffd9d7b5fca6962d4c5549879accd13e684495b9075`
+- extracted GSDC `ground_truth.csv`:
+  `5403afdf1be77ed0ff353bc11f49dbc60a722b6ac9420c9c4f9f40c2324c11c1`
+- NOAA `p2222160.21d.gz`:
+  `b90965c7e5845e905fc8b40194f89babb8c139415e81d54ffb1111351b1ee884`
+- decoded NOAA `p2222160.21o`:
+  `e53de4b05add4a90dcd02b50e5139565ad3e372d3a5aa09e099fe37e08f73dc6`
+- BKG `BRDC00WRD_R_20212160000_01D_MN.rnx.gz`:
+  `ffbbba711f41e5e2fd65905e9e39c3c9071c04816d7aaeffc4b63ac0e5ed7d41`
+- decompressed BKG `BRDC00WRD_R_20212160000_01D_MN.rnx`:
+  `6b6556b0880566d698a70eedc3396f718de9e8dc3cb6065ed40714ee0b7bc68f`
+- committed oracle JSON:
+  `67d4423f21dbe4e39a067893a4c278a4dc3bee4d9597167c96eb06ca50ea88ca`
+- committed config:
+  `d0cd8d9663e21679d7176dc473ba5b26d11cc62a33103691e94d427bf29d6429`
+
+Result summary:
+
+- epochs: 1554; fixed: 10; float: 1538; DGPS: 6.
+- 3D error vs ground truth: mean 6.440333 m, median 4.522177 m,
+  p95 12.296687 m, max 70.605923 m.
+- Horizontal error: mean 3.180518 m, median 2.626661 m, p95 6.688258 m.
+- Vertical absolute error: mean 5.181319 m, median 3.533646 m,
+  p95 10.098548 m.
+
+Status split against GSDC ground truth:
+
+| Status | Epochs | 3D median | 3D p95 | Horizontal median | Horizontal p95 | Vertical abs median | Vertical abs p95 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| fixed | 10 | 5.044745 m | 7.332008 m | 2.782958 m | 4.753549 m | 4.561702 m | 6.547322 m |
+| float | 1538 | 4.516922 m | 12.296687 m | 2.620762 m | 6.687103 m | 3.523996 m | 10.110157 m |
+| DGPS | 6 | 11.515382 m | 11.786736 m | 6.510302 m | 6.725785 m | 9.110172 m | 9.764155 m |
+
+The fixed split does not beat float on 3D median error for this arc. The
+fixture description says so explicitly; fixed status is not a confidence target.
+
+#### `train/2021-12-15-US-MTV-1/GooglePixel5`
+
+- extracted GSDC rover `gnss_rinex.21o`:
+  `60a497c6cc5bef0087ae8834c362ccf756f8601199e063df08c8a4012327a854`
+- extracted GSDC `ground_truth.csv`:
+  `dea81f2acb25273c183f3acf42830eb45b00900a51441b532136d8aee374247a`
+- NOAA `p2223490.21d.gz`:
+  `379c966999ec57f475cddb8c68433333aac2edaba084da5b604940ac9db1165c`
+- decoded NOAA `p2223490.21o`:
+  `2c68c8c1af630aac2652f5dfaeba34ba048f8ae5cf0013dd2a7293d6558afc99`
+- BKG `BRDC00WRD_R_20213490000_01D_MN.rnx.gz`:
+  `8dc577f6880b7e49ae6a01e607f92ad4e34a0b8ae6584e5f163435cfd250f838`
+- decompressed BKG `BRDC00WRD_R_20213490000_01D_MN.rnx`:
+  `8afd3f756bef02d01d68d6a429639037e8adbaa3344f3ab39107716cd2ce82ed`
+- committed oracle JSON:
+  `01a98b222c7e36a681722bd4795ccedb132963a4b8d5caa56c0da1ba40e26528`
+- committed config:
+  `624dffc276ef229f9bdc7a8535528c3623590e57d4ccdb666fbd24e8eb41da42`
+
+Result summary:
+
+- epochs: 1465; fixed: 1; float: 1436; DGPS: 28.
+- 3D error vs ground truth: mean 3.954129 m, median 3.652537 m,
+  p95 7.909147 m, max 49.212990 m.
+- Horizontal error: mean 2.829871 m, median 2.821105 m, p95 4.668259 m.
+- Vertical absolute error: mean 2.172964 m, median 1.373618 m,
+  p95 6.267790 m.
+
+Status split against GSDC ground truth:
+
+| Status | Epochs | 3D median | 3D p95 | Horizontal median | Horizontal p95 | Vertical abs median | Vertical abs p95 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| fixed | 1 | 3.022934 m | 3.022934 m | 3.017886 m | 3.017886 m | 0.174615 m | 0.174615 m |
+| float | 1436 | 3.633223 m | 7.466983 m | 2.821334 m | 4.644717 m | 1.352318 m | 6.163333 m |
+| DGPS | 28 | 5.756440 m | 9.908955 m | 2.569831 m | 6.230552 m | 4.583369 m | 8.370254 m |
+
+The single fixed epoch is meter-class and statistically underpowered, even
+though its computed 3D median and p95 are lower than float.
+
+#### `train/2021-12-28-US-MTV-1/GooglePixel5`
+
+- extracted GSDC rover `gnss_rinex.21o`:
+  `398e497a65470ce77a6e1a6085b16ea0c99abec9cec8b6202985961ae0cc8638`
+- extracted GSDC `ground_truth.csv`:
+  `149069d0d1314475b04f03dd007c1fd50861751aa4bef3941e989022d292f153`
+- NOAA `p2223620.21d.gz`:
+  `a371c90e285373a57a6dab97481ec946f82c2641a0e07e47852fd63585a26b47`
+- decoded NOAA `p2223620.21o`:
+  `2ad4c2d75dde04b58e5b641c86067f49b5baaf3f90f655ead539bc118fb65a90`
+- BKG `BRDC00WRD_R_20213620000_01D_MN.rnx.gz`:
+  `edf855f4b77a5129c8d64e6508786a37822096135b3d0ac00f6e27b82e6c822d`
+- decompressed BKG `BRDC00WRD_R_20213620000_01D_MN.rnx`:
+  `d72fb39c727cae2f76bce18c4edd17e0093aace3083f32f62f984eced1293831`
+- committed oracle JSON:
+  `d649a423effb4da15d7fcbb0c78f85f33a3fe240490c40e885a99efbeba4dc65`
+- committed config:
+  `2acd8d78e5d310fe0ef5fab3cdf108ab8de87f30b986fe4bdba0872453822ef9`
+
+Result summary:
+
+- epochs: 1610; fixed: 10; float: 1567; DGPS: 33.
+- 3D error vs ground truth: mean 4.660066 m, median 3.973879 m,
+  p95 9.033375 m, max 27.851884 m.
+- Horizontal error: mean 3.259974 m, median 2.914462 m, p95 6.674816 m.
+- Vertical absolute error: mean 2.987776 m, median 2.289053 m,
+  p95 6.311887 m.
+
+Status split against GSDC ground truth:
+
+| Status | Epochs | 3D median | 3D p95 | Horizontal median | Horizontal p95 | Vertical abs median | Vertical abs p95 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| fixed | 10 | 2.642458 m | 3.382031 m | 1.526194 m | 2.136126 m | 2.320574 m | 2.663786 m |
+| float | 1567 | 3.971948 m | 8.698615 m | 2.905552 m | 6.536726 m | 2.285439 m | 6.311887 m |
+| DGPS | 33 | 5.300768 m | 11.386477 m | 3.432392 m | 7.972886 m | 2.337564 m | 5.483258 m |
+
+The fixed split beats float on 3D median and p95 for this repeat route, but it
+remains meter-class.
+
 Redistribution note: the GSDC Kaggle competition data is not redistributable.
 Only the derived oracle JSON, config, generator update, and this provenance are
 vendored. Raw GSDC files, decoded CORS files, and full navigation products remain

@@ -21,8 +21,10 @@ shared per-epoch JSON shape by `pos_to_oracle.py`.
 - **Truth:** the static antenna baseline of the co-located WTZR/WTZZ pair
   (receivers do not move) — copied verbatim into every oracle's `truth` block.
 
-Each config below changes exactly **one** variable from the canonical
-`l1_brdc_fix_and_hold` reference, so a parity failure isolates to that variable.
+The first two configs below each change exactly **one** variable from the
+canonical `l1_brdc_fix_and_hold` reference, so a parity failure isolates to that
+variable. The GSDC rows are external moving-rover oracle recipes and keep their
+solver settings pinned across arcs.
 
 ## Oracles
 
@@ -31,6 +33,9 @@ Each config below changes exactly **one** variable from the canonical
 | `wtzr_wtzz_kinematic_gps_rtklib_oracle.json`    | `track_a_kinematic_gps_l1.conf`    | `posmode` static→**kinematic** (GPS L1)               | 119/120 fixed, ~7mm converged; epoch-0 kinematic cold-start transient (~1m) |
 | `wtzr_wtzz_multignss_static_rtklib_oracle.json` | `track_b_static_multignss_l1.conf` | `navsys` GPS→**GPS+GLO+GAL+BDS** (GLONASS float-only) | 120/120 fixed, ~1.8mm, 14–17 sats                                           |
 | `gsdc_2021_08_24_svl1_pixel5_p222_demo5_rtklib_oracle.json` | `track_a_gsdc_p222_grec_l1.conf` | real GSDC moving rover, demo5, G/R/E/C L1, P222 base | 10/3136 fixed with AR ratio gate 3.0; median 3.98m 3D / 3.07m horizontal, p95 8.78m 3D |
+| `gsdc_2021_08_04_sjc1_pixel5_p222_demo5_rtklib_oracle.json` | `track_a_gsdc_2021_08_04_sjc1_p222_grec_l1.conf` | pre-registered GSDC mixed/arterial Pixel5 arc, demo5, G/R/E/C L1, P222 base | 10/1554 fixed with AR ratio gate 3.0; median 4.52m 3D / 2.63m horizontal, p95 12.30m 3D |
+| `gsdc_2021_12_15_mtv1_pixel5_p222_demo5_rtklib_oracle.json` | `track_a_gsdc_2021_12_15_mtv1_p222_grec_l1.conf` | pre-registered GSDC highway Pixel5 arc, demo5, G/R/E/C L1, P222 base | 1/1465 fixed with AR ratio gate 3.0; median 3.65m 3D / 2.82m horizontal, p95 7.91m 3D |
+| `gsdc_2021_12_28_mtv1_pixel5_p222_demo5_rtklib_oracle.json` | `track_a_gsdc_2021_12_28_mtv1_p222_grec_l1.conf` | pre-registered GSDC repeat MTV1 Pixel5 arc, demo5, G/R/E/C L1, P222 base | 10/1610 fixed with AR ratio gate 3.0; median 3.97m 3D / 2.91m horizontal, p95 9.03m 3D |
 
 **GLONASS is float-only** (`pos2-gloarmode=off`): FDMA inter-channel biases break
 the clean double-difference integer assumption, so GLONASS contributes to the
@@ -99,5 +104,15 @@ python3 pos_to_oracle.py $WORK/track_a_gsdc_p222_grec_l1.pos \
   --rtklib-version "EX 2.5.0" --rtklib-commit 57d39e7
 ```
 
-The local byte-for-byte regeneration check is tagged `:local_data` and excluded
-by default.
+The three additional pre-registered arcs use the same command pattern and only
+change the config, drive path, time window, day-of-year inputs, and 2 ms truth
+matching tolerance for RTKLIB's rounded millisecond output:
+
+| drive | config | RTKLIB time window | CORS/nav day | extra generator arg |
+| --- | --- | --- | --- | --- |
+| `train/2021-08-04-US-SJC-1/GooglePixel5` | `track_a_gsdc_2021_08_04_sjc1_p222_grec_l1.conf` | `2021/08/04 20:40:43` to `2021/08/04 21:06:40` | 216 | `--truth-time-tolerance-ms 2` |
+| `train/2021-12-15-US-MTV-1/GooglePixel5` | `track_a_gsdc_2021_12_15_mtv1_p222_grec_l1.conf` | `2021/12/15 18:49:11` to `2021/12/15 19:13:40` | 349 | `--truth-time-tolerance-ms 2` |
+| `train/2021-12-28-US-MTV-1/GooglePixel5` | `track_a_gsdc_2021_12_28_mtv1_p222_grec_l1.conf` | `2021/12/28 20:17:25` to `2021/12/28 20:44:20` | 362 | `--truth-time-tolerance-ms 2` |
+
+The local byte-for-byte regeneration check is tagged `:local_data`, covers all
+four GSDC fixtures, and is excluded by default.

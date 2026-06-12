@@ -41,6 +41,7 @@ RTKLIB = {"program": "rnx2rtkp", "version": "v2.4.2-p13", "commit": "71db0ff"}
 WGS84_A_M = 6378137.0
 WGS84_F = 1.0 / 298.257223563
 WGS84_E2 = WGS84_F * (2.0 - WGS84_F)
+UNIX_EPOCH = datetime(1970, 1, 1)
 
 
 def parse_pos(path):
@@ -154,6 +155,37 @@ def parse_gsdc_truth_csv(path):
     return truth
 
 
+def naive_unix_ms(dt):
+    return int(round((dt - UNIX_EPOCH).total_seconds() * 1000.0))
+
+
+def indexed_truth(truth):
+    return {naive_unix_ms(utc): (utc, row) for utc, row in truth.items()}
+
+
+def match_truth_epoch(truth, truth_by_ms, utc, tolerance_ms):
+    t = truth.get(utc)
+    if t is not None:
+        return utc, t
+
+    if tolerance_ms <= 0:
+        return None, None
+
+    utc_ms = naive_unix_ms(utc)
+    candidates = []
+
+    for delta_ms in range(-tolerance_ms, tolerance_ms + 1):
+        match = truth_by_ms.get(utc_ms + delta_ms)
+        if match is not None:
+            candidates.append((abs(delta_ms), match))
+
+    if not candidates:
+        return None, None
+
+    _, (matched_utc, row) = min(candidates, key=lambda item: item[0])
+    return matched_utc, row
+
+
 def percentile(values, pct):
     if not values:
         return None
@@ -198,11 +230,15 @@ def parse_xyz_arg(value):
 
 def moving_oracle(args):
     truth = parse_gsdc_truth_csv(args.moving_truth_csv)
+    truth_by_ms = indexed_truth(truth)
     epochs = []
     missing_truth = []
 
     for ep in parse_ecef_pos(args.pos, args.gps_utc_offset_s):
-        t = truth.get(ep["utc"])
+        truth_utc, t = match_truth_epoch(
+            truth, truth_by_ms, ep["utc"], args.truth_time_tolerance_ms
+        )
+
         if t is None:
             missing_truth.append(ep["utc"].isoformat(timespec="milliseconds"))
             continue
@@ -218,7 +254,7 @@ def moving_oracle(args):
             {
                 "time": ep["gpst"].isoformat(timespec="milliseconds"),
                 "time_scale": "GPST",
-                "truth_time_utc": ep["utc"].isoformat(timespec="milliseconds"),
+                "truth_time_utc": truth_utc.isoformat(timespec="milliseconds"),
                 "fix_status": Q_STATUS.get(ep["q"], str(ep["q"])),
                 "q": ep["q"],
                 "satellites": ep["satellites"],
@@ -284,6 +320,9 @@ def moving_oracle(args):
         "gps_utc_offset_s": args.gps_utc_offset_s,
         "epochs": len(truth),
     }
+
+    if args.truth_time_tolerance_ms > 0:
+        truth_doc["time_match_tolerance_ms"] = args.truth_time_tolerance_ms
 
     if args.base_station:
         truth_doc["base_station"] = {"id": args.base_station}
@@ -382,6 +421,7 @@ def parse_args(argv):
     parser.add_argument("--base-ecef-m", type=parse_xyz_arg)
     parser.add_argument("--base-distance-km", type=float)
     parser.add_argument("--gps-utc-offset-s", type=int, default=18)
+    parser.add_argument("--truth-time-tolerance-ms", type=int, default=0)
     parser.add_argument("--rtklib-version", default=RTKLIB["version"])
     parser.add_argument("--rtklib-commit", default=RTKLIB["commit"])
     return parser.parse_args(argv)
