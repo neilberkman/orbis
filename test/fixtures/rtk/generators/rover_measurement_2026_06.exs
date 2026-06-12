@@ -5,6 +5,7 @@ defmodule RoverMeasurement202606 do
   alias Orbis.GNSS.Positioning
   alias Orbis.GNSS.RINEX.Observations
   alias Orbis.GNSS.RTK
+  alias Orbis.NIF
 
   @c_m_s 299_792_458.0
   @gps_l1_hz 1_575_420_000.0
@@ -18,8 +19,11 @@ defmodule RoverMeasurement202606 do
   @systems ["G", "R", "E", "C"]
   @default_work "/tmp/gsdc-work"
   @default_results "/tmp/rover-measurement-2026-06-results.json"
-  @max_segment_epochs 1
+  @max_segment_epochs 60
+  @comparison_segment_epochs 1
   @sanity_code_residual_threshold_m 1_000.0
+  @divergence_threshold_m 1_000.0
+  @rtk_filter_state_version 3
 
   @oracle_fixtures [
     "gsdc_2021_08_04_sjc1_pixel5_p222_demo5_rtklib_oracle.json",
@@ -52,7 +56,7 @@ defmodule RoverMeasurement202606 do
     {"ambiguity_prior_sigma_m", "1000.0",
      "Weak single-difference ambiguity prior matching the shipped filter scale."},
     {"process_noise_baseline_sigma_m", "30.0",
-     "Kept at the original kinematic setting; it is inert with one-epoch measurement segments."},
+     "Kept at the original kinematic setting; it applies between carried-state epochs."},
     {"hold_sigma_m", "1.0e-4",
      "Keeps the shipped tight ambiguity hold used after an accepted integer fix."},
     {"max_iterations", "10", "Matches the real-arc RTK tests' nonlinear iteration cap."},
@@ -100,7 +104,7 @@ defmodule RoverMeasurement202606 do
       |> Enum.map(&measure_arc/1)
 
     result = %{
-      "version" => 1,
+      "version" => 2,
       "generated_at_utc" =>
         DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601(),
       "script" => Path.relative_to(__ENV__.file, File.cwd!()),
@@ -171,8 +175,17 @@ defmodule RoverMeasurement202606 do
       "  sanity gate: median |clock-demeaned SD code residual| = #{fmt(sanity_gate.median_abs_code_residual_m)} m"
     )
 
-    segments = segment_epoch_contexts(epochs, contexts)
+    segments = segment_epoch_contexts(epochs, contexts, @max_segment_epochs)
     {per_epoch, segment_reports} = solve_segments(segments, nav, base_arp, glonass_slots)
+
+    comparison_segments = segment_epoch_contexts(epochs, contexts, @comparison_segment_epochs)
+
+    {comparison_per_epoch, comparison_segment_reports} =
+      solve_segments(comparison_segments, nav, base_arp, glonass_slots,
+        diagnostics?: false,
+        log?: false
+      )
+
     initial_baseline = segment_reports |> List.first() |> Map.fetch!(:initial_baseline_m)
 
     demo5 = demo5_summary(arc.oracle["per_epoch"])
@@ -180,6 +193,17 @@ defmodule RoverMeasurement202606 do
     comparative = comparative_verdict(orbis, demo5, :per_arc)
     invariant = invariant_verdict(per_epoch)
     ledger = classify_worst_decile(per_epoch)
+    diagnosis = arc_diagnosis(per_epoch, segment_reports, sanity_gate, time_alignment)
+
+    comparison = %{
+      mode: "per_epoch_segments_comparison_only",
+      max_segment_epochs: @comparison_segment_epochs,
+      segment_count: length(comparison_segment_reports),
+      orbis: summarize_measurements(comparison_per_epoch),
+      comparative:
+        comparative_verdict(summarize_measurements(comparison_per_epoch), demo5, :per_arc),
+      invariant: invariant_verdict(comparison_per_epoch)
+    }
 
     %{
       input: arc,
@@ -192,6 +216,9 @@ defmodule RoverMeasurement202606 do
       segment_count: length(segment_reports),
       segment_reports: segment_reports,
       per_epoch: per_epoch,
+      diagnosis: diagnosis,
+      comparison: comparison,
+      comparison_per_epoch: comparison_per_epoch,
       demo5: demo5,
       orbis: orbis,
       comparative: comparative,
@@ -485,7 +512,7 @@ defmodule RoverMeasurement202606 do
     Enum.filter(sats, &(String.first(&1) in keep_systems))
   end
 
-  defp segment_epoch_contexts(epochs, contexts) do
+  defp segment_epoch_contexts(epochs, contexts, max_segment_epochs) do
     epochs
     |> Enum.zip(contexts)
     |> Enum.reduce([], fn pair, segments ->
@@ -496,7 +523,7 @@ defmodule RoverMeasurement202606 do
         [current | rest] ->
           candidate = current ++ [pair]
 
-          if length(candidate) <= @max_segment_epochs and segment_reference_solvable?(candidate) do
+          if length(candidate) <= max_segment_epochs and segment_reference_solvable?(candidate) do
             [candidate | rest]
           else
             [[pair], current | rest]
@@ -529,11 +556,11 @@ defmodule RoverMeasurement202606 do
     |> Map.new(fn {system, sats} -> {system, MapSet.to_list(sats)} end)
   end
 
-  defp solve_segments(segments, nav, base_arp, glonass_slots) do
+  defp solve_segments(segments, nav, base_arp, glonass_slots, opts \\ []) do
     segments
     |> Enum.with_index()
     |> Enum.flat_map(fn {segment, index} ->
-      solve_segment(segment, index, nav, base_arp, glonass_slots)
+      solve_segment(segment, index, nav, base_arp, glonass_slots, opts)
     end)
     |> Enum.unzip()
     |> case do
@@ -541,23 +568,36 @@ defmodule RoverMeasurement202606 do
     end
   end
 
-  defp solve_segment(segment, index, nav, base_arp, glonass_slots) do
+  defp solve_segment(segment, index, nav, base_arp, glonass_slots, solve_opts) do
     epochs = Enum.map(segment, &elem(&1, 0))
     contexts = Enum.map(segment, &elem(&1, 1))
     initial_baseline = spp_initial_baseline!(nav, epochs, base_arp)
     opts = filter_opts(initial_baseline, epochs, glonass_slots)
+    diagnostics? = Keyword.get(solve_opts, :diagnostics?, true)
+    log? = Keyword.get(solve_opts, :log?, true)
 
-    IO.puts(
-      "  segment #{index + 1}: #{hd(contexts).time}..#{List.last(contexts).time} #{length(epochs)} epochs"
-    )
+    if log? do
+      IO.puts(
+        "  segment #{index + 1}: #{hd(contexts).time}..#{List.last(contexts).time} #{length(epochs)} epochs"
+      )
+    end
 
     case RTK.solve_filter_baseline_epochs(base_arp, epochs, opts) do
       {:ok, sol} ->
+        state_diagnostics =
+          if diagnostics?,
+            do: filter_state_diagnostics(segment, sol, initial_baseline, opts, base_arp),
+            else: []
+
+        state_by_time = Map.new(state_diagnostics, &{&1.time, &1})
+
         measurements =
           sol.epochs
           |> Enum.zip(contexts)
           |> Enum.map(fn {result, context} ->
-            epoch_measurement(result, context, base_arp)
+            result
+            |> epoch_measurement(context, base_arp)
+            |> Map.put(:state_diagnostics, Map.get(state_by_time, context.time))
           end)
 
         report = %{
@@ -566,6 +606,7 @@ defmodule RoverMeasurement202606 do
           first_time: hd(contexts).time,
           last_time: List.last(contexts).time,
           initial_baseline_m: initial_baseline,
+          diagnostics: segment_diagnostics_summary(measurements, state_diagnostics),
           metadata: sol.metadata
         }
 
@@ -578,8 +619,8 @@ defmodule RoverMeasurement202606 do
 
         {left, right} = Enum.split(segment, div(length(segment), 2))
 
-        solve_segment(left, index, nav, base_arp, glonass_slots) ++
-          solve_segment(right, index, nav, base_arp, glonass_slots)
+        solve_segment(left, index, nav, base_arp, glonass_slots, solve_opts) ++
+          solve_segment(right, index, nav, base_arp, glonass_slots, solve_opts)
 
       {:error, reason} ->
         context = hd(contexts)
@@ -587,6 +628,317 @@ defmodule RoverMeasurement202606 do
         []
     end
   end
+
+  defp filter_state_diagnostics(segment, sol, initial_baseline, opts, base_arp) do
+    epochs = Enum.map(segment, &elem(&1, 0))
+    contexts = Enum.map(segment, &elem(&1, 1))
+
+    all_sats =
+      epochs |> Enum.flat_map(&Map.keys(&1.satellite_positions_m)) |> Enum.uniq() |> Enum.sort()
+
+    refs = diagnostic_reference_satellites(base_arp, epochs, all_sats)
+    sd_ids = all_sats
+    initial_ambiguities = diagnostic_initial_ambiguities(epochs, sd_ids)
+
+    state =
+      diagnostic_initial_state(sd_ids, refs, epochs, initial_baseline, initial_ambiguities, opts)
+
+    rust_epochs = Enum.map(epochs, &diagnostic_rust_epoch(&1, refs, all_sats))
+
+    wavelengths =
+      opts
+      |> Keyword.fetch!(:ambiguity_wavelength_m)
+      |> Map.drop(Map.values(refs))
+      |> Enum.sort()
+
+    offsets = Enum.map(wavelengths, fn {sat, _wavelength} -> {sat, 0.0} end)
+
+    case NIF.rtk_filter_update_epochs(
+           state,
+           rust_epochs,
+           ecef_to_tuple(base_arp),
+           {Keyword.fetch!(opts, :code_sigma_m), Keyword.fetch!(opts, :phase_sigma_m), "rtklib",
+            false, true},
+           wavelengths,
+           offsets,
+           {
+             Keyword.fetch!(opts, :hold_sigma_m),
+             1.0e-4,
+             1.0e-4,
+             Keyword.fetch!(opts, :max_iterations),
+             Keyword.fetch!(opts, :process_noise_baseline_sigma_m),
+             Keyword.fetch!(opts, :integer_ratio_threshold),
+             Keyword.fetch!(opts, :float_only_systems)
+           }
+         ) do
+      {:ok, updates} ->
+        contexts
+        |> Enum.zip(epochs)
+        |> Enum.zip(updates)
+        |> Enum.zip(sol.epochs)
+        |> Enum.reduce({[], nil}, fn {{{context, epoch}, update}, result}, {acc, previous} ->
+          diagnostic =
+            diagnostic_epoch(
+              context,
+              epoch,
+              update,
+              result,
+              refs,
+              base_arp,
+              previous
+            )
+
+          {[diagnostic | acc], diagnostic}
+        end)
+        |> elem(0)
+        |> Enum.reverse()
+
+      {:error, epoch_index, reason} ->
+        raise "diagnostic NIF failed at epoch #{epoch_index}: #{inspect(reason)}"
+
+      {:error, reason} ->
+        raise "diagnostic NIF failed: #{inspect(reason)}"
+    end
+  end
+
+  defp diagnostic_reference_satellites(base_arp, epochs, all_sats) do
+    systems = all_sats |> Enum.map(&String.first/1) |> Enum.uniq() |> Enum.sort()
+    common_by_system = per_system_common_sats(epochs)
+
+    Map.new(systems, fn system ->
+      sats = Map.fetch!(common_by_system, system) |> Enum.sort()
+
+      reference =
+        Enum.min_by(sats, fn sat ->
+          {-average_reference_score(base_arp, sat, epochs), sat}
+        end)
+
+      {system, reference}
+    end)
+  end
+
+  defp average_reference_score(base_arp, sat, epochs) do
+    up = unit3(base_arp) || {0.0, 0.0, 1.0}
+
+    values =
+      epochs
+      |> Enum.filter(&Map.has_key?(&1.satellite_positions_m, sat))
+      |> Enum.map(fn epoch ->
+        sat_pos = Map.fetch!(epoch.satellite_positions_m, sat)
+
+        case unit3(sub3(sat_pos, base_arp)) do
+          nil -> -1.0
+          los -> dot3(los, up)
+        end
+      end)
+
+    Enum.sum(values) / length(values)
+  end
+
+  defp unit3(v) do
+    case norm3(v) do
+      n when n > 0.0 -> scale3(v, 1.0 / n)
+      _zero -> nil
+    end
+  end
+
+  defp diagnostic_initial_ambiguities(epochs, sd_ids) do
+    zero = Map.new(sd_ids, &{&1, 0.0})
+    wanted = MapSet.new(sd_ids)
+
+    seeded =
+      Enum.reduce_while(epochs, %{}, fn epoch, acc ->
+        if map_size(acc) == length(sd_ids) do
+          {:halt, acc}
+        else
+          epoch_map = observation_map(epoch.base_observations)
+          rover_map = observation_map(epoch.rover_observations)
+
+          seeded_epoch =
+            epoch.satellite_positions_m
+            |> Map.keys()
+            |> Enum.reduce(acc, fn sat, sat_acc ->
+              with true <- MapSet.member?(wanted, sat),
+                   false <- Map.has_key?(sat_acc, sat),
+                   %{code_m: base_code, phase_m: base_phase} <- Map.get(epoch_map, sat),
+                   %{code_m: rover_code, phase_m: rover_phase} <- Map.get(rover_map, sat) do
+                code_sd = rover_code - base_code
+                phase_sd = rover_phase - base_phase
+                Map.put(sat_acc, sat, phase_sd - code_sd)
+              else
+                _ -> sat_acc
+              end
+            end)
+
+          {:cont, seeded_epoch}
+        end
+      end)
+
+    Map.merge(zero, seeded)
+  end
+
+  defp diagnostic_initial_state(sd_ids, refs, epochs, initial_baseline, initial_ambiguities, opts) do
+    n = 3 + length(sd_ids)
+    information = diagnostic_initial_information(n, opts)
+
+    header_refs =
+      refs
+      |> Enum.sort()
+      |> Enum.map(fn {system, reference_sat} ->
+        epoch = Enum.find(epochs, &Map.has_key?(&1.satellite_positions_m, reference_sat))
+        {system, reference_satellite_id(epoch, reference_sat)}
+      end)
+
+    {
+      {@rtk_filter_state_version, header_refs, sd_ids,
+       Keyword.fetch!(opts, :ambiguity_prior_sigma_m), 0},
+      initial_baseline,
+      Enum.map(sd_ids, &Map.fetch!(initial_ambiguities, &1)),
+      List.flatten(information),
+      [],
+      []
+    }
+  end
+
+  defp diagnostic_initial_information(n, opts) do
+    baseline_sigma_m = Keyword.fetch!(opts, :baseline_prior_sigma_m)
+    ambiguity_sigma_m = Keyword.fetch!(opts, :ambiguity_prior_sigma_m)
+
+    for i <- 0..(n - 1) do
+      for j <- 0..(n - 1) do
+        cond do
+          i != j -> 0.0
+          i < 3 -> 1.0 / (baseline_sigma_m * baseline_sigma_m)
+          true -> 1.0 / (ambiguity_sigma_m * ambiguity_sigma_m)
+        end
+      end
+    end
+  end
+
+  defp diagnostic_rust_epoch(epoch, refs, all_sats) do
+    available = epoch.satellite_positions_m |> Map.keys() |> MapSet.new()
+    reference_set = refs |> Map.values() |> MapSet.new()
+
+    references =
+      refs
+      |> Enum.sort()
+      |> Enum.filter(fn {_system, sat} -> MapSet.member?(available, sat) end)
+      |> Enum.map(fn {_system, sat} -> diagnostic_rust_sat(epoch, sat) end)
+
+    nonrefs =
+      all_sats
+      |> Enum.reject(&MapSet.member?(reference_set, &1))
+      |> Enum.filter(&MapSet.member?(available, &1))
+      |> Enum.map(&diagnostic_rust_sat(epoch, &1))
+
+    {references, nonrefs}
+  end
+
+  defp diagnostic_rust_sat(epoch, sat) do
+    base = observation_map(epoch.base_observations) |> Map.fetch!(sat)
+    rover = observation_map(epoch.rover_observations) |> Map.fetch!(sat)
+
+    {
+      {sat, reference_satellite_id(epoch, sat)},
+      {base.code_m, base.phase_m, rover.code_m, rover.phase_m},
+      {
+        Map.fetch!(epoch.base_satellite_positions_m, sat),
+        Map.fetch!(epoch.rover_satellite_positions_m, sat),
+        Map.fetch!(epoch.satellite_positions_m, sat)
+      }
+    }
+  end
+
+  defp reference_satellite_id(_epoch, sat), do: sat
+
+  defp diagnostic_epoch(context, epoch, update, result, refs, base_arp, previous) do
+    {state_term, reported_baseline, ratio, fixed?, newly_fixed, fixed_ids} = update
+
+    {{@rtk_filter_state_version, header_refs, sd_ids, _ambiguity_sigma_m, state_epoch_count},
+     carried_baseline, _sd_ambiguities, information_flat, fixed_cycles, _fixed_m} = state_term
+
+    n = 3 + length(sd_ids)
+    information = Enum.chunk_every(information_flat, n)
+    truth_tuple = truth_tuple(context)
+    carried_rover = carried_baseline |> add3(ecef_to_tuple(base_arp))
+    reported_rover = reported_baseline |> add3(ecef_to_tuple(base_arp))
+    sats = epoch.satellite_positions_m |> Map.keys() |> Enum.sort()
+    previous_sats = (previous && previous.satellite_ids) || []
+    previous_set = MapSet.new(previous_sats)
+    current_set = MapSet.new(sats)
+    current_systems = sats |> Enum.map(&String.first/1) |> Enum.uniq()
+
+    %{
+      time: context.time,
+      segment_epoch_index: result.index,
+      state_epoch_count: state_epoch_count,
+      reference_satellites: Map.new(header_refs),
+      expected_reference_satellites: refs,
+      reference_satellites_present?:
+        Enum.all?(current_systems, fn system ->
+          refs |> Map.fetch!(system) |> then(&MapSet.member?(current_set, &1))
+        end),
+      satellite_ids: sats,
+      satellites_added:
+        current_set |> MapSet.difference(previous_set) |> MapSet.to_list() |> Enum.sort(),
+      satellites_removed:
+        previous_set |> MapSet.difference(current_set) |> MapSet.to_list() |> Enum.sort(),
+      gap_s:
+        previous && NaiveDateTime.diff(context.epoch, previous.epoch, :microsecond) / 1_000_000.0,
+      epoch: context.epoch,
+      sd_ambiguity_columns: length(sd_ids),
+      hold_count: length(fixed_cycles),
+      fixed_sd_ids: Enum.sort(fixed_ids),
+      newly_fixed_sd_ids: Enum.sort(newly_fixed),
+      information_condition_estimate: information_condition_estimate(information),
+      carried_baseline_error_3d_m: norm3(sub3(carried_rover, truth_tuple)),
+      reported_baseline_error_3d_m: norm3(sub3(reported_rover, truth_tuple)),
+      nif_integer_fixed?: fixed?,
+      nif_integer_ratio: finite_ratio(ratio)
+    }
+  end
+
+  defp truth_tuple(context) do
+    truth = context.oracle_epoch["truth_ecef_m"]
+    {truth["x"], truth["y"], truth["z"]}
+  end
+
+  defp information_condition_estimate(matrix) do
+    row_sums =
+      matrix
+      |> Enum.map(fn row -> row |> Enum.map(&abs/1) |> Enum.sum() end)
+      |> Enum.reject(&(&1 == 0.0))
+
+    case row_sums do
+      [] -> nil
+      values -> Enum.max(values) / Enum.min(values)
+    end
+  end
+
+  defp segment_diagnostics_summary(measurements, state_diagnostics) do
+    first_bad = first_bad_epoch(measurements)
+
+    %{
+      first_bad_epoch: first_bad && first_bad_excerpt(first_bad),
+      max_reported_error_3d_m: measurements |> Enum.map(& &1.error_3d_m) |> max_or_nil(),
+      max_carried_error_3d_m:
+        state_diagnostics
+        |> Enum.map(& &1.carried_baseline_error_3d_m)
+        |> max_or_nil(),
+      max_information_condition_estimate:
+        state_diagnostics
+        |> Enum.map(& &1.information_condition_estimate)
+        |> reject_infinity()
+        |> max_or_nil(),
+      max_sd_ambiguity_columns:
+        state_diagnostics
+        |> Enum.map(& &1.sd_ambiguity_columns)
+        |> max_or_nil(),
+      max_hold_count: state_diagnostics |> Enum.map(& &1.hold_count) |> max_or_nil()
+    }
+  end
+
+  defp reject_infinity(values), do: Enum.reject(values, &(&1 == :infinity))
 
   defp base_epoch_index(%Rinex2Obs{epochs: epochs}) do
     sorted = Enum.sort_by(epochs, &time_us(&1.epoch))
@@ -1058,6 +1410,166 @@ defmodule RoverMeasurement202606 do
     end
   end
 
+  defp arc_diagnosis(per_epoch, segment_reports, sanity_gate, time_alignment) do
+    first_bad = first_bad_epoch(per_epoch)
+
+    if first_bad do
+      index = Enum.find_index(per_epoch, &(&1.time == first_bad.time))
+      previous = if index && index > 0, do: Enum.at(per_epoch, index - 1)
+      changes = first_bad_changes(first_bad, previous)
+      verdict = first_bad_verdict(first_bad, changes)
+
+      %{
+        threshold_m: @divergence_threshold_m,
+        verdict: verdict,
+        mechanism: first_bad_mechanism(first_bad, changes),
+        input_consistency:
+          input_consistency_summary(sanity_gate, time_alignment, first_bad, changes),
+        first_bad_epoch: first_bad_excerpt(first_bad),
+        previous_epoch: previous && first_bad_excerpt(previous),
+        changes_at_first_bad: changes,
+        segment: segment_for_epoch(segment_reports, first_bad.time)
+      }
+    else
+      %{
+        threshold_m: @divergence_threshold_m,
+        verdict: "no_megameter_divergence",
+        mechanism: "no epoch crossed the divergence threshold in the completed multi-epoch run",
+        input_consistency: input_consistency_summary(sanity_gate, time_alignment, nil, %{}),
+        first_bad_epoch: nil,
+        previous_epoch: nil,
+        changes_at_first_bad: %{},
+        segment: nil
+      }
+    end
+  end
+
+  defp first_bad_epoch(per_epoch), do: Enum.find(per_epoch, &bad_epoch?/1)
+
+  defp bad_epoch?(epoch) do
+    state = epoch.state_diagnostics || %{}
+
+    epoch.error_3d_m >= @divergence_threshold_m or
+      Map.get(state, :carried_baseline_error_3d_m, 0.0) >= @divergence_threshold_m
+  end
+
+  defp first_bad_excerpt(epoch) do
+    state = epoch.state_diagnostics || %{}
+
+    %{
+      time: epoch.time,
+      error_3d_m: epoch.error_3d_m,
+      carried_baseline_error_3d_m: Map.get(state, :carried_baseline_error_3d_m),
+      information_condition_estimate: Map.get(state, :information_condition_estimate),
+      segment_epoch_index: Map.get(state, :segment_epoch_index),
+      sd_ambiguity_columns: Map.get(state, :sd_ambiguity_columns),
+      hold_count: Map.get(state, :hold_count),
+      fixed_ambiguities: epoch.fixed_ambiguities,
+      newly_fixed_ambiguities: epoch.newly_fixed_ambiguities,
+      satellites: epoch.satellites,
+      pre_mask_satellites: epoch.pre_mask_satellites,
+      max_abs_code_residual_m: epoch.residuals.max_abs_code_m,
+      max_abs_phase_residual_m: epoch.residuals.max_abs_phase_m
+    }
+  end
+
+  defp first_bad_changes(first_bad, previous) do
+    state = first_bad.state_diagnostics || %{}
+    previous_state = (previous && previous.state_diagnostics) || %{}
+
+    %{
+      gap_s: Map.get(state, :gap_s),
+      satellites_added: Map.get(state, :satellites_added, []),
+      satellites_removed: Map.get(state, :satellites_removed, []),
+      reference_satellites_present?: Map.get(state, :reference_satellites_present?),
+      references: Map.get(state, :reference_satellites, %{}),
+      newly_fixed_sd_ids: Map.get(state, :newly_fixed_sd_ids, []),
+      previous_newly_fixed_sd_ids: Map.get(previous_state, :newly_fixed_sd_ids, []),
+      hold_count: Map.get(state, :hold_count),
+      previous_hold_count: Map.get(previous_state, :hold_count),
+      sd_ambiguity_columns: Map.get(state, :sd_ambiguity_columns),
+      previous_sd_ambiguity_columns: Map.get(previous_state, :sd_ambiguity_columns),
+      segmented_arc_ids_present?: segmented_arc_ids_present?(state)
+    }
+  end
+
+  defp first_bad_verdict(_first_bad, %{reference_satellites_present?: false}), do: "harness_bug"
+
+  defp first_bad_verdict(_first_bad, _changes), do: "filter_behavior"
+
+  defp first_bad_mechanism(_first_bad, %{reference_satellites_present?: false}) do
+    "segment admitted an epoch without its selected reference satellite"
+  end
+
+  defp first_bad_mechanism(_first_bad, %{segmented_arc_ids_present?: true}) do
+    "segmented ambiguity ids grew inside the carried filter state"
+  end
+
+  defp first_bad_mechanism(_first_bad, changes) do
+    added = Map.get(changes, :satellites_added, [])
+    removed = Map.get(changes, :satellites_removed, [])
+    hold_count = Map.get(changes, :hold_count) || 0
+    previous_hold_count = Map.get(changes, :previous_hold_count) || 0
+    newly_fixed = Map.get(changes, :newly_fixed_sd_ids, [])
+    previous_newly_fixed = Map.get(changes, :previous_newly_fixed_sd_ids, [])
+
+    cond do
+      hold_count > 0 and (added != [] or removed != []) ->
+        "tight ambiguity holds remain active across satellite-set churn"
+
+      newly_fixed != [] ->
+        "integer hold accepted at the first divergent epoch"
+
+      previous_newly_fixed != [] ->
+        "integer hold accepted immediately before the first divergent epoch"
+
+      hold_count > previous_hold_count ->
+        "hold set expanded immediately before divergence"
+
+      added != [] or removed != [] ->
+        "carried float state diverged at a satellite-set change before any harness inconsistency"
+
+      true ->
+        "carried float state diverged without an input inconsistency marker"
+    end
+  end
+
+  defp segmented_arc_ids_present?(state) do
+    state
+    |> Map.get(:satellite_ids, [])
+    |> Enum.any?(&String.contains?(&1, "~ra"))
+  end
+
+  defp input_consistency_summary(sanity_gate, time_alignment, _first_bad, changes) do
+    cond do
+      Map.get(changes, :reference_satellites_present?) == false ->
+        "failed: selected reference absent at the first bad epoch"
+
+      sanity_gate.pass and time_alignment.rinex_to_oracle_time_max_ms <= 0.5 ->
+        "passed: meter-level SPP residual gate and sub-ms RINEX/oracle alignment"
+
+      sanity_gate.pass ->
+        "passed residual gate; time alignment should be reviewed"
+
+      true ->
+        "failed residual gate"
+    end
+  end
+
+  defp segment_for_epoch(segment_reports, time) do
+    Enum.find_value(segment_reports, fn segment ->
+      if segment.first_time <= time and time <= segment.last_time do
+        %{
+          index: segment.index,
+          epochs: segment.epochs,
+          first_time: segment.first_time,
+          last_time: segment.last_time,
+          diagnostics: segment.diagnostics
+        }
+      end
+    end)
+  end
+
   defp classify_worst_decile(per_epoch) do
     count = max(1, ceil(length(per_epoch) * 0.10))
     worst = per_epoch |> Enum.sort_by(& &1.error_3d_m, :desc) |> Enum.take(count)
@@ -1183,14 +1695,27 @@ defmodule RoverMeasurement202606 do
     demo5_epochs = Enum.flat_map(arcs, & &1.input.oracle["per_epoch"])
     orbis = summarize_measurements(orbis_epochs)
     demo5 = demo5_summary(demo5_epochs)
+    comparison_orbis = pooled_comparison_summary(arcs)
 
     %{
       "orbis" => stringify_keys(orbis),
       "demo5" => stringify_keys(demo5),
       "comparative" => stringify_keys(comparative_verdict(orbis, demo5, :pooled)),
       "invariant" => stringify_keys(invariant_verdict(orbis_epochs)),
+      "comparison" =>
+        stringify_keys(%{
+          mode: "per_epoch_segments_comparison_only",
+          orbis: comparison_orbis,
+          comparative: comparative_verdict(comparison_orbis, demo5, :pooled)
+        }),
       "ledger" => pooled_ledger(arcs)
     }
+  end
+
+  defp pooled_comparison_summary(arcs) do
+    arcs
+    |> Enum.flat_map(& &1.comparison_per_epoch)
+    |> summarize_measurements()
   end
 
   defp time_alignment(contexts) do
@@ -1263,6 +1788,8 @@ defmodule RoverMeasurement202606 do
       "skipped_oracle_epochs" => arc.skipped_oracle_epochs,
       "segment_count" => arc.segment_count,
       "segments" => Enum.map(arc.segment_reports, &segment_json/1),
+      "diagnosis" => stringify_keys(arc.diagnosis),
+      "comparison" => stringify_keys(arc.comparison),
       "orbis" => stringify_keys(arc.orbis),
       "demo5" => stringify_keys(arc.demo5),
       "comparative" => stringify_keys(arc.comparative),
@@ -1286,6 +1813,7 @@ defmodule RoverMeasurement202606 do
       "pre_mask_satellites" => epoch.pre_mask_satellites,
       "fixed_ambiguities" => epoch.fixed_ambiguities,
       "newly_fixed_ambiguities" => epoch.newly_fixed_ambiguities,
+      "state_diagnostics" => stringify_keys(epoch.state_diagnostics),
       "residuals" => stringify_keys(epoch.residuals)
     }
   end
@@ -1297,6 +1825,7 @@ defmodule RoverMeasurement202606 do
       "first_time" => segment.first_time,
       "last_time" => segment.last_time,
       "initial_baseline_m" => tuple_json(segment.initial_baseline_m),
+      "diagnostics" => stringify_keys(segment.diagnostics),
       "metadata" => stringify_keys(segment.metadata)
     }
   end
@@ -1332,7 +1861,8 @@ defmodule RoverMeasurement202606 do
       "- Satellite positions use per-receiver transmit time from each receiver's code pseudorange, as in the real-arc RTK tests.",
       "- Before any filter run, the harness aborts if the median clock-demeaned single-difference code residual at SPP-level geometry exceeds #{fmt(@sanity_code_residual_threshold_m)} m.",
       "- The 10 degree elevation mask is applied during epoch construction and passed to the solver; per-epoch constellations with fewer than two usable satellites are dropped before double differencing.",
-      "- Each phone epoch is solved as its own filter segment. The earlier 60-epoch harness carried ambiguity state across dense Android epochs with frequent satellite re-acquisition, producing megameter artifacts after otherwise sane first epochs.",
+      "- The primary measurement uses sequential carried-state filter segments up to #{@max_segment_epochs} epochs, split earlier only when a common per-system reference is unavailable or a segment must be bisected after a solver error.",
+      "- A one-epoch-per-segment solve is retained only as an explicit comparison row; it is not the filter's operating mode.",
       "",
       "## Sanity gate and time basis",
       "",
@@ -1340,7 +1870,13 @@ defmodule RoverMeasurement202606 do
       "",
       "All four arcs pass the pre-filter residual gate. RINEX phone epochs match oracle GPST times within 0.5 ms after the oracle's millisecond rounding, and GPST minus truth UTC is 18 s, matching the oracle truth metadata.",
       "",
-      "Bug attribution: the megameter output was a harness segmentation/state-carryover bug. Epoch pairing had no evidence of the megameter failure after adding a defensive exact-base-epoch path: CORS interpolation remains correct for the 30 s base data and the paired epoch residual gate is meter-level. The satellite timescale and phone clock suspects were cleared by the GPST/UTC checks.",
+      "## First-bad-epoch diagnosis",
+      "",
+      diagnosis_table(arcs),
+      "",
+      diagnosis_summary(arcs),
+      "",
+      "Verdict rule: a missing selected reference is classified as a harness bug; otherwise a divergence after the sanity gate and time checks is classified as filter behavior. The conditioning column is a row-sum estimate used to locate jumps, not an exact spectral condition number.",
       "",
       "## Filter options",
       "",
@@ -1355,6 +1891,8 @@ defmodule RoverMeasurement202606 do
       "## Hard invariant",
       "",
       invariant_table(arcs, pooled),
+      "",
+      "The invariant is reported exactly as specified. The prior SJC one-epoch comparison had fixed n=3, which is statistically underpowered; the gate specification needs a minimum-population amendment through its sign-off process. This report does not silently apply one.",
       "",
       "## Worst-decile ledger",
       "",
@@ -1407,6 +1945,79 @@ defmodule RoverMeasurement202606 do
     )
   end
 
+  defp diagnosis_table(arcs) do
+    rows =
+      Enum.map(arcs, fn arc ->
+        diagnosis = arc["diagnosis"]
+        first_bad = diagnosis["first_bad_epoch"]
+        previous = diagnosis["previous_epoch"] || %{}
+        changes = diagnosis["changes_at_first_bad"] || %{}
+
+        if first_bad do
+          [
+            arc["label"],
+            diagnosis["verdict"],
+            first_bad["time"],
+            first_bad["segment_epoch_index"],
+            fmt(previous["error_3d_m"]),
+            fmt(first_bad["error_3d_m"]),
+            fmt(first_bad["carried_baseline_error_3d_m"]),
+            fmt(first_bad["information_condition_estimate"]),
+            first_bad["sd_ambiguity_columns"],
+            "#{changes["previous_hold_count"] || 0}->#{changes["hold_count"] || 0}",
+            "+#{length(changes["satellites_added"] || [])}/-#{length(changes["satellites_removed"] || [])}",
+            "#{fmt(first_bad["max_abs_code_residual_m"])}/#{fmt(first_bad["max_abs_phase_residual_m"])}",
+            diagnosis["mechanism"]
+          ]
+          |> table_row()
+        else
+          [
+            arc["label"],
+            diagnosis["verdict"],
+            "none",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            diagnosis["mechanism"]
+          ]
+          |> table_row()
+        end
+      end)
+
+    Enum.join(
+      [
+        "| Arc | Verdict | First bad GPST | Seg idx | Prev 3D m | Bad 3D m | Carried 3D m | Cond est | SD cols | Holds | Sat +/- | Max code/phase residual m | Mechanism |",
+        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|"
+      ] ++ rows,
+      "\n"
+    )
+  end
+
+  defp diagnosis_summary(arcs) do
+    diagnoses = Enum.map(arcs, & &1["diagnosis"])
+    first_bad = Enum.map(diagnoses, & &1["first_bad_epoch"]) |> Enum.reject(&is_nil/1)
+    verdicts = diagnoses |> Enum.map(& &1["verdict"]) |> Enum.uniq() |> Enum.sort()
+
+    if verdicts == ["filter_behavior"] and length(first_bad) == length(arcs) do
+      seg_indices = Enum.map(first_bad, & &1["segment_epoch_index"])
+      hold_counts = Enum.map(first_bad, &(&1["hold_count"] || 0))
+
+      if Enum.all?(seg_indices, &(&1 == 1)) and Enum.all?(hold_counts, &(&1 == 0)) do
+        "A-vs-b verdict: (b) real filter behavior under the measured phone configuration. All four arcs cross the #{fmt(@divergence_threshold_m)} m threshold on the second carried-state epoch, before any integer hold is accepted; selected references are present, segmented `~ra` ambiguity ids are absent, and the residual/time sanity gates pass. Three first-bad epochs add one GPS satellite, but SVL fails with the same satellite set, so constellation churn is not required. The sequential filter completes the arcs, but the longest stable prefix is one epoch."
+      else
+        "A-vs-b verdict: (b) real filter behavior under the measured phone configuration. The first-bad rows occur after the sanity gates with selected references present; see the table for the triggering state changes."
+      end
+    else
+      "A-vs-b verdict: at least one arc has a harness-bug marker; inspect the first-bad rows before treating the distributions as filter behavior."
+    end
+  end
+
   defp distributions_table(arcs, pooled) do
     rows =
       Enum.map(arcs, fn arc ->
@@ -1438,11 +2049,25 @@ defmodule RoverMeasurement202606 do
       ]
       |> table_row()
 
+    comparison = pooled["comparison"]["orbis"]
+
+    comparison_row =
+      [
+        "pooled per-epoch comparison only",
+        "#{comparison["epochs"]}/#{pooled["demo5"]["epochs"]}",
+        fmt(comparison["error_3d_median_m"]),
+        fmt(pooled["demo5"]["error_3d_median_m"]),
+        fmt(comparison["error_3d_p95_m"]),
+        fmt(pooled["demo5"]["error_3d_p95_m"]),
+        "not operating mode"
+      ]
+      |> table_row()
+
     Enum.join(
       [
         "| Arc | Epochs Orbis/demo5 | Orbis 3D median m | demo5 3D median m | Orbis 3D p95 m | demo5 3D p95 m | Bar |",
         "|---|---:|---:|---:|---:|---:|---:|"
-      ] ++ rows ++ [pooled_row],
+      ] ++ rows ++ [pooled_row, comparison_row],
       "\n"
     )
   end

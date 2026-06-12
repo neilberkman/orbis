@@ -14,7 +14,8 @@ This is the pre-registered single-sided MEASUREMENT pass. The RTK solver and lib
 - Satellite positions use per-receiver transmit time from each receiver's code pseudorange, as in the real-arc RTK tests.
 - Before any filter run, the harness aborts if the median clock-demeaned single-difference code residual at SPP-level geometry exceeds 1000.000 m.
 - The 10 degree elevation mask is applied during epoch construction and passed to the solver; per-epoch constellations with fewer than two usable satellites are dropped before double differencing.
-- Each phone epoch is solved as its own filter segment. The earlier 60-epoch harness carried ambiguity state across dense Android epochs with frequent satellite re-acquisition, producing megameter artifacts after otherwise sane first epochs.
+- The primary measurement uses sequential carried-state filter segments up to 60 epochs, split earlier only when a common per-system reference is unavailable or a segment must be bisected after a solver error.
+- A one-epoch-per-segment solve is retained only as an explicit comparison row; it is not the filter's operating mode.
 
 ## Sanity gate and time basis
 
@@ -27,7 +28,18 @@ This is the pre-registered single-sided MEASUREMENT pass. The RTK solver and lib
 
 All four arcs pass the pre-filter residual gate. RINEX phone epochs match oracle GPST times within 0.5 ms after the oracle's millisecond rounding, and GPST minus truth UTC is 18 s, matching the oracle truth metadata.
 
-Bug attribution: the megameter output was a harness segmentation/state-carryover bug. Epoch pairing had no evidence of the megameter failure after adding a defensive exact-base-epoch path: CORS interpolation remains correct for the 30 s base data and the paired epoch residual gate is meter-level. The satellite timescale and phone clock suspects were cleared by the GPST/UTC checks.
+## First-bad-epoch diagnosis
+
+| Arc | Verdict | First bad GPST | Seg idx | Prev 3D m | Bad 3D m | Carried 3D m | Cond est | SD cols | Holds | Sat +/- | Max code/phase residual m | Mechanism |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| gsdc_2021_08_04_sjc1_pixel5_p222_grec_l1_demo5 | filter_behavior | 2021-08-04T20:40:44.449 | 1 | 86.253 | 1389488.939 | 1389488.939 | 200083724539041.781 | 15 | 0->0 | +1/-0 | 1791995.457/3168.306 | carried float state diverged at a satellite-set change before any harness inconsistency |
+| gsdc_svl1_pixel5_p222_grec_l1_demo5 | filter_behavior | 2021-08-24T20:33:01.437 | 1 | 21.402 | 1090.311 | 1090.311 | 200077754410276.688 | 14 | 0->0 | +0/-0 | 1163.757/156.813 | carried float state diverged without an input inconsistency marker |
+| gsdc_2021_12_15_mtv1_pixel5_p222_grec_l1_demo5 | filter_behavior | 2021-12-15T18:49:12.438 | 1 | 30.974 | 4703.163 | 4703.163 | 200081022546957.156 | 16 | 0->0 | +1/-0 | 3188.835/388.578 | carried float state diverged at a satellite-set change before any harness inconsistency |
+| gsdc_2021_12_28_mtv1_pixel5_p222_grec_l1_demo5 | filter_behavior | 2021-12-28T20:17:26.438 | 1 | 28.006 | 546572.030 | 546572.030 | 200079548992697.500 | 13 | 0->0 | +1/-0 | 259901.673/10182.973 | carried float state diverged at a satellite-set change before any harness inconsistency |
+
+A-vs-b verdict: (b) real filter behavior under the measured phone configuration. All four arcs cross the 1000.000 m threshold on the second carried-state epoch, before any integer hold is accepted; selected references are present, segmented `~ra` ambiguity ids are absent, and the residual/time sanity gates pass. Three first-bad epochs add one GPS satellite, but SVL fails with the same satellite set, so constellation churn is not required. The sequential filter completes the arcs, but the longest stable prefix is one epoch.
+
+Verdict rule: a missing selected reference is classified as a harness bug; otherwise a divergence after the sanity gate and time checks is classified as filter behavior. The conditioning column is a row-sum estimate used to locate jumps, not an exact spectral condition number.
 
 ## Filter options
 
@@ -37,7 +49,7 @@ Bug attribution: the megameter output was a harness segmentation/state-carryover
 | `initial_baseline_m` | `first broadcast-code SPP minus P222 ARP` | Uses phone RINEX pseudoranges and the oracle broadcast NAV source, not truth. |
 | `baseline_prior_sigma_m` | `500.0` | Allows a phone-code SPP seed to be wrong by many metres without letting the prior dominate. |
 | `ambiguity_prior_sigma_m` | `1000.0` | Weak single-difference ambiguity prior matching the shipped filter scale. |
-| `process_noise_baseline_sigma_m` | `30.0` | Kept at the original kinematic setting; it is inert with one-epoch measurement segments. |
+| `process_noise_baseline_sigma_m` | `30.0` | Kept at the original kinematic setting; it applies between carried-state epochs. |
 | `hold_sigma_m` | `1.0e-4` | Keeps the shipped tight ambiguity hold used after an accepted integer fix. |
 | `max_iterations` | `10` | Matches the real-arc RTK tests' nonlinear iteration cap. |
 | `on_cycle_slip` | `split_arc` | Kept at the real-arc test setting; this script omits phone/base LLI flags because reference-satellite LLI splits are rejected by the shipped sequential filter. |
@@ -54,11 +66,12 @@ Bug attribution: the megameter output was a harness segmentation/state-carryover
 
 | Arc | Epochs Orbis/demo5 | Orbis 3D median m | demo5 3D median m | Orbis 3D p95 m | demo5 3D p95 m | Bar |
 |---|---:|---:|---:|---:|---:|---:|
-| gsdc_2021_08_04_sjc1_pixel5_p222_grec_l1_demo5 | 1453/1554 | 9.117 | 4.522 | 34.999 | 12.297 | miss |
-| gsdc_svl1_pixel5_p222_grec_l1_demo5 | 3136/3136 | 9.516 | 3.977 | 31.177 | 8.775 | miss |
-| gsdc_2021_12_15_mtv1_pixel5_p222_grec_l1_demo5 | 1465/1465 | 9.417 | 3.653 | 30.185 | 7.909 | miss |
-| gsdc_2021_12_28_mtv1_pixel5_p222_grec_l1_demo5 | 1610/1610 | 9.965 | 3.974 | 26.438 | 9.033 | miss |
-| pooled | 7664/7765 | 9.533 | 4.007 | 30.974 | 9.756 | miss |
+| gsdc_2021_08_04_sjc1_pixel5_p222_grec_l1_demo5 | 1453/1554 | 1594257.376 | 4.522 | 5719913.956 | 12.297 | miss |
+| gsdc_svl1_pixel5_p222_grec_l1_demo5 | 3136/3136 | 3113289.176 | 3.977 | 11769737.599 | 8.775 | miss |
+| gsdc_2021_12_15_mtv1_pixel5_p222_grec_l1_demo5 | 1465/1465 | 3215383.541 | 3.653 | 8129985.459 | 7.909 | miss |
+| gsdc_2021_12_28_mtv1_pixel5_p222_grec_l1_demo5 | 1610/1610 | 2547353.808 | 3.974 | 6214320.969 | 9.033 | miss |
+| pooled | 7664/7765 | 2470542.367 | 4.007 | 8439426.781 | 9.756 | miss |
+| pooled per-epoch comparison only | 7664/7765 | 9.533 | 4.007 | 30.974 | 9.756 | not operating mode |
 
 Comparative bar is report-only for this pass. Per-arc bar is Orbis <= 1.25 x demo5 for median and p95. Pooled registered bar compares medians without margin; pooled p95 is listed for context.
 
@@ -66,36 +79,38 @@ Comparative bar is report-only for this pass. Per-arc bar is Orbis <= 1.25 x dem
 
 | Arc | Verdict | Fixed n | Float n | Fixed median m | Float median m | Fixed p95 m | Float p95 m |
 |---|---|---:|---:|---:|---:|---:|---:|
-| gsdc_2021_08_04_sjc1_pixel5_p222_grec_l1_demo5 | fail | 3 | 1450 | 12.865 | 9.116 | 12.865 | 34.999 |
-| gsdc_svl1_pixel5_p222_grec_l1_demo5 | pass | 17 | 3119 | 7.613 | 9.529 | 17.413 | 31.177 |
-| gsdc_2021_12_15_mtv1_pixel5_p222_grec_l1_demo5 | pass | 4 | 1461 | 5.988 | 9.419 | 6.923 | 30.200 |
-| gsdc_2021_12_28_mtv1_pixel5_p222_grec_l1_demo5 | pass | 2 | 1608 | 8.269 | 9.965 | 6.195 | 26.438 |
-| pooled | pass | 26 | 7638 | 7.612 | 9.537 | 17.413 | 30.999 |
+| gsdc_2021_08_04_sjc1_pixel5_p222_grec_l1_demo5 | pass | 79 | 1374 | 304544.254 | 1606107.006 | 4328947.705 | 5802832.223 |
+| gsdc_svl1_pixel5_p222_grec_l1_demo5 | pass | 444 | 2692 | 1718067.409 | 3508551.724 | 8299280.845 | 12944075.513 |
+| gsdc_2021_12_15_mtv1_pixel5_p222_grec_l1_demo5 | pass_no_fixed_epochs | 0 | 1465 |  |  |  |  |
+| gsdc_2021_12_28_mtv1_pixel5_p222_grec_l1_demo5 | pass | 136 | 1474 | 190339.181 | 2861205.654 | 756861.076 | 6270467.037 |
+| pooled | pass | 659 | 7005 | 501494.477 | 2614710.863 | 8016359.791 | 8489835.644 |
+
+The invariant is reported exactly as specified. The prior SJC one-epoch comparison had fixed n=3, which is statistically underpowered; the gate specification needs a minimum-population amendment through its sign-off process. This report does not silently apply one.
 
 ## Worst-decile ledger
 
 | Arc | Class | Epochs | 3D error range m | Sats | Max code residual m | Max phase residual m |
 |---|---|---:|---:|---:|---:|---:|
-| gsdc_2021_08_04_sjc1_pixel5_p222_grec_l1_demo5 | dropout_gap | 47 | 25.998-96.786 | 10-13 | 118.521 | 0.672 |
-| gsdc_2021_08_04_sjc1_pixel5_p222_grec_l1_demo5 | geometry_antenna | 42 | 27.004-72.165 | 14-16 | 70.282 | 0.000 |
-| gsdc_2021_08_04_sjc1_pixel5_p222_grec_l1_demo5 | multipath_outlier | 27 | 25.611-90.807 | 14-16 | 171.170 | 0.000 |
-| gsdc_2021_08_04_sjc1_pixel5_p222_grec_l1_demo5 | other | 30 | 25.855-45.732 | 14-15 | 79.247 | 0.000 |
-| gsdc_svl1_pixel5_p222_grec_l1_demo5 | dropout_gap | 145 | 24.525-90.218 | 8-11 | 61.212 | 2.125 |
-| gsdc_svl1_pixel5_p222_grec_l1_demo5 | geometry_antenna | 47 | 24.691-103.797 | 12-14 | 112.376 | 0.000 |
-| gsdc_svl1_pixel5_p222_grec_l1_demo5 | multipath_outlier | 58 | 24.579-51.273 | 12-14 | 120.726 | 0.000 |
-| gsdc_svl1_pixel5_p222_grec_l1_demo5 | other | 64 | 24.642-49.159 | 12-14 | 48.938 | 0.000 |
-| gsdc_2021_12_15_mtv1_pixel5_p222_grec_l1_demo5 | dropout_gap | 48 | 22.609-64.012 | 8-13 | 53.129 | 0.000 |
-| gsdc_2021_12_15_mtv1_pixel5_p222_grec_l1_demo5 | geometry_antenna | 13 | 33.027-63.447 | 14-16 | 54.965 | 0.000 |
-| gsdc_2021_12_15_mtv1_pixel5_p222_grec_l1_demo5 | multipath_outlier | 35 | 23.222-58.434 | 14-16 | 201.208 | 0.000 |
-| gsdc_2021_12_15_mtv1_pixel5_p222_grec_l1_demo5 | other | 51 | 22.557-75.533 | 14-16 | 108.210 | 0.000 |
-| gsdc_2021_12_28_mtv1_pixel5_p222_grec_l1_demo5 | dropout_gap | 81 | 21.034-58.884 | 9-12 | 84.896 | 0.000 |
-| gsdc_2021_12_28_mtv1_pixel5_p222_grec_l1_demo5 | geometry_antenna | 1 | 38.446-38.446 | 13-13 | 21.410 | 0.000 |
-| gsdc_2021_12_28_mtv1_pixel5_p222_grec_l1_demo5 | multipath_outlier | 31 | 20.981-39.370 | 13-15 | 141.057 | 0.000 |
-| gsdc_2021_12_28_mtv1_pixel5_p222_grec_l1_demo5 | other | 48 | 20.792-47.774 | 13-15 | 88.835 | 0.000 |
-| pooled | geometry_antenna | 103 | 24.691-103.797 |  | 112.376 | 0.000 |
-| pooled | dropout_gap | 321 | 21.034-96.786 |  | 118.521 | 2.125 |
-| pooled | multipath_outlier | 151 | 20.981-90.807 |  | 201.208 | 0.000 |
-| pooled | other | 193 | 20.792-75.533 |  | 108.210 | 0.000 |
+| gsdc_2021_08_04_sjc1_pixel5_p222_grec_l1_demo5 | dropout_gap | 11 | 4324121.348-13708722.062 | 12-13 | 12025026.572 | 286506.878 |
+| gsdc_2021_08_04_sjc1_pixel5_p222_grec_l1_demo5 | geometry_antenna | 126 | 4321615.138-19316789.216 | 14-16 | 12293227.324 | 390969.594 |
+| gsdc_2021_08_04_sjc1_pixel5_p222_grec_l1_demo5 | multipath_outlier | 4 | 4355586.334-5074179.025 | 14-15 | 6240386.790 | 263953.108 |
+| gsdc_2021_08_04_sjc1_pixel5_p222_grec_l1_demo5 | other | 5 | 4389662.698-4762535.003 | 14-15 | 5767185.748 | 85222.330 |
+| gsdc_svl1_pixel5_p222_grec_l1_demo5 | dropout_gap | 121 | 8503730.232-1354253733.009 | 10-11 | 20210578.686 | 709658.112 |
+| gsdc_svl1_pixel5_p222_grec_l1_demo5 | geometry_antenna | 190 | 8499840.943-1356644123.190 | 12-14 | 20444484.855 | 739747.955 |
+| gsdc_svl1_pixel5_p222_grec_l1_demo5 | multipath_outlier | 2 | 8772732.751-9908812.872 | 12-12 | 9289102.333 | 917160.775 |
+| gsdc_svl1_pixel5_p222_grec_l1_demo5 | other | 1 | 8717571.420-8717571.420 | 12-12 | 4356177.773 | 396361.633 |
+| gsdc_2021_12_15_mtv1_pixel5_p222_grec_l1_demo5 | dropout_gap | 23 | 6024660.750-12633329.156 | 11-13 | 9627248.406 | 464173.180 |
+| gsdc_2021_12_15_mtv1_pixel5_p222_grec_l1_demo5 | geometry_antenna | 112 | 5999044.181-14906920.059 | 14-15 | 10815482.805 | 447461.832 |
+| gsdc_2021_12_15_mtv1_pixel5_p222_grec_l1_demo5 | multipath_outlier | 2 | 6009961.972-6126892.261 | 14-15 | 6448412.969 | 307532.296 |
+| gsdc_2021_12_15_mtv1_pixel5_p222_grec_l1_demo5 | other | 10 | 5985430.338-8738293.625 | 14-15 | 9249438.215 | 234379.377 |
+| gsdc_2021_12_28_mtv1_pixel5_p222_grec_l1_demo5 | dropout_gap | 17 | 5798357.904-7864304.120 | 10-12 | 10298797.752 | 78948.596 |
+| gsdc_2021_12_28_mtv1_pixel5_p222_grec_l1_demo5 | geometry_antenna | 138 | 5790314.789-8443309.309 | 13-15 | 10280757.612 | 640658.572 |
+| gsdc_2021_12_28_mtv1_pixel5_p222_grec_l1_demo5 | multipath_outlier | 2 | 6077870.266-8791523.015 | 13-14 | 8892752.606 | 511028.196 |
+| gsdc_2021_12_28_mtv1_pixel5_p222_grec_l1_demo5 | other | 4 | 5805204.198-5932395.898 | 14-15 | 6545261.055 | 239639.112 |
+| pooled | geometry_antenna | 566 | 4321615.138-1356644123.190 |  | 20444484.855 | 739747.955 |
+| pooled | dropout_gap | 172 | 4324121.348-1354253733.009 |  | 20210578.686 | 709658.112 |
+| pooled | multipath_outlier | 10 | 4355586.334-9908812.872 |  | 9289102.333 | 917160.775 |
+| pooled | other | 20 | 4389662.698-8738293.625 |  | 9249438.215 | 396361.633 |
 
 Classes are assigned only from the emitted epoch diagnostics: satellite counts, output gaps, residual magnitudes, and contiguous error-vector runs.
 
@@ -103,7 +118,7 @@ Classes are assigned only from the emitted epoch diagnostics: satellite counts, 
 
 | Ledger class | Epochs | 3D error range m | Candidate |
 |---|---:|---:|---|
-| geometry_antenna | 103 | 24.691-103.797 | Bias-stretch diagnostics before sub-cm effects |
-| dropout_gap | 321 | 21.034-96.786 | Base/rover epoch bridging and outage handling |
-| multipath_outlier | 151 | 20.981-90.807 | Robust residual gating for isolated phone multipath |
-| other | 193 | 20.792-75.533 | Manual review of unclassified worst-decile epochs |
+| geometry_antenna | 566 | 4321615.138-1356644123.190 | Bias-stretch diagnostics before sub-cm effects |
+| dropout_gap | 172 | 4324121.348-1354253733.009 | Base/rover epoch bridging and outage handling |
+| multipath_outlier | 10 | 4355586.334-9908812.872 | Robust residual gating for isolated phone multipath |
+| other | 20 | 4389662.698-8738293.625 | Manual review of unclassified worst-decile epochs |
