@@ -227,3 +227,49 @@ fix-and-hold path, not of the full-arc batch search, and this gate does not
 test that path: the sequential gate (does the per-epoch search with
 corrections stop locking wrong integers early in the arc?) is the natural
 next measurement, after the remaining ledger terms.
+
+## Phase 3a sequential truth gate (2026-06-12): corrections do not cure wrong-fix poisoning
+
+Script: `cd_phase3a_sequential_gate_2026_06.exs` (committed; stock solver).
+Same arc, same options as the Phase 2 L1 sequential cell, `filter_kernel:
+:elixir` (the Rust kernel refuses `:receiver_antenna_corrections` until the
+kernel port lands), with and without corrections. Both cells hit the known
+epoch-124 singularity on the continuous arc; the distributions below use the
+same reset-sub-arc reporting as Phase 2 (4 solved segments, 0 dropped epochs,
+both cells). One parity note: the Elixir kernel surfaces the mid-arc failure
+as bare `:singular_geometry` while the Rust batch NIF tags it
+`{:singular_geometry, epoch_index: 124}`, so segmentation here is by
+bisection; the uncorrected cell still reproduces the Phase 2 class
+(148 fixed / median `0.7736m` vs Phase 2's 151 fixed / `0.7680m`, the small
+delta being the different sub-arc boundaries).
+
+| Cell | Corrections | Fixed | First fixed | Fixed median | Fixed p95 | Float median | Final | Invariant |
+|---|---|---:|---:|---:|---:|---:|---:|---|
+| (s1) | no | 148/240 | 18 | `0.7736m` | `0.9452m` | `0.5013m` | `0.2605m` | FAIL-by-floor |
+| (s2) | yes | 189/240 | 18 | `0.7618m` | `0.9620m` | `1.3250m` | `0.2705m` | FAIL-by-floor |
+
+Verdict: **NULL, and adverse in the direction that matters.** Receiver
+antenna corrections leave the fixed-epoch error essentially unchanged
+(`0.7736m -> 0.7618m`, a `0.012m` move against a `0.66m` gap) while making
+the filter fix MORE epochs (148 -> 189, first fix at index 18 in both
+cells): the corrections make the per-epoch search more confident about the
+same wrong integers. The float-median increase in (s2) is a selection
+effect, not a degradation: float epochs in a fix-and-hold filter are the
+earliest pre-convergence epochs, and (s2) leaves only the worst 51 of them
+where (s1) leaves 92.
+
+Combined with the batch gate above, the Phase 3 premise needs amending
+again. Antenna corrections are real physics (the float thesis confirmed the
+ledger's ~`0.04m` term) but they are not the AR-correctness lever on this
+arc: the full-arc batch search already selects correct-class integers
+without them, and the sequential path fixes wrong integers with or without
+them. The sequential failure is premature per-epoch commitment - at index 18
+the carried float state error is still far above the `0.095m` L1
+half-wavelength boundary, so the search commits to wrong integers and
+fix-and-hold locks them in. The capability ordering this implies: per-epoch
+AR validation discipline (don't commit while the float state is
+unconverged) and the existing capability #3 (well-conditioned constraint
+handling) ahead of further physics terms for the sequential path; the
+remaining ledger terms (iono ~`0.03m`, tides) still matter for the batch
+ratio refusal, which sits at `1.40` against the `3.0` bar with correct
+integers in hand.
