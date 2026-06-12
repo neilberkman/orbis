@@ -30,6 +30,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `{:grg_ult, :sp3}`, `{:grg_ult, :clk}`, and `{:igs, :ionex}` now return
   `{:error, {:no_open_mirror, {center, content}}}`.
 
+## [0.19.0] - 2026-06-12
+
+### Changed
+
+- `filter_kernel` now defaults to `:rust`. The Elixir path remains fully
+  supported as the reference implementation; every kernel capability is gated
+  by bit-equality (`===`) trace tests against it.
+- The FTP transport was removed (`:ftp` is deprecated and removed in OTP 30).
+  GFZ/ESA/BKG products moved to verified HTTPS archives; CODE (AIUB) products
+  are served over plain HTTP (AIUB offers no TLS); products with no open
+  mirror return `{:error, {:no_open_mirror, {center, content}}}`.
+
+### Added
+
+- Honest GSDC moving-rover RTKLIB-demo5 oracles (four pre-registered arcs,
+  committed generators, ratio test enabled) and the pre-registered
+  moving-rover gate specification with measurement report.
+- Multi-GNSS oracle regenerated with GLONASS ephemerides present
+  (BRDC00WRD GREC nav); oracle gates tightened to exact fixed-epoch equality.
+- Early `{:unsupported_widelane, :multi_gnss}` rejection for multi-GNSS
+  dual-frequency widelane input.
+
 ## [0.18.0] - 2026-06-12
 
 ### Added
