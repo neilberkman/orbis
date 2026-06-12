@@ -6,6 +6,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-06-12
+
+### Added
+
+- `Orbis.GNSS.RTK.solve_filter_baseline_epochs/3` now supports multi-GNSS RTK
+  filter epochs with per-system reference satellites. GLONASS can be kept in the
+  float solution via `:float_only_systems` while GPS/Galileo/etc. remain
+  eligible for integer search and hold.
+- The sequential RTK filter accepts `:process_noise_baseline_sigma_m` for
+  kinematic baseline tracking. The default remains the static filter.
+- Added four vendored RTKLIB oracle fixtures for the WTZR/WTZZ real arc,
+  covering broadcast/precise and static/kinematic RTK tracks, with the generator
+  configs and conversion script checked in with the fixtures.
+
+### Fixed
+
+- Fixed cold-start fixed epochs so the reported fixed solution uses the
+  ambiguity-conditioned baseline from the same epoch instead of reporting the
+  float baseline while marking the epoch fixed.
+
+### Tests
+
+- Added `===` bit-equality gates between the Elixir RTK filter path and the Rust
+  NIF kernel for multi-GNSS references, GLONASS float-only handling, kinematic
+  process noise, gauge constraints, held ambiguities, and cold-start fixes.
+- Added a sigma-sweep RTK gate that exercises the filter across the measurement
+  variance settings used by the real-arc parity tests.
+- Multi-GNSS input to `solve_widelane_fixed_baseline_epochs/3` is rejected
+  early with `{:unsupported_widelane, :multi_gnss}` (single-constellation
+  scope; previously failed late at the delegated fixed solve).
+
 ## [0.17.0] - 2026-06-11
 
 ### Added

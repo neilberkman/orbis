@@ -13,8 +13,9 @@ chrono = "0.4"
 # Published crates.io pins. For local development against the workspace, an
 # uncommitted native/orbis_nif/.cargo/config.toml [patch.crates-io] can redirect
 # these to the local paths; CI (no patch) resolves them from crates.io.
-# Tracks the astrodynamics bit-exact kernel lane until the next coordinated
-# crate release. The lane code requires reported_baseline_m + epoch_count,
-# which are NOT in published 0.10.0.
-astrodynamics = { git = "https://github.com/neilberkman/astrodynamics", rev = "3bf0186" }
-astrodynamics-gnss = { git = "https://github.com/neilberkman/astrodynamics", rev = "3bf0186" }
+# Published crates.io releases, so CI and external builds resolve without a
+# local sibling checkout. For local development against the workspace, an
+# uncommitted native/orbis_nif/.cargo/config.toml overrides these with the
+# local paths (see config.toml.example).
+astrodynamics = "0.9.0"
+astrodynamics-gnss = "0.11.0"
