@@ -1,7 +1,8 @@
 defmodule Orbis.GNSS.Velocity do
   @moduledoc """
   Recover a receiver's velocity and clock drift from one epoch of Doppler or
-  pseudorange-rate measurements against a precise (SP3) ephemeris source.
+  pseudorange-rate measurements against a precise (SP3) or broadcast ephemeris
+  source.
 
   This is the velocity counterpart to `Orbis.GNSS.Positioning`: where single-point
   positioning inverts pseudoranges for position and clock bias, this module inverts
@@ -76,11 +77,11 @@ defmodule Orbis.GNSS.Velocity do
       }
   """
 
+  alias Orbis.GNSS.{Broadcast, SP3}
   alias Orbis.GNSS.Core.Constants
   alias Orbis.GNSS.Core.Types
   alias Orbis.GNSS.Geometry
   alias Orbis.GNSS.Observables
-  alias Orbis.GNSS.SP3
 
   @type vec3 :: {float(), float(), float()}
   @type receiver :: vec3() | %{x_m: number(), y_m: number(), z_m: number()}
@@ -98,11 +99,12 @@ defmodule Orbis.GNSS.Velocity do
   @doc """
   Solve for the receiver velocity and clock drift at one receive epoch.
 
-  `source` is a loaded `Orbis.GNSS.SP3` precise product. `observations` is a list of
-  `{satellite_id, value}` pairs: pseudorange rates in m/s by default, or Doppler
-  shifts in Hz when `opts[:observable]` is `:doppler`. `epoch` is the receive
-  epoch (a `NaiveDateTime` in the product's time scale). `receiver_position` is
-  the known receiver ECEF position in metres, as `{x_m, y_m, z_m}` or
+  `source` is a loaded `Orbis.GNSS.SP3` precise product or `Orbis.GNSS.Broadcast`
+  navigation product. `observations` is a list of `{satellite_id, value}` pairs:
+  pseudorange rates in m/s by default, or Doppler shifts in Hz when
+  `opts[:observable]` is `:doppler`. `epoch` is the receive epoch (a
+  `NaiveDateTime` in the product's time scale). `receiver_position` is the known
+  receiver ECEF position in metres, as `{x_m, y_m, z_m}` or
   `%{x_m: _, y_m: _, z_m: _}` (typically a prior position solve).
 
   ## Options
@@ -127,12 +129,33 @@ defmodule Orbis.GNSS.Velocity do
   (malformed observation entry), or `{:duplicate_observation, sat}` (a satellite
   appears more than once). Never raises.
   """
-  @spec solve(SP3.t(), [observation()], NaiveDateTime.t(), receiver(), keyword()) ::
+  @spec solve(SP3.t() | Broadcast.t(), [observation()], NaiveDateTime.t(), receiver(), keyword()) ::
           {:ok, result()} | {:error, term()}
   def solve(source, observations, epoch, receiver_position, opts \\ [])
 
-  def solve(%SP3{} = sp3, observations, %NaiveDateTime{} = epoch, receiver_position, opts)
+  def solve(%SP3{} = source, observations, %NaiveDateTime{} = epoch, receiver_position, opts)
       when is_list(observations) do
+    do_solve(source, observations, epoch, receiver_position, opts)
+  end
+
+  def solve(
+        %Broadcast{} = source,
+        observations,
+        %NaiveDateTime{} = epoch,
+        receiver_position,
+        opts
+      )
+      when is_list(observations) do
+    do_solve(source, observations, epoch, receiver_position, opts)
+  end
+
+  def solve(%SP3{}, observations, %NaiveDateTime{}, _receiver, _opts)
+      when not is_list(observations), do: {:error, :no_observations}
+
+  def solve(%Broadcast{}, observations, %NaiveDateTime{}, _receiver, _opts)
+      when not is_list(observations), do: {:error, :no_observations}
+
+  defp do_solve(source, observations, epoch, receiver_position, opts) do
     observable = Keyword.get(opts, :observable, :range_rate)
     carrier_hz = Keyword.get(opts, :carrier_hz, Constants.gps_l1_hz()) * 1.0
     sat_drift_fun = sat_clock_drift_fun(Keyword.get(opts, :sat_clock_drift))
@@ -146,15 +169,12 @@ defmodule Orbis.GNSS.Velocity do
          {:ok, receiver} <- Types.normalize_ecef(receiver_position),
          {:ok, normalized} <- normalize_observations(observations, observable, carrier_hz),
          {:ok, rows} <-
-           build_rows(sp3, normalized, epoch, receiver, sat_drift_fun, predict_opts),
+           build_rows(source, normalized, epoch, receiver, sat_drift_fun, predict_opts),
          :ok <- ensure_enough(rows),
          {:ok, x} <- solve_normal_equations(rows) do
       {:ok, assemble(x, rows)}
     end
   end
-
-  def solve(%SP3{}, observations, %NaiveDateTime{}, _receiver, _opts)
-      when not is_list(observations), do: {:error, :no_observations}
 
   @doc """
   Convert a Doppler shift in Hz to a pseudorange rate in m/s.

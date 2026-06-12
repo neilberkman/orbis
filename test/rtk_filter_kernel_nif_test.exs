@@ -22,7 +22,7 @@ defmodule Orbis.RTKFilterKernelNIFTest do
         sat_term(id, pos, base, rover, cycles, lambda)
       end)
 
-    epoch = {[reference], nonref}
+    epoch = {[reference], nonref, nil, 0.0}
 
     state =
       {{3, [{"G", "G01"}], [], 10_000.0, 0}, {-30.0, 25.0, -10.0}, [],
@@ -31,7 +31,7 @@ defmodule Orbis.RTKFilterKernelNIFTest do
     model = {0.3, 0.003, "simple", false, false}
     wavelengths = for {id, _pos, _cycles} <- tl(sats), do: {id, lambda}
     offsets = for {id, _pos, _cycles} <- tl(sats), do: {id, 0.0}
-    opts = {1.0, 1.0e-3, 1.0e-6, 10, 0.0, 3.0, []}
+    opts = {1.0, 1.0e-3, 1.0e-6, 10, 0.0, 3.0, {"constant_position", [], 0.0, 8}}
 
     bad_reference_state =
       {{3, [{"G", "G99"}], [], 10_000.0, 0}, {-30.0, 25.0, -10.0}, [],
@@ -52,7 +52,8 @@ defmodule Orbis.RTKFilterKernelNIFTest do
              NIF.rtk_filter_update_epoch(state, epoch, base, model, [], offsets, opts)
 
     assert {:ok,
-            {next_state, reported_baseline, ratio, true, ["G02", "G03", "G04", "G05"], fixed_ids}} =
+            {next_state, reported_baseline, ratio, true, ["G02", "G03", "G04", "G05"], fixed_ids,
+             nil}} =
              NIF.rtk_filter_update_epoch(state, epoch, base, model, wavelengths, offsets, opts)
 
     assert ratio >= 3.0
@@ -71,7 +72,7 @@ defmodule Orbis.RTKFilterKernelNIFTest do
              abs(metres - expected * lambda) < 1.0e-9
            end)
 
-    assert {:ok, {second_state, _second_reported, second_ratio, true, [], ^fixed_ids}} =
+    assert {:ok, {second_state, _second_reported, second_ratio, true, [], ^fixed_ids, nil}} =
              NIF.rtk_filter_update_epoch(
                next_state,
                epoch,
@@ -107,7 +108,7 @@ defmodule Orbis.RTKFilterKernelNIFTest do
         sat_term(id, pos, base, rover, cycles, lambda)
       end)
 
-    epoch = {[reference], nonref}
+    epoch = {[reference], nonref, nil, 0.0}
 
     state =
       {{3, [{"G", "G01"}], [], 10_000.0, 0}, {-30.0, 25.0, -10.0}, [],
@@ -116,13 +117,13 @@ defmodule Orbis.RTKFilterKernelNIFTest do
     model = {0.3, 0.003, "simple", false, false}
     wavelengths = for {id, _pos, _cycles} <- tl(sats), do: {id, lambda}
     offsets = for {id, _pos, _cycles} <- tl(sats), do: {id, 0.0}
-    opts = {1.0, 1.0e-3, 1.0e-6, 10, 0.0, 3.0, []}
+    opts = {1.0, 1.0e-3, 1.0e-6, 10, 0.0, 3.0, {"constant_position", [], 0.0, 8}}
 
     assert {:ok,
             [
               {first_state, first_reported, first_ratio, true, ["G02", "G03", "G04", "G05"],
-               first_fixed_ids},
-              {second_state, _second_reported, second_ratio, true, [], second_fixed_ids}
+               first_fixed_ids, nil},
+              {second_state, _second_reported, second_ratio, true, [], second_fixed_ids, nil}
             ]} =
              NIF.rtk_filter_update_epochs(
                state,

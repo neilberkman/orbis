@@ -6,6 +6,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `Orbis.GNSS.RTK.solve_filter_baseline_epochs/3` accepts an opt-in
+  `dynamics_model: :velocity_propagated` prediction branch plus optional epoch
+  `:velocity_mps` ECEF velocity input. The default `:constant_position` branch
+  preserves the current carried-state behavior, and the filter still receives
+  caller-derived velocity rather than raw Doppler observations. The D1 campaign
+  report records a 7.345 m pooled median at sigma 0.500 m, improving the
+  9.533 m memoryless bar by about 23% while still missing the 4.007 m RTKLIB
+  demo5 bar.
+- The Rust RTK filter kernel exposes optional `:innovation_screen_sigma` and
+  `:innovation_screen_min_rows` controls, returning per-epoch screen diagnostics
+  and `:coasted` status when too few predicted-residual rows survive.
+
 ### Changed
 
 - GNSS data downloads no longer use the deprecated Erlang `:ftp` transport,
