@@ -3880,6 +3880,7 @@ defmodule Orbis.GNSS.RTK do
           physical_sats,
           dd_ambiguity_pairs,
           dd_ambiguity_satellites,
+          float_only_dd_ids,
           float_only_systems,
           wavelengths,
           offsets,
@@ -3999,8 +4000,70 @@ defmodule Orbis.GNSS.RTK do
          filter_opts,
          acc
        ) do
-    acc = time_update_information(acc, filter_opts)
+    predicted_acc = time_update_information(acc, filter_opts)
 
+    case do_sequential_filter_epoch(
+           base,
+           epoch,
+           refs,
+           physical_sats,
+           sd_ambiguity_ids,
+           dd_ambiguity_ids,
+           dd_ambiguity_pairs,
+           float_only_dd_ids,
+           wavelengths,
+           offsets,
+           weights,
+           solve_opts,
+           integer_opts,
+           filter_opts,
+           predicted_acc
+         ) do
+      {:error, :singular_geometry} = err ->
+        if predicted_acc.information == acc.information do
+          err
+        else
+          do_sequential_filter_epoch(
+            base,
+            epoch,
+            refs,
+            physical_sats,
+            sd_ambiguity_ids,
+            dd_ambiguity_ids,
+            dd_ambiguity_pairs,
+            float_only_dd_ids,
+            wavelengths,
+            offsets,
+            weights,
+            solve_opts,
+            integer_opts,
+            filter_opts,
+            acc
+          )
+        end
+
+      result ->
+        result
+    end
+  end
+
+  defp do_sequential_filter_epoch(
+         base,
+         epoch,
+         refs,
+         physical_sats,
+         sd_ambiguity_ids,
+         dd_ambiguity_ids,
+         dd_ambiguity_pairs,
+         float_only_dd_ids,
+         wavelengths,
+         offsets,
+         weights,
+         solve_opts,
+         integer_opts,
+         filter_opts,
+         acc
+       ) do
     with {:ok, state, information, rows} <-
            iterate_sequential_filter_epoch(
              base,
@@ -4100,6 +4163,7 @@ defmodule Orbis.GNSS.RTK do
          physical_sats,
          dd_ambiguity_pairs,
          dd_ambiguity_satellites,
+         float_only_dd_ids,
          float_only_systems,
          wavelengths,
          offsets,
@@ -4134,6 +4198,7 @@ defmodule Orbis.GNSS.RTK do
                  physical_sats,
                  dd_ambiguity_pairs,
                  dd_ambiguity_satellites,
+                 float_only_dd_ids,
                  weights,
                  acc
                ) do
@@ -4160,6 +4225,7 @@ defmodule Orbis.GNSS.RTK do
          physical_sats,
          dd_ambiguity_pairs,
          dd_ambiguity_satellites,
+         float_only_dd_ids,
          weights,
          acc
        ) do
@@ -4211,13 +4277,14 @@ defmodule Orbis.GNSS.RTK do
              report_state,
              weights
            ),
+         integer_ratio = rust_public_integer_ratio(ratio, residual_rows, acc, float_only_dd_ids),
          {:ok, residuals} <- baseline_residuals(residual_rows) do
       epoch_result = %{
         epoch: epoch.epoch,
         index: epoch.idx,
         baseline_m: ecef_map(report_state.baseline),
         integer_status: if(fixed?, do: :fixed, else: :not_fixed),
-        integer_ratio: ratio,
+        integer_ratio: integer_ratio,
         integer_best_score: nil,
         integer_second_best_score: nil,
         integer_candidates: nil,
@@ -4238,6 +4305,19 @@ defmodule Orbis.GNSS.RTK do
            epochs: [epoch_result | acc.epochs]
        }}
     end
+  end
+
+  defp rust_public_integer_ratio(ratio, residual_rows, acc, float_only_dd_ids) do
+    fixed_set = acc.fixed_cycles |> Map.keys() |> MapSet.new()
+
+    search_ids =
+      residual_rows
+      |> Enum.map(& &1.ambiguity_id)
+      |> Enum.uniq()
+      |> Enum.sort()
+      |> Enum.reject(&(MapSet.member?(fixed_set, &1) or MapSet.member?(float_only_dd_ids, &1)))
+
+    if search_ids != [], do: ratio
   end
 
   defp rust_initial_filter_state(

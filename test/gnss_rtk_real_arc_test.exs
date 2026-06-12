@@ -462,6 +462,67 @@ defmodule Orbis.GNSS.RTKRealArcTest do
     end
   end
 
+  @tag timeout: 300_000
+  test "Rust RTK filter stays bit-exact and non-singular across kinematic sigma sweep" do
+    oracle = @rtklib_kinematic_oracle_path |> File.read!() |> Jason.decode!()
+
+    sp3 = SP3.load!(@cod_sp3_path)
+    base_obs = Observations.load!(@wtzr_obs_path)
+    rover_obs = Observations.load!(@wtzz_obs_path)
+    base_arp = arp_position(@wtzr_marker, antenna_height_m(base_obs))
+    rover_arp = arp_position(@wtzz_marker, antenna_height_m(rover_obs))
+    antenna_baseline = sub3(rover_arp, base_arp)
+
+    epochs = real_gps_l1_rtk_epochs(sp3, base_obs, rover_obs, oracle["reference"]["epochs"])
+    assert length(epochs) == oracle["reference"]["epochs"]
+
+    base_opts = [
+      initial_baseline_m: {0.0, 0.0, 0.0},
+      max_iterations: 10,
+      on_cycle_slip: :split_arc,
+      elevation_mask_deg: 10.0,
+      stochastic_model: :rtklib,
+      code_sigma_m: 0.3,
+      phase_sigma_m: 0.003,
+      ambiguity_wavelength_m: @gps_l1_wavelength_m,
+      integer_candidate_limit: 200_000
+    ]
+
+    for process_sigma_m <- [0.1, 1.0, 3.0, 10.0, 30.0, 100.0] do
+      opts = [process_noise_baseline_sigma_m: process_sigma_m] ++ base_opts
+
+      elixir_sol =
+        case RTK.solve_filter_baseline_epochs(base_arp, epochs, opts) do
+          {:ok, sol} ->
+            sol
+
+          error ->
+            flunk(
+              "Elixir kinematic filter failed at process sigma #{process_sigma_m} m: #{inspect(error)}"
+            )
+        end
+
+      rust_sol =
+        case RTK.solve_filter_baseline_epochs(base_arp, epochs, opts ++ [filter_kernel: :rust]) do
+          {:ok, sol} ->
+            sol
+
+          error ->
+            flunk(
+              "Rust kinematic filter failed at process sigma #{process_sigma_m} m: #{inspect(error)}"
+            )
+        end
+
+      assert rust_sol.metadata.filter_kernel == :rust
+      assert_filter_kernel_exact_match(rust_sol, elixir_sol)
+
+      final_error_m = position_error(rust_sol.baseline_m, antenna_baseline)
+
+      assert is_number(final_error_m) and final_error_m < 0.5,
+             "process sigma #{process_sigma_m} m ended with #{final_error_m} m error"
+    end
+  end
+
   @tag timeout: 600_000
   test "multi-GNSS static RTK filter reproduces the RTKLIB Track B oracle with GLONASS float-only" do
     oracle = @rtklib_multignss_oracle_path |> File.read!() |> Jason.decode!()
@@ -882,5 +943,26 @@ defmodule Orbis.GNSS.RTKRealArcTest do
     assert x === truth_x
     assert y === truth_y
     assert z === truth_z
+  end
+
+  defp assert_filter_kernel_exact_match(rust_sol, elixir_sol) do
+    assert length(rust_sol.epochs) == length(elixir_sol.epochs)
+    assert rust_sol.metadata.fixed_epoch_count == elixir_sol.metadata.fixed_epoch_count
+    assert rust_sol.fixed_ambiguities_cycles == elixir_sol.fixed_ambiguities_cycles
+    assert_exact_position(rust_sol.baseline_m, elixir_sol.baseline_m)
+
+    for {rust_epoch, elixir_epoch} <- Enum.zip(rust_sol.epochs, elixir_sol.epochs) do
+      assert rust_epoch.index == elixir_epoch.index
+      assert rust_epoch.integer_status == elixir_epoch.integer_status
+      assert rust_epoch.newly_fixed_ambiguities == elixir_epoch.newly_fixed_ambiguities
+      assert rust_epoch.fixed_ambiguities == elixir_epoch.fixed_ambiguities
+      assert_exact_position(rust_epoch.baseline_m, elixir_epoch.baseline_m)
+
+      if is_number(rust_epoch.integer_ratio) and is_number(elixir_epoch.integer_ratio) do
+        assert rust_epoch.integer_ratio === elixir_epoch.integer_ratio
+      else
+        assert rust_epoch.integer_ratio == elixir_epoch.integer_ratio
+      end
+    end
   end
 end
