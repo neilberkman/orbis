@@ -523,6 +523,36 @@ defmodule Orbis.GNSS.RTKRealArcTest do
     end
   end
 
+  test "RTKLIB multi-GNSS static oracle is generated with GLONASS present" do
+    oracle = @rtklib_multignss_oracle_path |> File.read!() |> Jason.decode!()
+    reference = oracle["reference"]
+    epochs = oracle["per_epoch"]
+    satellite_counts = Enum.map(epochs, & &1["satellites"])
+
+    assert reference["label"] == "static_multignss_grec_l1_fix_and_hold"
+    assert reference["epochs"] == 120
+    assert reference["fixed_epochs"] == 120
+    assert reference["first_fixed_index"] == 0
+    assert reference["first_fixed_time"] == "2020-06-25T00:00:00"
+    assert reference["final_status"] == "fixed"
+    assert reference["final_truth_error_m"] < 0.01
+
+    assert length(epochs) == 120
+    assert Enum.count(epochs, &(&1["q"] == 1)) == reference["fixed_epochs"]
+
+    final = List.last(epochs)
+    assert final["baseline_enu_m"] == reference["final_baseline_enu_m"]
+    assert final["ratio"] == reference["final_ratio"]
+
+    # The oracle now uses BRDC00WRD_R_20201770000_01D_GREC.rnx, whose generation
+    # status trace had 5-6 GLONASS satellites per epoch. Keep this count range
+    # tight enough to reject the old no-GLONASS 9-11 satellite oracle, while
+    # avoiding per-satellite identity assertions across the RTKLIB brdc/15 deg
+    # oracle and the Orbis SP3/10 deg real-arc harness.
+    assert Enum.min(satellite_counts) == 14
+    assert Enum.max(satellite_counts) == 17
+  end
+
   @tag timeout: 600_000
   test "multi-GNSS static RTK filter reproduces the RTKLIB Track B oracle with GLONASS float-only" do
     oracle = @rtklib_multignss_oracle_path |> File.read!() |> Jason.decode!()
@@ -576,18 +606,16 @@ defmodule Orbis.GNSS.RTKRealArcTest do
     refute Enum.any?(Map.keys(sol.fixed_ambiguities_cycles), &String.starts_with?(&1, "R"))
 
     fixed_epochs = Enum.count(sol.epochs, &(&1.integer_status == :fixed))
-    assert fixed_epochs >= oracle["reference"]["fixed_epochs"] - 2
+    assert fixed_epochs == oracle["reference"]["fixed_epochs"]
 
     assert position_error(sol.baseline_m, antenna_baseline) < 0.01
 
     # Per-epoch satellite usage is gated against the oracle's lower bound only.
-    # The oracle's upper bound does not transfer: its broadcast nav fixture
-    # (ESBC00DNK) carries ZERO GLONASS ephemerides, so RTKLIB solved G+E+C only
-    # despite navsys=45, and it ran at elmask 15 on broadcast ephemerides while
-    # this gate runs the proven mask-10 SP3 harness including GLONASS — both
-    # differences add satellites. Same convention as the kinematic-oracle test:
-    # satellite-set comparisons across mask/ephemeris differences are not exact.
-    {oracle_min_sats, _oracle_max_sats} =
+    # The new BRDC GREC oracle includes GLONASS and spans 14-17 satellites per
+    # epoch, while this gate's mask-10 SP3 harness currently uses 21-23. The
+    # mask and ephemeris source still differ from RTKLIB's brdc/15 deg run, so
+    # the transferable invariant is that Orbis sees at least the oracle's floor.
+    {oracle_min_sats, oracle_max_sats} =
       oracle["per_epoch"] |> Enum.map(& &1["satellites"]) |> Enum.min_max()
 
     sat_counts =
@@ -598,7 +626,10 @@ defmodule Orbis.GNSS.RTKRealArcTest do
         |> length()
       end)
 
-    assert Enum.min(sat_counts) >= oracle_min_sats
+    {orbis_min_sats, _orbis_max_sats} = Enum.min_max(sat_counts)
+
+    assert {oracle_min_sats, oracle_max_sats} == {14, 17}
+    assert orbis_min_sats >= oracle_min_sats
 
     assert {:ok, rust_sol} =
              RTK.solve_filter_baseline_epochs(base_arp, epochs, opts ++ [filter_kernel: :rust])
