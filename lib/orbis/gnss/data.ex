@@ -29,10 +29,12 @@ defmodule Orbis.GNSS.Data do
   Supported centers and what each publishes:
 
     * `:gfz` — GFZ operational rapid SP3/CLK over HTTPS (`isdc-data.gfz.de`)
+    * `:cod` — CODE MGEX final SP3/CLK and CODE IONEX over plain HTTP
+      (`ftp.aiub.unibe.ch`; AIUB does not offer HTTPS for this archive)
     * `:esa` — ESA Navigation Office final SP3/CLK and IONEX over HTTPS
       (`navigation-office.esa.int`)
-    * `:igs_ult`, `:esa_ult`, `:gfz_ult` — ultra-rapid `OPSULT` SP3 products
-      over HTTPS for current-day/live-latency use
+    * `:igs_ult`, `:cod_ult`, `:esa_ult`, `:gfz_ult` — ultra-rapid `OPSULT`
+      SP3 products for current-day/live-latency use
     * `:igs` — the IGS merged broadcast navigation file (`:nav`) over HTTPS from
       the BKG IGS archive
 
@@ -54,12 +56,14 @@ defmodule Orbis.GNSS.Data do
        *unverifiable* one (no sidecar — e.g. a hand-placed file) is, online,
        discarded and re-downloaded; offline, a corrupt hit is terminal and an
        unverifiable one is returned as the best available.
-    3. Otherwise (and only when not `offline:`) download the `.gz` over HTTPS
-       (`Req`, a required dependency) to memory, decompress with a gzip-bomb cap,
-       verify any known checksum, and **atomically** commit the decompressed
-       file into the cache (temp file + rename) together with its required
-       `.provenance.json` sidecar (the commit fails if the sidecar cannot be
-       written, so a cached file always carries its integrity hash).
+    3. Otherwise (and only when not `offline:`) download over the cataloged
+       HTTP(S) URL (`Req`, a required dependency) to memory. Gzipped products
+       are decompressed with a gzip-bomb cap; explicitly uncompressed products
+       are committed as downloaded. The fetch then verifies any known checksum
+       and **atomically** commits the local file into the cache (temp file +
+       rename) together with its required `.provenance.json` sidecar (the commit
+       fails if the sidecar cannot be written, so a cached file always carries
+       its integrity hash).
 
   ## Offline mode
 
@@ -106,14 +110,14 @@ defmodule Orbis.GNSS.Data do
     * `{:error, {:unsupported_product, detail}}` — unknown center/content/sample,
       or a host outside the catalog
     * `{:error, {:no_open_mirror, {center, content}}}` — the product was removed
-      because no verified anonymous HTTPS mirror is known
-    * `{:error, :req_not_available}` — HTTPS downloads are disabled by config
+      because no verified anonymous HTTP(S) mirror is known
+    * `{:error, :req_not_available}` — HTTP client downloads are disabled by config
     * `{:error, {:http_status, code}}` — non-2xx HTTP response
     * `{:error, {:redirect_not_allowed, code}}` — a 3xx redirect was refused
       (redirects are not followed, to keep the SSRF allow-list intact)
     * `{:error, {:file_not_found, url}}` — 404 / missing on the archive
     * `{:error, {:network, detail}}` — connection/timeout/DNS failure
-    * `{:error, {:download_size_exceeded, max, got}}` — compressed payload cap hit
+    * `{:error, {:download_size_exceeded, max, got}}` — download payload cap hit
     * `{:error, {:decompress_failed, reason}}` — corrupt gzip
     * `{:error, {:decompress_size_exceeded, max, got}}` — gzip-bomb cap hit
     * `{:error, {:cache_dir_not_writable, reason}}` — cannot create/write cache
@@ -402,10 +406,11 @@ defmodule Orbis.GNSS.Data do
 
     with {:ok, url} <- Product.archive_url(product),
          {:ok, protocol} <- protocol_for(product),
-         {:ok, compressed} <- Download.get(url, protocol, opts),
-         {:ok, decompressed} <- Cache.gunzip(compressed, max_bytes),
+         {:ok, compression} <- compression_for(product),
+         {:ok, downloaded} <- Download.get(url, protocol, opts),
+         {:ok, decompressed} <- decode_download(downloaded, compression, max_bytes),
          :ok <- verify(decompressed, sha),
-         provenance = provenance(url, compressed, decompressed),
+         provenance = provenance(url, protocol, compression, downloaded, decompressed),
          {:ok, ^path} <- Cache.commit(path, decompressed, provenance) do
       {:ok, path}
     end
@@ -416,6 +421,17 @@ defmodule Orbis.GNSS.Data do
   # token table.
   defp protocol_for(%Product{content: :obs}), do: {:ok, Catalog.station_obs_protocol()}
   defp protocol_for(%Product{center: center}), do: Catalog.protocol(center)
+
+  defp compression_for(%Product{content: :obs}), do: {:ok, :gzip}
+
+  defp compression_for(%Product{center: center, content: content}),
+    do: Catalog.compression(center, content)
+
+  defp decode_download(downloaded, :gzip, max_bytes), do: Cache.gunzip(downloaded, max_bytes)
+  defp decode_download(downloaded, :none, _max_bytes), do: {:ok, downloaded}
+
+  defp decode_download(_downloaded, compression, _max_bytes),
+    do: {:error, {:unsupported_product, {:compression, compression}}}
 
   defp verify(_decompressed, nil), do: :ok
 
@@ -429,12 +445,16 @@ defmodule Orbis.GNSS.Data do
     end
   end
 
-  defp provenance(url, compressed, decompressed) do
+  defp provenance(url, protocol, compression, downloaded, decompressed) do
     %{
       "source_url" => url,
-      "sha256_compressed" => Cache.sha256(compressed),
+      "protocol" => Atom.to_string(protocol),
+      "compression" => Atom.to_string(compression),
+      "sha256_downloaded" => Cache.sha256(downloaded),
+      "sha256_compressed" => Cache.sha256(downloaded),
       "sha256_decompressed" => Cache.sha256(decompressed),
-      "size_compressed" => byte_size(compressed),
+      "size_downloaded" => byte_size(downloaded),
+      "size_compressed" => byte_size(downloaded),
       "size_decompressed" => byte_size(decompressed),
       "fetched_at" => DateTime.utc_now() |> DateTime.to_iso8601(),
       "fetcher" => "Orbis.GNSS.Data"

@@ -35,9 +35,15 @@ defmodule Orbis.GNSS.Data.CatalogTest do
   end
 
   describe "canonical_filename/4" do
-    test "encodes the IGS long-name for HTTPS centers and content types" do
+    test "encodes the IGS long-name for catalog centers and content types" do
       assert {:ok, "GFZ0OPSRAP_20201760000_01D_15M_ORB.SP3"} =
                Catalog.canonical_filename(:gfz, :sp3, ~D[2020-06-24], "15M")
+
+      assert {:ok, "COD0MGXFIN_20241760000_01D_05M_ORB.SP3"} =
+               Catalog.canonical_filename(:cod, :sp3, ~D[2024-06-24], "05M")
+
+      assert {:ok, "COD0MGXFIN_20241760000_01D_30S_CLK.CLK"} =
+               Catalog.canonical_filename(:cod, :clk, ~D[2024-06-24], "30S")
 
       assert {:ok, "ESA0MGNFIN_20201760000_01D_05M_ORB.SP3"} =
                Catalog.canonical_filename(:esa, :sp3, ~D[2020-06-24], "05M")
@@ -52,19 +58,19 @@ defmodule Orbis.GNSS.Data.CatalogTest do
     end
 
     test "IONEX uses the ESA GIM content code" do
+      assert {:ok, "COD0OPSFIN_20241760000_01D_01H_GIM.INX"} =
+               Catalog.canonical_filename(:cod, :ionex, ~D[2024-06-24], "01H")
+
       assert {:ok, "ESA0OPSFIN_20241760000_01D_02H_GIM.INX"} =
                Catalog.canonical_filename(:esa, :ionex, ~D[2024-06-24], "02H")
     end
 
     test "removed products return a no-open-mirror error" do
-      assert {:error, {:no_open_mirror, {:cod, :sp3}}} =
-               Catalog.canonical_filename(:cod, :sp3, ~D[2020-06-24], "05M")
-
       assert {:error, {:no_open_mirror, {:wum, :clk}}} =
                Catalog.canonical_filename(:wum, :clk, ~D[2020-06-24], "30S")
 
-      assert {:error, {:no_open_mirror, {:cod_ult, :sp3}}} =
-               Catalog.canonical_filename(:cod_ult, :sp3, ~D[2024-09-03], "05M", "0600")
+      assert {:error, {:no_open_mirror, {:grg_ult, :sp3}}} =
+               Catalog.canonical_filename(:grg_ult, :sp3, ~D[2024-09-03], "05M", "0600")
 
       assert {:error, {:no_open_mirror, {:igs, :ionex}}} =
                Catalog.canonical_filename(:igs, :ionex, ~D[2024-06-24], "01H")
@@ -108,6 +114,9 @@ defmodule Orbis.GNSS.Data.CatalogTest do
       assert {:ok, "IGS0OPSULT_20242470600_02D_15M_ORB.SP3"} =
                Catalog.canonical_filename(:igs_ult, :sp3, date, "15M", "0600")
 
+      assert {:ok, "COD0OPSULT_20242470000_01D_05M_ORB.SP3"} =
+               Catalog.canonical_filename(:cod_ult, :sp3, date, "05M", "0000")
+
       assert {:ok, "ESA0OPSULT_20242470600_02D_15M_ORB.SP3"} =
                Catalog.canonical_filename(:esa_ult, :sp3, date, "15M", "0600")
 
@@ -123,10 +132,13 @@ defmodule Orbis.GNSS.Data.CatalogTest do
                Catalog.canonical_filename(:grg_ult, :clk, ~D[2024-09-03], "05M", "0600")
     end
 
-    test "builds HTTPS archive URLs for ultra-rapid products" do
+    test "builds archive URLs for ultra-rapid products" do
       assert {:ok,
               "https://igs.bkg.bund.de/root_ftp/IGS/products/2330/IGS0OPSULT_20242470600_02D_15M_ORB.SP3.gz"} =
                Catalog.archive_url(:igs_ult, :sp3, ~D[2024-09-03], "15M", "0600")
+
+      assert {:ok, "http://ftp.aiub.unibe.ch/CODE/COD0OPSULT_20261620000_01D_05M_ORB.SP3"} =
+               Catalog.archive_url(:cod_ult, :sp3, ~D[2026-06-11], "05M", "0000")
 
       assert {:ok,
               "https://navigation-office.esa.int/products/gnss-products/2330/ESA0OPSULT_20242470600_02D_15M_ORB.SP3.gz"} =
@@ -160,6 +172,9 @@ defmodule Orbis.GNSS.Data.CatalogTest do
     test "rejects unsupported issue times" do
       assert {:error, {:unsupported_product, {:issue, "0300"}}} =
                Catalog.canonical_filename(:igs_ult, :sp3, ~D[2024-09-03], "15M", "0300")
+
+      assert {:error, {:unsupported_product, {:issue, "0600"}}} =
+               Catalog.canonical_filename(:cod_ult, :sp3, ~D[2024-09-03], "05M", "0600")
     end
 
     test "requires an explicit issue for low-level ultra-rapid filenames" do
@@ -182,6 +197,16 @@ defmodule Orbis.GNSS.Data.CatalogTest do
                "https://navigation-office.esa.int/products/gnss-products/2111/ESA0MGNFIN_20201760000_01D_05M_ORB.SP3.gz"
     end
 
+    test "builds AIUB HTTP URLs for restored CODE final products" do
+      assert {:ok,
+              "http://ftp.aiub.unibe.ch/CODE_MGEX/CODE/2024/COD0MGXFIN_20241760000_01D_05M_ORB.SP3.gz"} =
+               Catalog.archive_url(:cod, :sp3, ~D[2024-06-24], "05M")
+
+      assert {:ok,
+              "http://ftp.aiub.unibe.ch/CODE_MGEX/CODE/2024/COD0MGXFIN_20241760000_01D_30S_CLK.CLK.gz"} =
+               Catalog.archive_url(:cod, :clk, ~D[2024-06-24], "30S")
+    end
+
     test "builds the BKG IGS URL for broadcast navigation" do
       assert {:ok,
               "https://igs.bkg.bund.de/root_ftp/IGS/BRDC/2020/177/BRDC00WRD_R_20201770000_01D_MN.rnx.gz"} =
@@ -189,6 +214,9 @@ defmodule Orbis.GNSS.Data.CatalogTest do
     end
 
     test "builds the ESA URL for a global ionosphere map" do
+      assert {:ok, "http://ftp.aiub.unibe.ch/CODE/2024/COD0OPSFIN_20241760000_01D_01H_GIM.INX.gz"} =
+               Catalog.archive_url(:cod, :ionex, ~D[2024-06-24], "01H")
+
       assert {:ok,
               "https://navigation-office.esa.int/products/gnss-products/2320/ESA0OPSFIN_20241760000_01D_02H_GIM.INX.gz"} =
                Catalog.archive_url(:esa, :ionex, ~D[2024-06-24], "02H")
@@ -204,22 +232,31 @@ defmodule Orbis.GNSS.Data.CatalogTest do
       assert {:error, {:unsupported_product, _}} =
                Catalog.archive_url(:nope, :sp3, ~D[2020-06-24], "05M")
 
-      assert {:error, {:no_open_mirror, {:cod, :sp3}}} =
-               Catalog.archive_url(:cod, :sp3, ~D[2020-06-24], "05M")
+      assert {:error, {:no_open_mirror, {:grg, :sp3}}} =
+               Catalog.archive_url(:grg, :sp3, ~D[2020-06-24], "05M")
     end
   end
 
-  describe "protocol/1 and allowed_hosts/0" do
-    test "maps centers to HTTPS" do
+  describe "protocol/1, compression/2, and allowed_hosts/0" do
+    test "maps centers to catalog protocols" do
       assert {:ok, :https} = Catalog.protocol(:gfz)
+      assert {:ok, :http} = Catalog.protocol(:cod)
       assert {:ok, :https} = Catalog.protocol(:esa)
       assert {:ok, :https} = Catalog.protocol(:igs)
       assert {:error, {:unsupported_product, _}} = Catalog.protocol(:nope)
     end
 
+    test "maps center products to archive compression" do
+      assert {:ok, :gzip} = Catalog.compression(:cod, :sp3)
+      assert {:ok, :gzip} = Catalog.compression(:cod, :ionex)
+      assert {:ok, :none} = Catalog.compression(:cod_ult, :sp3)
+      assert {:error, {:no_open_mirror, {:grg, :sp3}}} = Catalog.compression(:grg, :sp3)
+    end
+
     test "allowed hosts contain every catalog host and nothing else slips in" do
       hosts = Catalog.allowed_hosts()
       assert MapSet.member?(hosts, "isdc-data.gfz.de")
+      assert MapSet.member?(hosts, "ftp.aiub.unibe.ch")
       assert MapSet.member?(hosts, "navigation-office.esa.int")
       assert MapSet.member?(hosts, "igs.bkg.bund.de")
       refute MapSet.member?(hosts, "gssc.esa.int")

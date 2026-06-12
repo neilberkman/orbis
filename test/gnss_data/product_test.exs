@@ -24,8 +24,8 @@ defmodule Orbis.GNSS.Data.ProductTest do
       assert {:error, {:unsupported_product, _}} =
                Product.new(:esa, :sp3, ~D[2020-06-24], "bad")
 
-      assert {:error, {:no_open_mirror, {:cod, :sp3}}} =
-               Product.new(:cod, :sp3, ~D[2020-06-24], "05M")
+      assert {:error, {:no_open_mirror, {:grg, :sp3}}} =
+               Product.new(:grg, :sp3, ~D[2020-06-24], "05M")
     end
   end
 
@@ -61,25 +61,34 @@ defmodule Orbis.GNSS.Data.ProductTest do
       assert p.content == :sp3
 
       assert Data.mgex_sp3(:gfz, ~D[2020-06-24]).sample == "15M"
+      assert Data.mgex_sp3(:cod, ~D[2024-06-24]).sample == "05M"
     end
 
     test "mgex_clk/2, mgex_nav/2, mgex_ionex/2 use catalog defaults" do
+      assert Data.mgex_clk(:cod, ~D[2024-06-24]).sample == "30S"
       assert Data.mgex_clk(:esa, ~D[2020-06-24]).sample == "30S"
       assert Data.mgex_nav(:igs, ~D[2020-06-25]).content == :nav
+      assert Data.mgex_ionex(:cod, ~D[2024-06-24]).sample == "01H"
       assert Data.mgex_ionex(:esa, ~D[2024-06-24]).content == :ionex
       assert Data.mgex_ionex(:esa, ~D[2024-06-24]).sample == "02H"
     end
 
     test "ops_ultra_sp3/3 uses issue time and per-center sample defaults" do
       igs = Data.ops_ultra_sp3(:igs_ult, ~D[2024-09-03], issue: "0600")
+      cod = Data.ops_ultra_sp3(:cod_ult, ~D[2026-06-11], issue: "0000")
       gfz = Data.ops_ultra_sp3(:gfz_ult, ~D[2024-09-03], issue: "0600")
 
       assert igs.sample == "15M"
       assert igs.issue == "0600"
+      assert cod.sample == "05M"
+      assert cod.issue == "0000"
       assert gfz.sample == "05M"
 
       assert {:ok, "IGS0OPSULT_20242470600_02D_15M_ORB.SP3"} =
                Product.canonical_filename(igs)
+
+      assert {:ok, "COD0OPSULT_20261620000_01D_05M_ORB.SP3"} =
+               Product.canonical_filename(cod)
 
       assert {:ok, "GFZ0OPSULT_20242470600_02D_05M_ORB.SP3"} =
                Product.canonical_filename(gfz)
@@ -117,7 +126,7 @@ defmodule Orbis.GNSS.Data.ProductTest do
 
     test "a bang builder raises on an invalid product" do
       assert_raise ArgumentError, fn -> Data.mgex_sp3(:nope, ~D[2020-06-24]) end
-      assert_raise ArgumentError, fn -> Data.mgex_sp3(:cod, ~D[2020-06-24]) end
+      assert_raise ArgumentError, fn -> Data.mgex_sp3(:grg, ~D[2020-06-24]) end
     end
   end
 end

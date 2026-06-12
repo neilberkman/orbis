@@ -12,36 +12,44 @@ defmodule Orbis.GNSS.Data.Catalog do
 
   ## Analysis centers
 
-  Each center maps to the HTTPS archive host, the product token it publishes,
-  and the directory layout for each content type. Only centers and paths that
-  resolve against a live, anonymous HTTPS archive are listed; every entry below
-  has been checked against its server.
+  Each center maps to the archive protocol, host, product token it publishes,
+  and directory layout for each content type. Only centers and paths that
+  resolve against a live, anonymous HTTP(S) archive are listed; every entry
+  below has been checked against its server.
 
-  | Code       | Center                               | Host                         |
-  |------------|--------------------------------------|------------------------------|
-  | `:gfz`     | GFZ Potsdam operational rapid        | `isdc-data.gfz.de`           |
-  | `:esa`     | ESA Navigation Office final products | `navigation-office.esa.int`  |
-  | `:igs`     | IGS combined broadcast navigation    | `igs.bkg.bund.de`            |
-  | `:igs_ult` | IGS combined ultra-rapid             | `igs.bkg.bund.de`            |
-  | `:esa_ult` | ESA ultra-rapid                      | `navigation-office.esa.int`  |
-  | `:gfz_ult` | GFZ ultra-rapid                      | `isdc-data.gfz.de`           |
+  | Code       | Center                               | Protocol | Host                         |
+  |------------|--------------------------------------|----------|------------------------------|
+  | `:gfz`     | GFZ Potsdam operational rapid        | HTTPS    | `isdc-data.gfz.de`           |
+  | `:cod`     | CODE / University of Bern            | HTTP     | `ftp.aiub.unibe.ch`          |
+  | `:esa`     | ESA Navigation Office final products | HTTPS    | `navigation-office.esa.int`  |
+  | `:igs`     | IGS combined broadcast navigation    | HTTPS    | `igs.bkg.bund.de`            |
+  | `:igs_ult` | IGS combined ultra-rapid             | HTTPS    | `igs.bkg.bund.de`            |
+  | `:cod_ult` | CODE ultra-rapid                     | HTTP     | `ftp.aiub.unibe.ch`          |
+  | `:esa_ult` | ESA ultra-rapid                      | HTTPS    | `navigation-office.esa.int`  |
+  | `:gfz_ult` | GFZ ultra-rapid                      | HTTPS    | `isdc-data.gfz.de`           |
+
+  AIUB's public CODE archive does not offer HTTPS. CODE products are public
+  data, but fresh products do not have published checksums; transport integrity
+  therefore relies on the plain-HTTP channel.
 
   Products that were only reachable through the deprecated ESA GSSC anonymous
-  archive are intentionally not listed. Requests for those former products
-  return `{:error, {:no_open_mirror, {center, content}}}`.
+  archive and have no verified open HTTP(S) mirror are intentionally not
+  listed. Requests for those former products return
+  `{:error, {:no_open_mirror, {center, content}}}`.
 
   ## Content types and what each center serves
 
     * `:sp3`, `:clk` — precise orbits and clocks. `:gfz` (operational rapid),
-      `:esa` (final products), and the ultra-rapid center aliases
-      `:igs_ult`, `:esa_ult`, and `:gfz_ult`. The GFZ rapid token is
-      `GFZ0OPSRAP`; the ESA final token is `ESA0MGNFIN`; the ultra-rapid tokens
-      are `IGS0OPSULT`, `ESA0OPSULT`, and `GFZ0OPSULT`.
+      `:cod` and `:esa` (final products), and the ultra-rapid center aliases
+      `:igs_ult`, `:cod_ult`, `:esa_ult`, and `:gfz_ult`. The GFZ rapid token
+      is `GFZ0OPSRAP`; the CODE MGEX final token is `COD0MGXFIN`; the ESA final
+      token is `ESA0MGNFIN`; the ultra-rapid tokens are `IGS0OPSULT`,
+      `COD0OPSULT`, `ESA0OPSULT`, and `GFZ0OPSULT`.
     * `:nav` — the IGS merged multi-GNSS broadcast navigation file
       (`BRDC00WRD_R_..._MN.rnx`). Only `:igs` publishes it.
-    * `:ionex` — the global ionosphere TEC map (`..._GIM.INX`). `:esa` serves
-      `ESA0OPSFIN` over HTTPS. IONEX cadence is sub-daily, so the default
-      sampling is `02H`, not `01D`.
+    * `:ionex` — the global ionosphere TEC map (`..._GIM.INX`). `:cod` serves
+      `COD0OPSFIN` over HTTP and `:esa` serves `ESA0OPSFIN` over HTTPS. IONEX
+      cadence is sub-daily, so the default sampling is `01H`/`02H`, not `01D`.
 
   ## Filename conventions
 
@@ -49,7 +57,8 @@ defmodule Orbis.GNSS.Data.Catalog do
   `AAAVPPPTTT_YYYYDDDHHMM_LEN_SMP_CNT.EXT` (e.g.
   `GFZ0OPSRAP_20201760000_01D_15M_ORB.SP3`). Ultra-rapid SP3 uses the same
   form with a sub-daily issue time and a two-day span, e.g.
-  `IGS0OPSULT_20242470600_02D_15M_ORB.SP3`. Broadcast navigation uses the
+  `IGS0OPSULT_20242470600_02D_15M_ORB.SP3`. CODE ultra-rapid SP3 on AIUB is
+  published as a daily, uncompressed `01D` file. Broadcast navigation uses the
   RINEX long-name `SSSSMRCCC_R_YYYYDDDHHMM_LEN_CNT.fmt` with **no** sampling
   field and a lowercase extension (e.g. `BRDC00WRD_R_20201770000_01D_MN.rnx`).
   """
@@ -60,7 +69,7 @@ defmodule Orbis.GNSS.Data.Catalog do
 
   # Each center definition:
   #   :name      human-readable name
-  #   :protocol  :https
+  #   :protocol  :https | :http
   #   :host      archive host (the SSRF allow-list source)
   #   :root      archive root URL (no trailing slash)
   #   :tokens    %{content => token_prefix} where the token already includes the
@@ -88,6 +97,19 @@ defmodule Orbis.GNSS.Data.Catalog do
       layouts: %{sp3: :gps_week, clk: :gps_week, ionex: :gps_week},
       samples: %{sp3: "05M", clk: "30S", ionex: "02H"}
     },
+    cod: %{
+      name: "Center for Orbit Determination in Europe (CODE), University of Bern",
+      protocol: :http,
+      host: "ftp.aiub.unibe.ch",
+      root: "http://ftp.aiub.unibe.ch",
+      tokens: %{sp3: "COD0MGXFIN", clk: "COD0MGXFIN", ionex: "COD0OPSFIN"},
+      layouts: %{
+        sp3: :aiub_code_mgex_year,
+        clk: :aiub_code_mgex_year,
+        ionex: :aiub_code_year
+      },
+      samples: %{sp3: "05M", clk: "30S", ionex: "01H"}
+    },
     igs_ult: %{
       name: "IGS combined ultra-rapid precise products",
       protocol: :https,
@@ -98,6 +120,18 @@ defmodule Orbis.GNSS.Data.Catalog do
       spans: %{sp3: "02D"},
       samples: %{sp3: "15M"},
       issues: @opsult_issues
+    },
+    cod_ult: %{
+      name: "CODE ultra-rapid precise products",
+      protocol: :http,
+      host: "ftp.aiub.unibe.ch",
+      root: "http://ftp.aiub.unibe.ch",
+      tokens: %{sp3: "COD0OPSULT"},
+      layouts: %{sp3: :aiub_code_root},
+      spans: %{sp3: "01D"},
+      samples: %{sp3: "05M"},
+      issues: ~w(0000),
+      compression: %{sp3: :none}
     },
     esa_ult: %{
       name: "ESA ultra-rapid precise products",
@@ -133,14 +167,10 @@ defmodule Orbis.GNSS.Data.Catalog do
   }
 
   @no_open_mirrors MapSet.new([
-                     {:cod, :sp3},
-                     {:cod, :clk},
-                     {:cod, :ionex},
                      {:grg, :sp3},
                      {:grg, :clk},
                      {:wum, :sp3},
                      {:wum, :clk},
-                     {:cod_ult, :sp3},
                      {:grg_ult, :sp3},
                      {:grg_ult, :clk},
                      {:igs, :ionex}
@@ -162,6 +192,7 @@ defmodule Orbis.GNSS.Data.Catalog do
   @type error ::
           {:error, {:unsupported_product, term()}}
           | {:error, {:no_open_mirror, {atom(), atom()}}}
+  @type compression :: :gzip | :none
 
   @doc """
   All supported analysis-center codes.
@@ -487,16 +518,17 @@ defmodule Orbis.GNSS.Data.Catalog do
 
   ## Examples
 
-      iex> Orbis.GNSS.Data.Catalog.archive_url(:cod_ult, :sp3, ~D[2024-09-03], "05M", "0600")
-      {:error, {:no_open_mirror, {:cod_ult, :sp3}}}
+      iex> Orbis.GNSS.Data.Catalog.archive_url(:cod_ult, :sp3, ~D[2026-06-11], "05M", "0000")
+      {:ok, "http://ftp.aiub.unibe.ch/CODE/COD0OPSULT_20261620000_01D_05M_ORB.SP3"}
   """
   @spec archive_url(atom(), atom(), Date.t(), String.t(), String.t() | nil) ::
           {:ok, String.t()} | error()
   def archive_url(center, content, %Date{} = date, sample, issue) do
     with {:ok, filename} <- canonical_filename(center, content, date, sample, issue),
          {:ok, cdef} <- center(center),
-         {:ok, layout} <- layout_for(cdef, content) do
-      {:ok, "#{cdef.root}/#{dir_path(layout, date)}/#{filename}.gz"}
+         {:ok, layout} <- layout_for(cdef, content),
+         {:ok, suffix} <- archive_suffix_for(cdef, content) do
+      {:ok, "#{cdef.root}/#{dir_path(layout, date)}/#{filename}#{suffix}"}
     end
   end
 
@@ -504,11 +536,25 @@ defmodule Orbis.GNSS.Data.Catalog do
     do: {:error, {:unsupported_product, :bad_arguments}}
 
   @doc """
-  The transfer protocol (`:https`) for a center.
+  The transfer protocol (`:https` or `:http`) for a center.
   """
-  @spec protocol(atom()) :: {:ok, :https} | {:error, {:unsupported_product, term()}}
+  @spec protocol(atom()) :: {:ok, :https | :http} | {:error, {:unsupported_product, term()}}
   def protocol(center) do
     with {:ok, cdef} <- center(center), do: {:ok, cdef.protocol}
+  end
+
+  @doc """
+  The archive compression used for a center/content pair.
+  """
+  @spec compression(atom(), atom()) :: {:ok, compression()} | error()
+  def compression(center, content) do
+    with {:ok, _descriptor} <- content(content),
+         :ok <- open_mirror(center, content),
+         {:ok, cdef} <- center(center),
+         {:ok, _token} <- token_for(cdef, content),
+         {:ok, _layout} <- layout_for(cdef, content) do
+      compression_for(cdef, content)
+    end
   end
 
   @doc """
@@ -552,6 +598,18 @@ defmodule Orbis.GNSS.Data.Catalog do
 
   defp span_for(cdef, content) do
     {:ok, get_in(cdef, [:spans, content]) || "01D"}
+  end
+
+  defp archive_suffix_for(cdef, content) do
+    case compression_for(cdef, content) do
+      {:ok, :gzip} -> {:ok, ".gz"}
+      {:ok, :none} -> {:ok, ""}
+      {:ok, other} -> {:error, {:unsupported_product, {:compression, other}}}
+    end
+  end
+
+  defp compression_for(cdef, content) do
+    {:ok, get_in(cdef, [:compression, content]) || :gzip}
   end
 
   defp issue_for(%{issues: issues}, issue) when is_binary(issue) do
@@ -638,6 +696,15 @@ defmodule Orbis.GNSS.Data.Catalog do
 
   # BKG IGS station observation tree: <root>/obs/<year>/<doy>/<file>.
   defp dir_path(:bkg_obs_year_doy, date), do: "obs/#{date.year}/#{pad3(day_of_year(date))}"
+
+  # AIUB CODE MGEX final tree: <root>/CODE_MGEX/CODE/<year>/<file>.
+  defp dir_path(:aiub_code_mgex_year, date), do: "CODE_MGEX/CODE/#{date.year}"
+
+  # AIUB CODE operational/final tree: <root>/CODE/<year>/<file>.
+  defp dir_path(:aiub_code_year, date), do: "CODE/#{date.year}"
+
+  # AIUB CODE recent-products root: <root>/CODE/<file>.
+  defp dir_path(:aiub_code_root, _date), do: "CODE"
 
   # --- validation ----------------------------------------------------------
 

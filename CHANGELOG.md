@@ -8,18 +8,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- GNSS data downloads are HTTPS-only; the deprecated Erlang `:ftp` transport is
-  no longer started or listed as an application dependency.
-- GNSS product URLs now resolve through verified open HTTPS archives:
+- GNSS data downloads no longer use the deprecated Erlang `:ftp` transport,
+  which is no longer started or listed as an application dependency.
+- GNSS product URLs now resolve through verified open HTTP(S) archives:
   GFZ rapid/ultra via `isdc-data.gfz.de`, ESA final/ultra/IONEX via
-  `navigation-office.esa.int`, and IGS broadcast nav / IGS ultra / station OBS
-  via `igs.bkg.bund.de`.
+  `navigation-office.esa.int`, IGS broadcast nav / IGS ultra / station OBS via
+  `igs.bkg.bund.de`, and CODE products via AIUB at `ftp.aiub.unibe.ch`.
+- Restored CODE products over AIUB plain HTTP: `{:cod, :sp3}` and
+  `{:cod, :clk}` use `CODE_MGEX/CODE/<year>/COD0MGXFIN_...`, `{:cod, :ionex}`
+  uses `CODE/<year>/COD0OPSFIN_...`, and `{:cod_ult, :sp3}` uses the recent
+  `CODE/COD0OPSULT_...` product. AIUB does not offer HTTPS; transport
+  integrity relies on the plain-HTTP channel for these public products.
 
 ### Removed
 
-- Removed catalog products that had no verified anonymous HTTPS mirror:
-  `{:cod, :sp3}`, `{:cod, :clk}`, `{:cod, :ionex}`, `{:grg, :sp3}`,
-  `{:grg, :clk}`, `{:wum, :sp3}`, `{:wum, :clk}`, `{:cod_ult, :sp3}`,
+- Still-retired catalog products with no verified open HTTP(S) mirror:
+  `{:grg, :sp3}`, `{:grg, :clk}`, `{:wum, :sp3}`, `{:wum, :clk}`,
   `{:grg_ult, :sp3}`, `{:grg_ult, :clk}`, and `{:igs, :ionex}` now return
   `{:error, {:no_open_mirror, {center, content}}}`.
 

@@ -375,6 +375,53 @@ defmodule Orbis.GNSS.DataTest do
     end
 
     @tag :network
+    test "downloads a real CODE MGEX SP3 over AIUB HTTP", %{cache_dir: cache_dir} do
+      # CODE MGEX final orbit for 2024-06-24:
+      # http://ftp.aiub.unibe.ch/CODE_MGEX/CODE/2024/COD0MGXFIN_20241760000_01D_05M_ORB.SP3.gz
+      product = Data.mgex_sp3(:cod, ~D[2024-06-24])
+
+      assert {:ok, path} = Data.fetch(product, cache_dir: cache_dir)
+      assert File.exists?(path)
+      assert {:ok, %Orbis.GNSS.SP3{}} = Orbis.GNSS.SP3.load(path)
+    end
+
+    @tag :network
+    test "downloads a real CODE MGEX clock over AIUB HTTP", %{cache_dir: cache_dir} do
+      # CODE MGEX final clock for 2024-06-24:
+      # http://ftp.aiub.unibe.ch/CODE_MGEX/CODE/2024/COD0MGXFIN_20241760000_01D_30S_CLK.CLK.gz
+      product = Data.mgex_clk(:cod, ~D[2024-06-24])
+
+      assert {:ok, path} = Data.fetch(product, cache_dir: cache_dir)
+      assert File.exists?(path)
+      assert File.read!(path) =~ "RINEX VERSION / TYPE"
+    end
+
+    @tag :network
+    test "downloads a real CODE IONEX over AIUB HTTP", %{cache_dir: cache_dir} do
+      # CODE final GIM for 2024-06-24:
+      # http://ftp.aiub.unibe.ch/CODE/2024/COD0OPSFIN_20241760000_01D_01H_GIM.INX.gz
+      product = Data.mgex_ionex(:cod, ~D[2024-06-24])
+
+      assert {:ok, path} = Data.fetch(product, cache_dir: cache_dir)
+      assert File.exists?(path)
+      assert File.read!(path) =~ "IONEX VERSION / TYPE"
+    end
+
+    @tag :network
+    test "downloads a recent uncompressed CODE ultra SP3 over AIUB HTTP", %{
+      cache_dir: cache_dir
+    } do
+      # AIUB keeps CODE ultra products in the CODE root and publishes them
+      # uncompressed. Yesterday is used because the current UTC day can be ahead
+      # of publication.
+      product = Data.ops_ultra_sp3(:cod_ult, Date.utc_today() |> Date.add(-1), issue: "0000")
+
+      assert {:ok, path} = Data.fetch(product, cache_dir: cache_dir)
+      assert File.exists?(path)
+      assert {:ok, %Orbis.GNSS.SP3{}} = Orbis.GNSS.SP3.load(path)
+    end
+
+    @tag :network
     test "downloads the real merged broadcast navigation file over HTTPS", %{cache_dir: cache_dir} do
       # IGS merged multi-GNSS broadcast nav for 2020-06-25:
       # https://igs.bkg.bund.de/root_ftp/IGS/BRDC/2020/177/BRDC00WRD_R_20201770000_01D_MN.rnx.gz

@@ -1,5 +1,5 @@
 defmodule Orbis.GNSS.Data.Download do
-  # Internal: network transfer for GNSS products over HTTPS via `Req`, with
+  # Internal: network transfer for GNSS products over HTTP(S) via `Req`, with
   # bounded retries, sensible timeouts, and a strict host allow-list. Not part of
   # the public API — `Orbis.GNSS.Data.fetch/2` is the entry point.
   #
@@ -24,7 +24,7 @@ defmodule Orbis.GNSS.Data.Download do
   # response before the (output-side) decompression cap is even reached.
   @default_max_compressed_bytes 64 * 1024 * 1024
 
-  # Download the bytes at `url` using `protocol` (`:https`). Options:
+  # Download the bytes at `url` using `protocol` (`:https` or `:http`). Options:
   #   :timeout_ms (per-attempt, default 30_000), :retries (transient-error
   #   attempts, default 3), :backoff_ms (base backoff, doubled per attempt,
   #   default 500; 0 in tests), :max_compressed_bytes (buffered payload cap,
@@ -35,7 +35,7 @@ defmodule Orbis.GNSS.Data.Download do
   @spec get(String.t(), atom(), keyword()) :: {:ok, binary()} | {:error, term()}
   def get(url, protocol, opts \\ [])
 
-  def get(url, :https = protocol, opts) when is_binary(url) do
+  def get(url, protocol, opts) when is_binary(url) and protocol in [:https, :http] do
     with :ok <- check_host(url, protocol) do
       retries = Keyword.get(opts, :retries, @default_retries)
       backoff = Keyword.get(opts, :backoff_ms, @default_backoff_ms)
@@ -46,9 +46,9 @@ defmodule Orbis.GNSS.Data.Download do
   def get(_url, protocol, _opts), do: {:error, {:unsupported_product, {:protocol, protocol}}}
 
   @doc """
-  Whether HTTPS downloads are enabled. `Req` is a required dependency; the app
-  config hook is used by offline tests that need to prove fetch behavior without
-  touching the network.
+  Whether HTTP client downloads are enabled. `Req` is a required dependency; the
+  app config hook is used by offline tests that need to prove fetch behavior
+  without touching the network.
   """
   @spec req_available?() :: boolean()
   def req_available? do
@@ -87,9 +87,9 @@ defmodule Orbis.GNSS.Data.Download do
   defp transient?({:network, _}), do: true
   defp transient?(_), do: false
 
-  # --- HTTPS ---------------------------------------------------------------
+  # --- HTTP client ---------------------------------------------------------
 
-  defp do_get(url, :https, opts) do
+  defp do_get(url, protocol, opts) when protocol in [:https, :http] do
     if req_available?() do
       timeout = Keyword.get(opts, :timeout_ms, @default_timeout_ms)
       req_get(url, timeout, max_compressed_bytes(opts))
@@ -174,4 +174,5 @@ defmodule Orbis.GNSS.Data.Download do
   end
 
   defp scheme_for(:https), do: "https"
+  defp scheme_for(:http), do: "http"
 end
