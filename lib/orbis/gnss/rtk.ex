@@ -82,6 +82,8 @@ defmodule Orbis.GNSS.RTK do
   @default_filter_ambiguity_prior_sigma_m 1_000.0
   @default_filter_hold_sigma_m 1.0e-4
   @default_filter_process_noise_baseline_sigma_m 0.0
+  @default_filter_dynamics_model :constant_position
+  @default_filter_innovation_screen_min_rows 8
   @rtk_filter_state_version 3
   @min_elevation_sin 0.05
   @double_difference_options [:reference_satellite_id]
@@ -120,6 +122,9 @@ defmodule Orbis.GNSS.RTK do
                                :ambiguity_prior_sigma_m,
                                :hold_sigma_m,
                                :process_noise_baseline_sigma_m,
+                               :dynamics_model,
+                               :innovation_screen_sigma,
+                               :innovation_screen_min_rows,
                                :filter_kernel
                              ]
   @dual_wide_lane_options [
@@ -398,6 +403,7 @@ defmodule Orbis.GNSS.RTK do
           required(:satellite_positions_m) => satellite_positions(),
           optional(:base_satellite_positions_m) => satellite_positions(),
           optional(:rover_satellite_positions_m) => satellite_positions(),
+          optional(:velocity_mps) => ecef_input(),
           optional(:epoch) => term()
         }
 
@@ -674,6 +680,16 @@ defmodule Orbis.GNSS.RTK do
       (default `#{@default_filter_ambiguity_prior_sigma_m}`).
     * `:hold_sigma_m` - pseudo-measurement sigma for fixed ambiguity holds
       (default `#{@default_filter_hold_sigma_m}`).
+    * `:dynamics_model` - `:constant_position` (default) keeps the carried
+      baseline mean fixed between epochs. `:velocity_propagated` advances the
+      prediction mean by each epoch's optional `:velocity_mps` times elapsed
+      seconds; process-noise meaning is unchanged.
+    * `:innovation_screen_sigma` - optional predicted-residual screen in the
+      Rust kernel. When set, epoch rows with `abs(innovation * weight)` above
+      this value are rejected before the measurement update.
+    * `:innovation_screen_min_rows` - minimum accepted row count for the
+      innovation screen. If fewer rows survive, the epoch coasts on the
+      predicted state (default `#{@default_filter_innovation_screen_min_rows}`).
     * `:filter_kernel` - `:rust` (default) or `:elixir` — the Elixir reference
       implementation, bit-identical to the kernel; every kernel capability is
       gated by === trace tests against it. The kernel carries the per-system
@@ -1339,7 +1355,7 @@ defmodule Orbis.GNSS.RTK do
       end
     end)
     |> case do
-      {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
+      {:ok, normalized} -> {:ok, normalized |> Enum.reverse() |> attach_prediction_dts()}
       {:error, _reason} = err -> err
     end
   end
@@ -1361,21 +1377,78 @@ defmodule Orbis.GNSS.RTK do
          {:ok, rover} <- normalize_observations(rover_observations, :invalid_rover_observations),
          {:ok, positions} <- normalize_satellite_positions(satellite_positions),
          {:ok, base_positions} <- normalize_satellite_positions(base_satellite_positions),
-         {:ok, rover_positions} <- normalize_satellite_positions(rover_satellite_positions) do
+         {:ok, rover_positions} <- normalize_satellite_positions(rover_satellite_positions),
+         {:ok, velocity_mps} <- normalize_epoch_velocity(epoch, idx) do
       {:ok,
        %{
          idx: idx,
          epoch: Map.get(epoch, :epoch, idx),
+         prediction_time: Map.get(epoch, :epoch),
          base: base,
          rover: rover,
          positions: positions,
          base_positions: base_positions,
-         rover_positions: rover_positions
+         rover_positions: rover_positions,
+         velocity_mps: velocity_mps
        }}
     end
   end
 
   defp normalize_epoch(_epoch, idx), do: {:error, {:invalid_epoch_observations, idx}}
+
+  defp normalize_epoch_velocity(epoch, idx) do
+    case Map.get(epoch, :velocity_mps) do
+      nil ->
+        {:ok, nil}
+
+      velocity ->
+        case Types.normalize_ecef(velocity, {:invalid_velocity_mps, idx}) do
+          {:ok, {vx, vy, vz} = normalized} ->
+            if finite_number?(vx) and finite_number?(vy) and finite_number?(vz),
+              do: {:ok, normalized},
+              else: {:error, {:invalid_velocity_mps, idx}}
+
+          {:error, _reason} = err ->
+            err
+        end
+    end
+  end
+
+  defp finite_number?(value) when is_number(value), do: value - value == 0.0
+  defp finite_number?(_value), do: false
+
+  defp attach_prediction_dts(epochs) do
+    {epochs, _prev_time} =
+      Enum.map_reduce(epochs, nil, fn epoch, prev_time ->
+        time = Map.get(epoch, :prediction_time)
+        dt_s = prediction_dt_seconds(prev_time, time)
+
+        epoch =
+          epoch
+          |> Map.put(:prediction_dt_s, dt_s)
+          |> Map.delete(:prediction_time)
+
+        {epoch, time}
+      end)
+
+    epochs
+  end
+
+  defp prediction_dt_seconds(nil, _time), do: 0.0
+  defp prediction_dt_seconds(_prev_time, nil), do: 0.0
+
+  defp prediction_dt_seconds(prev, time) when is_number(prev) and is_number(time),
+    do: (time - prev) / 1.0
+
+  defp prediction_dt_seconds(%DateTime{} = prev, %DateTime{} = time),
+    do: DateTime.diff(time, prev, :microsecond) / 1_000_000.0
+
+  defp prediction_dt_seconds(%NaiveDateTime{} = prev, %NaiveDateTime{} = time),
+    do: NaiveDateTime.diff(time, prev, :microsecond) / 1_000_000.0
+
+  defp prediction_dt_seconds(%Date{} = prev, %Date{} = time), do: Date.diff(time, prev) * 86_400.0
+
+  defp prediction_dt_seconds(_prev_time, _time), do: 0.0
 
   defp normalize_dual_baseline_epochs(epochs) do
     epochs
@@ -2605,14 +2678,46 @@ defmodule Orbis.GNSS.RTK do
              opts,
              :process_noise_baseline_sigma_m,
              @default_filter_process_noise_baseline_sigma_m
-           ) do
+           ),
+         {:ok, dynamics_model} <- dynamics_model(opts),
+         {:ok, innovation_screen} <- innovation_screen_options(opts) do
       {:ok,
        %{
          baseline_prior_sigma_m: baseline_prior_sigma_m,
          ambiguity_prior_sigma_m: ambiguity_prior_sigma_m,
          hold_sigma_m: hold_sigma_m,
-         process_noise_baseline_sigma_m: process_noise_baseline_sigma_m
+         process_noise_baseline_sigma_m: process_noise_baseline_sigma_m,
+         dynamics_model: dynamics_model,
+         innovation_screen: innovation_screen
        }}
+    end
+  end
+
+  defp dynamics_model(opts) do
+    case Keyword.get(opts, :dynamics_model, @default_filter_dynamics_model) do
+      value when value in [:constant_position, :velocity_propagated] -> {:ok, value}
+      _other -> {:error, {:invalid_option, :dynamics_model}}
+    end
+  end
+
+  defp innovation_screen_options(opts) do
+    threshold = Keyword.get(opts, :innovation_screen_sigma)
+
+    min_rows =
+      Keyword.get(opts, :innovation_screen_min_rows, @default_filter_innovation_screen_min_rows)
+
+    cond do
+      not is_nil(threshold) and (not is_number(threshold) or threshold <= 0.0) ->
+        {:error, {:invalid_option, :innovation_screen_sigma}}
+
+      not is_integer(min_rows) or min_rows < 1 ->
+        {:error, {:invalid_option, :innovation_screen_min_rows}}
+
+      is_nil(threshold) ->
+        {:ok, %{enabled?: false, threshold_sigma: nil, min_rows: min_rows}}
+
+      true ->
+        {:ok, %{enabled?: true, threshold_sigma: threshold / 1.0, min_rows: min_rows}}
     end
   end
 
@@ -3972,6 +4077,7 @@ defmodule Orbis.GNSS.RTK do
              hold_sigma_m: filter_opts.hold_sigma_m,
              baseline_prior_sigma_m: filter_opts.baseline_prior_sigma_m,
              ambiguity_prior_sigma_m: filter_opts.ambiguity_prior_sigma_m,
+             dynamics_model: filter_opts.dynamics_model,
              ambiguity_initialization: :phase_code,
              initialized_ambiguity_count: initial_ambiguity_count,
              filter_kernel: filter_kernel
@@ -4034,7 +4140,7 @@ defmodule Orbis.GNSS.RTK do
          filter_opts,
          acc
        ) do
-    predicted_acc = time_update_information(acc, filter_opts)
+    {predicted_acc, fallback_acc} = time_update_information(acc, epoch, filter_opts)
 
     case do_sequential_filter_epoch(
            base,
@@ -4054,9 +4160,7 @@ defmodule Orbis.GNSS.RTK do
            predicted_acc
          ) do
       {:error, :singular_geometry} = err ->
-        if predicted_acc.information == acc.information do
-          err
-        else
+        if fallback_acc do
           do_sequential_filter_epoch(
             base,
             epoch,
@@ -4072,8 +4176,10 @@ defmodule Orbis.GNSS.RTK do
             solve_opts,
             integer_opts,
             filter_opts,
-            acc
+            fallback_acc
           )
+        else
+          err
         end
 
       result ->
@@ -4098,6 +4204,126 @@ defmodule Orbis.GNSS.RTK do
          filter_opts,
          acc
        ) do
+    with {:ok, screen_meta, row_mask} <-
+           sequential_innovation_screen(
+             base,
+             epoch,
+             refs,
+             physical_sats,
+             sd_ambiguity_ids,
+             dd_ambiguity_pairs,
+             acc.state,
+             weights,
+             filter_opts.innovation_screen
+           ) do
+      if screen_meta && screen_meta.coasted? do
+        sequential_coasted_epoch(
+          base,
+          epoch,
+          refs,
+          physical_sats,
+          sd_ambiguity_ids,
+          dd_ambiguity_pairs,
+          float_only_dd_ids,
+          weights,
+          screen_meta,
+          acc
+        )
+      else
+        do_sequential_filter_epoch_update(
+          base,
+          epoch,
+          refs,
+          physical_sats,
+          sd_ambiguity_ids,
+          dd_ambiguity_ids,
+          dd_ambiguity_pairs,
+          float_only_dd_ids,
+          wavelengths,
+          offsets,
+          weights,
+          solve_opts,
+          integer_opts,
+          filter_opts,
+          screen_meta,
+          row_mask,
+          acc
+        )
+      end
+    end
+  end
+
+  # Coasted epoch (kernel `coasted_update`): the screen rejected too many rows,
+  # so the measurement update is skipped entirely. The carried state keeps the
+  # PREDICTED prior (time update already applied by the caller); the reported
+  # baseline is that prior; nothing is searched or newly fixed. Residuals are
+  # reported from the full (unmasked) rows at the prior, mirroring the rust
+  # path's post-hoc residual construction.
+  defp sequential_coasted_epoch(
+         base,
+         epoch,
+         refs,
+         physical_sats,
+         sd_ambiguity_ids,
+         dd_ambiguity_pairs,
+         float_only_dd_ids,
+         weights,
+         screen_meta,
+         acc
+       ) do
+    with {:ok, residual_rows} <-
+           build_epoch_sequential_baseline_rows(
+             base,
+             epoch,
+             refs,
+             physical_sats,
+             sd_ambiguity_ids,
+             dd_ambiguity_pairs,
+             acc.state,
+             weights
+           ),
+         {:ok, residuals} <- baseline_residuals(residual_rows) do
+      all_fixed = acc.fixed_cycles |> Map.keys() |> Enum.sort()
+
+      epoch_result = %{
+        epoch: epoch.epoch,
+        index: epoch.idx,
+        baseline_m: ecef_map(acc.state.baseline),
+        integer_status: :coasted,
+        integer_ratio: rust_public_integer_ratio(0.0, residual_rows, acc, float_only_dd_ids),
+        integer_best_score: nil,
+        integer_second_best_score: nil,
+        integer_candidates: nil,
+        ambiguity_search: nil,
+        residuals_m: residuals,
+        newly_fixed_ambiguities: [],
+        fixed_ambiguities: all_fixed,
+        innovation_screen: screen_meta
+      }
+
+      {:ok, %{acc | epochs: [epoch_result | acc.epochs]}}
+    end
+  end
+
+  defp do_sequential_filter_epoch_update(
+         base,
+         epoch,
+         refs,
+         physical_sats,
+         sd_ambiguity_ids,
+         dd_ambiguity_ids,
+         dd_ambiguity_pairs,
+         float_only_dd_ids,
+         wavelengths,
+         offsets,
+         weights,
+         solve_opts,
+         integer_opts,
+         filter_opts,
+         screen_meta,
+         row_mask,
+         acc
+       ) do
     with {:ok, state, information, rows} <-
            iterate_sequential_filter_epoch(
              base,
@@ -4113,6 +4339,7 @@ defmodule Orbis.GNSS.RTK do
              weights,
              solve_opts,
              filter_opts,
+             row_mask,
              1
            ),
          {:ok, covariance} <- invert_matrix(information),
@@ -4146,7 +4373,8 @@ defmodule Orbis.GNSS.RTK do
              fixed_m,
              weights,
              solve_opts,
-             filter_opts
+             filter_opts,
+             row_mask
            ),
          {:ok, residual_rows} <-
            build_epoch_sequential_baseline_rows(
@@ -4175,7 +4403,8 @@ defmodule Orbis.GNSS.RTK do
         ambiguity_search: Map.get(search_meta, :ambiguity_search),
         residuals_m: residuals,
         newly_fixed_ambiguities: newly_fixed,
-        fixed_ambiguities: all_fixed
+        fixed_ambiguities: all_fixed,
+        innovation_screen: screen_meta
       }
 
       {:ok,
@@ -4252,7 +4481,8 @@ defmodule Orbis.GNSS.RTK do
   end
 
   defp apply_rust_filter_update(
-         {rust_state, reported_baseline, ratio, fixed?, newly_fixed_sd, fixed_sd_ids},
+         {rust_state, reported_baseline, ratio, fixed?, newly_fixed_sd, fixed_sd_ids,
+          innovation_screen},
          base,
          epoch,
          refs,
@@ -4313,11 +4543,17 @@ defmodule Orbis.GNSS.RTK do
            ),
          integer_ratio = rust_public_integer_ratio(ratio, residual_rows, acc, float_only_dd_ids),
          {:ok, residuals} <- baseline_residuals(residual_rows) do
+      screen_meta = rust_innovation_screen_meta(innovation_screen)
+
       epoch_result = %{
         epoch: epoch.epoch,
         index: epoch.idx,
         baseline_m: ecef_map(report_state.baseline),
-        integer_status: if(fixed?, do: :fixed, else: :not_fixed),
+        integer_status:
+          if(screen_meta && screen_meta.coasted?,
+            do: :coasted,
+            else: if(fixed?, do: :fixed, else: :not_fixed)
+          ),
         integer_ratio: integer_ratio,
         integer_best_score: nil,
         integer_second_best_score: nil,
@@ -4325,7 +4561,8 @@ defmodule Orbis.GNSS.RTK do
         ambiguity_search: nil,
         residuals_m: residuals,
         newly_fixed_ambiguities: newly_fixed,
-        fixed_ambiguities: all_fixed
+        fixed_ambiguities: all_fixed,
+        innovation_screen: screen_meta
       }
 
       {:ok,
@@ -4411,7 +4648,7 @@ defmodule Orbis.GNSS.RTK do
       |> epoch_available_nonrefs(refs, physical_sats)
       |> Enum.map(&rust_sat_term(epoch, &1))
 
-    {references, nonref}
+    {references, nonref, Map.get(epoch, :velocity_mps), Map.get(epoch, :prediction_dt_s, 0.0)}
   end
 
   defp rust_sat_term(epoch, sat) do
@@ -4447,7 +4684,35 @@ defmodule Orbis.GNSS.RTK do
       solve_opts.max_iterations,
       filter_opts.process_noise_baseline_sigma_m,
       integer_opts.ratio_threshold,
-      float_only_systems
+      {
+        Atom.to_string(filter_opts.dynamics_model),
+        float_only_systems,
+        rust_innovation_screen_sigma(filter_opts.innovation_screen),
+        filter_opts.innovation_screen.min_rows
+      }
+    }
+  end
+
+  defp rust_innovation_screen_sigma(%{enabled?: true, threshold_sigma: threshold}), do: threshold
+  defp rust_innovation_screen_sigma(_screen), do: 0.0
+
+  defp rust_innovation_screen_meta(nil), do: nil
+
+  defp rust_innovation_screen_meta(
+         {threshold, min_rows, input_rows, accepted_rows, rejected_rows, rejected_code_rows,
+          {rejected_phase_rows, max_normalized, max_rejected_normalized, coasted?}}
+       ) do
+    %{
+      threshold_sigma: threshold,
+      min_rows: min_rows,
+      input_rows: input_rows,
+      accepted_rows: accepted_rows,
+      rejected_rows: rejected_rows,
+      rejected_code_rows: rejected_code_rows,
+      rejected_phase_rows: rejected_phase_rows,
+      max_abs_normalized_innovation: max_normalized,
+      max_rejected_abs_normalized_innovation: max_rejected_normalized,
+      coasted?: coasted?
     }
   end
 
@@ -4578,6 +4843,7 @@ defmodule Orbis.GNSS.RTK do
          weights,
          solve_opts,
          filter_opts,
+         row_mask,
          iter
        ) do
     with {:ok, rows} <-
@@ -4591,8 +4857,15 @@ defmodule Orbis.GNSS.RTK do
              prior_state,
              weights
            ),
+         # Innovation-screen accept/reject decisions are made once, at the
+         # epoch's predicted prior (kernel `prepare_innovation_screen`); the
+         # index mask is applied to the FOLD INPUT on every relinearization
+         # iteration. The full row set still flows to the search/residual paths.
          {measurement_information, measurement_rhs} <-
-           baseline_normal_equations(rows, baseline_unknown_count(sd_ambiguity_ids)),
+           baseline_normal_equations(
+             apply_innovation_row_mask(rows, row_mask),
+             baseline_unknown_count(sd_ambiguity_ids)
+           ),
          {hold_information, hold_rhs} <-
            sequential_hold_normal_equations(
              sd_ambiguity_ids,
@@ -4645,34 +4918,139 @@ defmodule Orbis.GNSS.RTK do
             weights,
             solve_opts,
             filter_opts,
+            row_mask,
             iter + 1
           )
       end
     end
   end
 
+  defp apply_innovation_row_mask(rows, nil), do: rows
+
+  defp apply_innovation_row_mask(rows, mask) do
+    rows
+    |> Enum.zip(mask)
+    |> Enum.filter(fn {_row, accepted?} -> accepted? end)
+    |> Enum.map(fn {row, _accepted?} -> row end)
+  end
+
+  # Elixir reference of the kernel `prepare_innovation_screen`: build the DD
+  # rows at the epoch's predicted prior, normalize each prefit residual by the
+  # row's diagonal weight, and reject rows whose |normalized innovation|
+  # exceeds the threshold. Returns `{nil, nil}` when the screen is disabled,
+  # else `{meta, mask}` where `meta` matches the kernel's per-epoch
+  # `innovation_screen` metadata shape exactly and `mask` is the per-row
+  # accept list (row order is deterministic on both sides).
+  defp sequential_innovation_screen(
+         _base,
+         _epoch,
+         _refs,
+         _physical_sats,
+         _sd_ambiguity_ids,
+         _dd_ambiguity_pairs,
+         _state,
+         _weights,
+         %{enabled?: false}
+       ), do: {:ok, nil, nil}
+
+  defp sequential_innovation_screen(
+         base,
+         epoch,
+         refs,
+         physical_sats,
+         sd_ambiguity_ids,
+         dd_ambiguity_pairs,
+         state,
+         weights,
+         %{enabled?: true, threshold_sigma: threshold, min_rows: min_rows}
+       ) do
+    with {:ok, rows} <-
+           build_epoch_sequential_baseline_rows(
+             base,
+             epoch,
+             refs,
+             physical_sats,
+             sd_ambiguity_ids,
+             dd_ambiguity_pairs,
+             state,
+             weights
+           ) do
+      {mask_reversed, accepted, rejected, rejected_code, rejected_phase, max_norm, max_rej} =
+        Enum.reduce(rows, {[], 0, 0, 0, 0, nil, nil}, fn row,
+                                                         {mask, acc, rej, rej_c, rej_p, max_n,
+                                                          max_r} ->
+          # Kernel op order exactly: the screen normalizes by the DIAGONAL
+          # information weight 1/(sd_var + ref_var) (the kernel DdRow.weight),
+          # NOT this row's 1/sigma fold weight.
+          weight = 1.0 / (row.sd_variance_m2 + row.ref_sd_variance_m2)
+          normalized = abs(row.y * weight)
+          max_n = if max_n, do: max(max_n, normalized), else: normalized
+
+          if normalized > threshold do
+            rej_c = if row.kind == :code, do: rej_c + 1, else: rej_c
+            rej_p = if row.kind == :phase, do: rej_p + 1, else: rej_p
+            max_r = if max_r, do: max(max_r, normalized), else: normalized
+            {[false | mask], acc, rej + 1, rej_c, rej_p, max_n, max_r}
+          else
+            {[true | mask], acc + 1, rej, rej_c, rej_p, max_n, max_r}
+          end
+        end)
+
+      meta = %{
+        threshold_sigma: threshold,
+        min_rows: min_rows,
+        input_rows: length(rows),
+        accepted_rows: accepted,
+        rejected_rows: rejected,
+        rejected_code_rows: rejected_code,
+        rejected_phase_rows: rejected_phase,
+        max_abs_normalized_innovation: max_norm,
+        max_rejected_abs_normalized_innovation: max_rej,
+        coasted?: accepted < min_rows
+      }
+
+      {:ok, meta, Enum.reverse(mask_reversed)}
+    end
+  end
+
   # Kinematic process-noise time update (predict step). Between epochs, inflate
   # the baseline (position) block of the prior covariance by Q = sigma^2 while
   # leaving the carried ambiguities tight. This is the information<->covariance
-  # round-trip: Lambda -> P, P[baseline] += Q, P -> Lambda'. The prior mean
-  # (acc.state) is unchanged (constant-position model), and `sequential_prior_rhs`
-  # pairs the loosened information with that mean consistently.
+  # round-trip: Lambda -> P, P[baseline] += Q, P -> Lambda'. The prior mean is
+  # unchanged for the default constant-position model; the velocity-propagated
+  # model advances it immediately before this covariance update.
   #
   # Skipped on the first epoch (no prior motion) and when process noise is off
   # (sigma == 0, the static default). A singular round-trip falls back to the
   # un-inflated prior rather than failing the epoch.
-  defp time_update_information(acc, filter_opts) do
+  defp time_update_information(acc, epoch, filter_opts) do
     sigma = Map.get(filter_opts, :process_noise_baseline_sigma_m, 0.0)
+    mean_acc = propagate_baseline_mean(acc, epoch, filter_opts)
 
-    if acc.epochs != [] and sigma > 0.0 do
-      case inflate_baseline_information(acc.information, sigma * sigma) do
-        {:ok, information} -> %{acc | information: information}
-        :error -> acc
+    if mean_acc.epochs != [] and sigma > 0.0 do
+      case inflate_baseline_information(mean_acc.information, sigma * sigma) do
+        {:ok, information} -> {%{mean_acc | information: information}, mean_acc}
+        :error -> {mean_acc, nil}
       end
+    else
+      {mean_acc, nil}
+    end
+  end
+
+  defp propagate_baseline_mean(
+         %{epochs: [_prev | _]} = acc,
+         %{velocity_mps: {vx, vy, vz}, prediction_dt_s: dt_s},
+         %{dynamics_model: :velocity_propagated}
+       )
+       when is_number(dt_s) and dt_s > 0.0 do
+    if finite_number?(dt_s) and finite_number?(vx) and finite_number?(vy) and finite_number?(vz) do
+      update_in(acc.state.baseline, &add3(&1, scale3({vx, vy, vz}, dt_s)))
     else
       acc
     end
   end
+
+  defp propagate_baseline_mean(acc, _epoch, _filter_opts), do: acc
 
   # Rank-3 (Woodbury) baseline process-noise inflation in information space:
   #
@@ -4772,7 +5150,8 @@ defmodule Orbis.GNSS.RTK do
          _fm,
          _w,
          _so,
-         _fo
+         _fo,
+         _mask
        ), do: {:ok, float_state}
 
   defp conditioned_fixed_state(
@@ -4788,7 +5167,8 @@ defmodule Orbis.GNSS.RTK do
          fixed_m,
          weights,
          solve_opts,
-         filter_opts
+         filter_opts,
+         row_mask
        ) do
     case iterate_sequential_filter_epoch(
            base,
@@ -4804,6 +5184,7 @@ defmodule Orbis.GNSS.RTK do
            weights,
            solve_opts,
            filter_opts,
+           row_mask,
            1
          ) do
       {:ok, conditioned, _information, _rows} -> {:ok, conditioned}

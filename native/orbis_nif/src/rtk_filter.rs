@@ -6,8 +6,8 @@
 //! into Rust without introducing a second Elixir struct layer.
 
 use astrodynamics_gnss::rtk_filter::{
-    update_epoch, Epoch, FilterState, MeasModel, SatMeas, SearchOpts, StochasticModel, UpdateError,
-    UpdateOpts,
+    update_epoch, DynamicsModel, Epoch, FilterState, InnovationScreen, InnovationScreenOpts,
+    MeasModel, SatMeas, SearchOpts, StochasticModel, UpdateError, UpdateOpts,
 };
 use rustler::{Encoder, Env, NifResult, Term};
 use std::collections::BTreeMap;
@@ -18,8 +18,9 @@ type SatObsTerm = (f64, f64, f64, f64);
 type SatPosTerm = (Vec3, Vec3, Vec3);
 type SatTerm = (SatIdsTerm, SatObsTerm, SatPosTerm);
 // References: the per-system reference satellites present this epoch (one per
-// constellation letter), then the non-reference satellites.
-type EpochTerm = (Vec<SatTerm>, Vec<SatTerm>);
+// constellation letter), then the non-reference satellites, optional rover ECEF
+// velocity, and elapsed seconds for the prediction step.
+type EpochTerm = (Vec<SatTerm>, Vec<SatTerm>, Option<Vec3>, f64);
 // Header references: sorted [{system_letter, reference_sd_ambiguity_id}].
 type StateHeaderTerm = (u16, Vec<(String, String)>, Vec<String>, f64, usize);
 type StateTerm = (
@@ -30,15 +31,27 @@ type StateTerm = (
     Vec<(String, i64)>,
     Vec<(String, f64)>,
 );
-type UpdateTerm = (StateTerm, Vec3, f64, bool, Vec<String>, Vec<String>);
+type ScreenTailTerm = (usize, Option<f64>, Option<f64>, bool);
+type ScreenTerm = (f64, usize, usize, usize, usize, usize, ScreenTailTerm);
+type UpdateTerm = (
+    StateTerm,
+    Vec3,
+    f64,
+    bool,
+    Vec<String>,
+    Vec<String>,
+    Option<ScreenTerm>,
+);
 type ModelTerm = (f64, f64, String, bool, bool);
-type UpdateOptsTerm = (f64, f64, f64, usize, f64, f64, Vec<String>);
+type UpdateOptsExtraTerm = (String, Vec<String>, f64, usize);
+type UpdateOptsTerm = (f64, f64, f64, usize, f64, f64, UpdateOptsExtraTerm);
 
 mod atoms {
     rustler::atoms! {
         ok,
         error,
         invalid_stochastic_model,
+        invalid_dynamics_model,
         reference_changed,
         unknown_reference_system,
         missing_system_reference,
@@ -70,6 +83,10 @@ pub fn rtk_filter_update_epoch<'a>(
         return Ok((atoms::error(), atoms::invalid_stochastic_model()).encode(env));
     };
 
+    let Some(opts) = decode_opts(opts_term) else {
+        return Ok((atoms::error(), atoms::invalid_dynamics_model()).encode(env));
+    };
+
     let update = match update_epoch(
         decode_state(state_term),
         &decode_epoch(epoch_term),
@@ -77,7 +94,7 @@ pub fn rtk_filter_update_epoch<'a>(
         &model,
         &wavelengths.into_iter().collect::<BTreeMap<_, _>>(),
         &offsets.into_iter().collect::<BTreeMap<_, _>>(),
-        &decode_opts(opts_term),
+        &opts,
     ) {
         Ok(update) => update,
         Err(err) => return Ok((atoms::error(), encode_update_error(env, err)).encode(env)),
@@ -105,7 +122,9 @@ pub fn rtk_filter_update_epochs<'a>(
     let base = vec3(base);
     let wavelengths = wavelengths.into_iter().collect::<BTreeMap<_, _>>();
     let offsets = offsets.into_iter().collect::<BTreeMap<_, _>>();
-    let opts = decode_opts(opts_term);
+    let Some(opts) = decode_opts(opts_term) else {
+        return Ok((atoms::error(), atoms::invalid_dynamics_model()).encode(env));
+    };
     let mut state = decode_state(state_term);
     let mut updates = Vec::with_capacity(epoch_terms.len());
 
@@ -140,6 +159,24 @@ fn encode_update(update: astrodynamics_gnss::rtk_filter::EpochUpdate) -> UpdateT
         update.integer_fixed,
         update.newly_fixed,
         update.fixed_ids,
+        update.innovation_screen.map(encode_innovation_screen),
+    )
+}
+
+fn encode_innovation_screen(screen: InnovationScreen) -> ScreenTerm {
+    (
+        screen.threshold_sigma,
+        screen.min_rows,
+        screen.input_rows,
+        screen.accepted_rows,
+        screen.rejected_rows,
+        screen.rejected_code_rows,
+        (
+            screen.rejected_phase_rows,
+            screen.max_abs_normalized_innovation,
+            screen.max_rejected_abs_normalized_innovation,
+            screen.coasted,
+        ),
     )
 }
 
@@ -227,10 +264,12 @@ fn encode_state(state: FilterState) -> StateTerm {
 }
 
 fn decode_epoch(term: EpochTerm) -> Epoch {
-    let (references, nonref) = term;
+    let (references, nonref, velocity_mps, dt_s) = term;
     Epoch {
         references: references.into_iter().map(decode_sat).collect(),
         nonref: nonref.into_iter().map(decode_sat).collect(),
+        velocity_mps: velocity_mps.map(vec3),
+        dt_s,
     }
 }
 
@@ -272,7 +311,7 @@ fn decode_model(term: ModelTerm) -> Option<MeasModel> {
     })
 }
 
-fn decode_opts(term: UpdateOptsTerm) -> UpdateOpts {
+fn decode_opts(term: UpdateOptsTerm) -> Option<UpdateOpts> {
     let (
         hold_sigma_m,
         position_tol_m,
@@ -280,17 +319,32 @@ fn decode_opts(term: UpdateOptsTerm) -> UpdateOpts {
         max_iterations,
         process_noise_baseline_sigma_m,
         ratio_threshold,
-        float_only_systems,
+        (dynamics_model, float_only_systems, innovation_screen_sigma, innovation_screen_min_rows),
     ) = term;
-    UpdateOpts {
+    let dynamics_model = match dynamics_model.as_str() {
+        "constant_position" => DynamicsModel::ConstantPosition,
+        "velocity_propagated" => DynamicsModel::VelocityPropagated,
+        _ => return None,
+    };
+
+    Some(UpdateOpts {
         hold_sigma_m,
         position_tol_m,
         ambiguity_tol_m,
         max_iterations,
         process_noise_baseline_sigma_m,
+        dynamics_model,
         float_only_systems,
+        innovation_screen: if innovation_screen_sigma > 0.0 {
+            Some(InnovationScreenOpts {
+                threshold_sigma: innovation_screen_sigma,
+                min_rows: innovation_screen_min_rows,
+            })
+        } else {
+            None
+        },
         search: SearchOpts { ratio_threshold },
-    }
+    })
 }
 
 fn vec3(v: Vec3) -> [f64; 3] {
