@@ -82,6 +82,7 @@ defmodule Orbis.GNSS.RTK do
   @default_filter_ambiguity_prior_sigma_m 1_000.0
   @default_filter_hold_sigma_m 1.0e-4
   @default_filter_process_noise_baseline_sigma_m 0.0
+  @default_filter_innovation_screen_min_rows 8
   @rtk_filter_state_version 3
   @min_elevation_sin 0.05
   @double_difference_options [:reference_satellite_id]
@@ -120,6 +121,8 @@ defmodule Orbis.GNSS.RTK do
                                :ambiguity_prior_sigma_m,
                                :hold_sigma_m,
                                :process_noise_baseline_sigma_m,
+                               :innovation_screen_sigma,
+                               :innovation_screen_min_rows,
                                :filter_kernel
                              ]
   @dual_wide_lane_options [
@@ -398,6 +401,8 @@ defmodule Orbis.GNSS.RTK do
           required(:satellite_positions_m) => satellite_positions(),
           optional(:base_satellite_positions_m) => satellite_positions(),
           optional(:rover_satellite_positions_m) => satellite_positions(),
+          optional(:baseline_velocity_m_s) => ecef_input(),
+          optional(:prediction_dt_s) => number(),
           optional(:epoch) => term()
         }
 
@@ -674,6 +679,12 @@ defmodule Orbis.GNSS.RTK do
       (default `#{@default_filter_ambiguity_prior_sigma_m}`).
     * `:hold_sigma_m` - pseudo-measurement sigma for fixed ambiguity holds
       (default `#{@default_filter_hold_sigma_m}`).
+    * `:innovation_screen_sigma` - optional predicted-residual screen in the
+      Rust kernel. When set, epoch rows with `abs(innovation * weight)` above
+      this value are rejected before the measurement update.
+    * `:innovation_screen_min_rows` - minimum accepted row count for the
+      innovation screen. If fewer rows survive, the epoch coasts on the
+      predicted state (default `#{@default_filter_innovation_screen_min_rows}`).
     * `:filter_kernel` - `:rust` (default) or `:elixir` — the Elixir reference
       implementation, bit-identical to the kernel; every kernel capability is
       gated by === trace tests against it. The kernel carries the per-system
@@ -1370,7 +1381,9 @@ defmodule Orbis.GNSS.RTK do
          rover: rover,
          positions: positions,
          base_positions: base_positions,
-         rover_positions: rover_positions
+         rover_positions: rover_positions,
+         baseline_velocity_m_s: Map.get(epoch, :baseline_velocity_m_s),
+         prediction_dt_s: Map.get(epoch, :prediction_dt_s, 0.0)
        }}
     end
   end
@@ -2605,14 +2618,37 @@ defmodule Orbis.GNSS.RTK do
              opts,
              :process_noise_baseline_sigma_m,
              @default_filter_process_noise_baseline_sigma_m
-           ) do
+           ),
+         {:ok, innovation_screen} <- innovation_screen_options(opts) do
       {:ok,
        %{
          baseline_prior_sigma_m: baseline_prior_sigma_m,
          ambiguity_prior_sigma_m: ambiguity_prior_sigma_m,
          hold_sigma_m: hold_sigma_m,
-         process_noise_baseline_sigma_m: process_noise_baseline_sigma_m
+         process_noise_baseline_sigma_m: process_noise_baseline_sigma_m,
+         innovation_screen: innovation_screen
        }}
+    end
+  end
+
+  defp innovation_screen_options(opts) do
+    threshold = Keyword.get(opts, :innovation_screen_sigma)
+
+    min_rows =
+      Keyword.get(opts, :innovation_screen_min_rows, @default_filter_innovation_screen_min_rows)
+
+    cond do
+      not is_nil(threshold) and (not is_number(threshold) or threshold <= 0.0) ->
+        {:error, {:invalid_option, :innovation_screen_sigma}}
+
+      not is_integer(min_rows) or min_rows < 1 ->
+        {:error, {:invalid_option, :innovation_screen_min_rows}}
+
+      is_nil(threshold) ->
+        {:ok, %{enabled?: false, threshold_sigma: nil, min_rows: min_rows}}
+
+      true ->
+        {:ok, %{enabled?: true, threshold_sigma: threshold / 1.0, min_rows: min_rows}}
     end
   end
 
@@ -4252,7 +4288,8 @@ defmodule Orbis.GNSS.RTK do
   end
 
   defp apply_rust_filter_update(
-         {rust_state, reported_baseline, ratio, fixed?, newly_fixed_sd, fixed_sd_ids},
+         {rust_state, reported_baseline, ratio, fixed?, newly_fixed_sd, fixed_sd_ids,
+          innovation_screen},
          base,
          epoch,
          refs,
@@ -4313,11 +4350,17 @@ defmodule Orbis.GNSS.RTK do
            ),
          integer_ratio = rust_public_integer_ratio(ratio, residual_rows, acc, float_only_dd_ids),
          {:ok, residuals} <- baseline_residuals(residual_rows) do
+      screen_meta = rust_innovation_screen_meta(innovation_screen)
+
       epoch_result = %{
         epoch: epoch.epoch,
         index: epoch.idx,
         baseline_m: ecef_map(report_state.baseline),
-        integer_status: if(fixed?, do: :fixed, else: :not_fixed),
+        integer_status:
+          if(screen_meta && screen_meta.coasted?,
+            do: :coasted,
+            else: if(fixed?, do: :fixed, else: :not_fixed)
+          ),
         integer_ratio: integer_ratio,
         integer_best_score: nil,
         integer_second_best_score: nil,
@@ -4325,7 +4368,8 @@ defmodule Orbis.GNSS.RTK do
         ambiguity_search: nil,
         residuals_m: residuals,
         newly_fixed_ambiguities: newly_fixed,
-        fixed_ambiguities: all_fixed
+        fixed_ambiguities: all_fixed,
+        innovation_screen: screen_meta
       }
 
       {:ok,
@@ -4411,7 +4455,20 @@ defmodule Orbis.GNSS.RTK do
       |> epoch_available_nonrefs(refs, physical_sats)
       |> Enum.map(&rust_sat_term(epoch, &1))
 
-    {references, nonref}
+    {references, nonref, rust_epoch_velocity(epoch), Map.get(epoch, :prediction_dt_s, 0.0)}
+  end
+
+  defp rust_epoch_velocity(epoch) do
+    case Map.get(epoch, :baseline_velocity_m_s) do
+      {vx, vy, vz} when is_number(vx) and is_number(vy) and is_number(vz) ->
+        {vx / 1.0, vy / 1.0, vz / 1.0}
+
+      [vx, vy, vz] when is_number(vx) and is_number(vy) and is_number(vz) ->
+        {vx / 1.0, vy / 1.0, vz / 1.0}
+
+      _other ->
+        nil
+    end
   end
 
   defp rust_sat_term(epoch, sat) do
@@ -4447,7 +4504,34 @@ defmodule Orbis.GNSS.RTK do
       solve_opts.max_iterations,
       filter_opts.process_noise_baseline_sigma_m,
       integer_opts.ratio_threshold,
-      float_only_systems
+      {
+        float_only_systems,
+        rust_innovation_screen_sigma(filter_opts.innovation_screen),
+        filter_opts.innovation_screen.min_rows
+      }
+    }
+  end
+
+  defp rust_innovation_screen_sigma(%{enabled?: true, threshold_sigma: threshold}), do: threshold
+  defp rust_innovation_screen_sigma(_screen), do: 0.0
+
+  defp rust_innovation_screen_meta(nil), do: nil
+
+  defp rust_innovation_screen_meta(
+         {threshold, min_rows, input_rows, accepted_rows, rejected_rows, rejected_code_rows,
+          {rejected_phase_rows, max_normalized, max_rejected_normalized, coasted?}}
+       ) do
+    %{
+      threshold_sigma: threshold,
+      min_rows: min_rows,
+      input_rows: input_rows,
+      accepted_rows: accepted_rows,
+      rejected_rows: rejected_rows,
+      rejected_code_rows: rejected_code_rows,
+      rejected_phase_rows: rejected_phase_rows,
+      max_abs_normalized_innovation: max_normalized,
+      max_rejected_abs_normalized_innovation: max_rejected_normalized,
+      coasted?: coasted?
     }
   end
 

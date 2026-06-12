@@ -1,15 +1,15 @@
 defmodule Orbis.GNSS.Observables do
   @moduledoc """
   Predict the GNSS observables a receiver at a known ECEF position would see for
-  a satellite, from a precise (SP3) ephemeris source.
+  a satellite, from a precise (SP3) or broadcast ephemeris source.
 
   This is the forward model behind the question "is this measurement physically
   plausible?": given a receiver position, a satellite, and a receive epoch, it
   computes the geometric range, the line-of-sight range rate, the L1 Doppler,
   the topocentric azimuth/elevation, the satellite clock offset, and the signal
-  transmit time. It reads satellite states only from `Orbis.GNSS.SP3.position/3` and
-  uses standard textbook GNSS geometry; it never solves the inverse (positioning)
-  problem.
+  transmit time. It reads satellite states from `Orbis.GNSS.SP3.position/3` or
+  `Orbis.GNSS.Broadcast.position/3` and uses standard textbook GNSS geometry; it
+  never solves the inverse (positioning) problem.
 
   ## Algorithm (standard GNSS geometry)
 
@@ -61,9 +61,9 @@ defmodule Orbis.GNSS.Observables do
       }
   """
 
+  alias Orbis.GNSS.{Broadcast, SP3}
   alias Orbis.GNSS.Core.Constants
   alias Orbis.GNSS.Core.Types
-  alias Orbis.GNSS.SP3
 
   # Central finite-difference half-step for the satellite velocity, seconds.
   @fd_half_s 0.5
@@ -86,7 +86,7 @@ defmodule Orbis.GNSS.Observables do
 
   `receiver_ecef` is the static receiver position in ITRF/ECEF metres, given as
   `{x_m, y_m, z_m}` or `%{x_m: _, y_m: _, z_m: _}`. `epoch` is the receive epoch,
-  a `NaiveDateTime` (interpreted in the SP3 file's own time scale).
+  a `NaiveDateTime` (interpreted in the ephemeris source's own time scale).
 
   ## Options
 
@@ -97,26 +97,37 @@ defmodule Orbis.GNSS.Observables do
     * `:sagnac` - apply the Sagnac / Earth-rotation correction, default `true`.
 
   Returns `{:ok, observables}`, `{:error, :invalid_receiver}` for a malformed
-  receiver position, or propagates any `Orbis.GNSS.SP3.position/3` error (e.g. an
-  unknown satellite or a malformed satellite token) verbatim as
+  receiver position, or propagates any ephemeris position error (e.g. an unknown
+  satellite or a malformed satellite token) verbatim as
   `{:error, reason}`. Never raises.
 
   Note that `Orbis.GNSS.SP3.position/3` extrapolates its spline rather than reporting
   a coverage error, so an epoch outside the file's span does not yield a tagged
   error here; it produces an obviously non-physical geometry instead.
   """
-  @spec predict(SP3.t(), String.t(), vec3() | map(), NaiveDateTime.t(), keyword()) ::
+  @spec predict(SP3.t() | Broadcast.t(), String.t(), vec3() | map(), NaiveDateTime.t(), keyword()) ::
           {:ok, observables()} | {:error, term()}
-  def predict(%SP3{} = sp3, satellite_id, receiver_ecef, %NaiveDateTime{} = epoch, opts \\ [])
+  def predict(source, satellite_id, receiver_ecef, epoch, opts \\ [])
+
+  def predict(%SP3{} = source, satellite_id, receiver_ecef, %NaiveDateTime{} = epoch, opts)
       when is_binary(satellite_id) do
+    do_predict(source, satellite_id, receiver_ecef, epoch, opts)
+  end
+
+  def predict(%Broadcast{} = source, satellite_id, receiver_ecef, %NaiveDateTime{} = epoch, opts)
+      when is_binary(satellite_id) do
+    do_predict(source, satellite_id, receiver_ecef, epoch, opts)
+  end
+
+  defp do_predict(source, satellite_id, receiver_ecef, epoch, opts) do
     carrier_hz = Keyword.get(opts, :carrier_hz, Constants.gps_l1_hz())
     light_time? = Keyword.get(opts, :light_time, true)
     sagnac? = Keyword.get(opts, :sagnac, true)
 
     with {:ok, {rx, ry, rz}} <- Types.normalize_ecef(receiver_ecef),
          {:ok, t_tx, tau, state, r_sat_rot} <-
-           solve_transmit_time(sp3, satellite_id, {rx, ry, rz}, epoch, light_time?, sagnac?),
-         {:ok, v_sat} <- sat_velocity(sp3, satellite_id, t_tx) do
+           solve_transmit_time(source, satellite_id, {rx, ry, rz}, epoch, light_time?, sagnac?),
+         {:ok, v_sat} <- sat_velocity(source, satellite_id, t_tx) do
       {sxr, syr, szr} = r_sat_rot
       dx = sxr - rx
       dy = syr - ry
@@ -171,26 +182,26 @@ defmodule Orbis.GNSS.Observables do
 
   # --- light-time fixed point ----------------------------------------------
 
-  defp solve_transmit_time(sp3, sat_id, _receiver, epoch, false, sagnac?) do
+  defp solve_transmit_time(source, sat_id, _receiver, epoch, false, sagnac?) do
     # No light-time correction: evaluate the satellite at the receive epoch.
     # tau = 0, so the Sagnac rotation (omega_e * tau) is identity even when
     # :sagnac is true.
-    with {:ok, state} <- SP3.position(sp3, sat_id, epoch) do
+    with {:ok, state} <- source_position(source, sat_id, epoch) do
       r_sat_rot = sagnac_rotate({state.x_m, state.y_m, state.z_m}, 0.0, sagnac?)
       {:ok, epoch, 0.0, state, r_sat_rot}
     end
   end
 
-  defp solve_transmit_time(sp3, sat_id, receiver, epoch, true, sagnac?) do
-    iterate_transmit_time(sp3, sat_id, receiver, epoch, sagnac?, 0.0, 3)
+  defp solve_transmit_time(source, sat_id, receiver, epoch, true, sagnac?) do
+    iterate_transmit_time(source, sat_id, receiver, epoch, sagnac?, 0.0, 3)
   end
 
   # Fixed-point iteration on tau = range / c. Starting from tau = 0 (t_tx =
   # t_rx), 2-3 iterations converge to sub-millimetre for a coarse receiver.
-  defp iterate_transmit_time(sp3, sat_id, receiver, epoch, sagnac?, tau, iters_left) do
+  defp iterate_transmit_time(source, sat_id, receiver, epoch, sagnac?, tau, iters_left) do
     t_tx = NaiveDateTime.add(epoch, -round(tau * 1_000_000), :microsecond)
 
-    with {:ok, state} <- SP3.position(sp3, sat_id, t_tx) do
+    with {:ok, state} <- source_position(source, sat_id, t_tx) do
       r_sat_rot = sagnac_rotate({state.x_m, state.y_m, state.z_m}, tau, sagnac?)
       {sxr, syr, szr} = r_sat_rot
       {rx, ry, rz} = receiver
@@ -203,17 +214,17 @@ defmodule Orbis.GNSS.Observables do
       if iters_left <= 1 do
         # Recompute the satellite state and rotation at the converged tau so the
         # returned position, clock, and t_tx are all consistent with new_tau.
-        finalize_transmit_time(sp3, sat_id, receiver, epoch, sagnac?, new_tau)
+        finalize_transmit_time(source, sat_id, receiver, epoch, sagnac?, new_tau)
       else
-        iterate_transmit_time(sp3, sat_id, receiver, epoch, sagnac?, new_tau, iters_left - 1)
+        iterate_transmit_time(source, sat_id, receiver, epoch, sagnac?, new_tau, iters_left - 1)
       end
     end
   end
 
-  defp finalize_transmit_time(sp3, sat_id, _receiver, epoch, sagnac?, tau) do
+  defp finalize_transmit_time(source, sat_id, _receiver, epoch, sagnac?, tau) do
     t_tx = NaiveDateTime.add(epoch, -round(tau * 1_000_000), :microsecond)
 
-    with {:ok, state} <- SP3.position(sp3, sat_id, t_tx) do
+    with {:ok, state} <- source_position(source, sat_id, t_tx) do
       r_sat_rot = sagnac_rotate({state.x_m, state.y_m, state.z_m}, tau, sagnac?)
       {:ok, t_tx, tau, state, r_sat_rot}
     end
@@ -236,18 +247,23 @@ defmodule Orbis.GNSS.Observables do
 
   # --- satellite velocity (central finite difference) ----------------------
 
-  defp sat_velocity(sp3, sat_id, t_tx) do
+  defp sat_velocity(source, sat_id, t_tx) do
     half_us = round(@fd_half_s * 1_000_000)
     t_plus = NaiveDateTime.add(t_tx, half_us, :microsecond)
     t_minus = NaiveDateTime.add(t_tx, -half_us, :microsecond)
 
-    with {:ok, sp} <- SP3.position(sp3, sat_id, t_plus),
-         {:ok, sm} <- SP3.position(sp3, sat_id, t_minus) do
+    with {:ok, sp} <- source_position(source, sat_id, t_plus),
+         {:ok, sm} <- source_position(source, sat_id, t_minus) do
       denom = 2.0 * @fd_half_s
 
       {:ok, {(sp.x_m - sm.x_m) / denom, (sp.y_m - sm.y_m) / denom, (sp.z_m - sm.z_m) / denom}}
     end
   end
+
+  defp source_position(%SP3{} = sp3, sat_id, epoch), do: SP3.position(sp3, sat_id, epoch)
+
+  defp source_position(%Broadcast{} = broadcast, sat_id, epoch),
+    do: Broadcast.position(broadcast, sat_id, epoch)
 
   # --- topocentric ENU az/el -----------------------------------------------
 

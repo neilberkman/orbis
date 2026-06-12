@@ -5,6 +5,7 @@ defmodule RoverMeasurement202606 do
   alias Orbis.GNSS.Positioning
   alias Orbis.GNSS.RINEX.Observations
   alias Orbis.GNSS.RTK
+  alias Orbis.GNSS.Velocity
   alias Orbis.NIF
 
   @c_m_s 299_792_458.0
@@ -19,11 +20,17 @@ defmodule RoverMeasurement202606 do
   @systems ["G", "R", "E", "C"]
   @default_work "/tmp/gsdc-work"
   @default_results "/tmp/rover-measurement-2026-06-results.json"
+  @d1_default_results "/tmp/d1-doppler-dynamics-2026-06-results.json"
   @max_segment_epochs 60
   @comparison_segment_epochs 1
   @sanity_code_residual_threshold_m 1_000.0
   @divergence_threshold_m 1_000.0
   @rtk_filter_state_version 3
+  @d1_sigmas_m [0.5, 2.0, 5.0]
+  @d1_screen_sigma 5.0
+  @d1_screen_min_rows 8
+  @memoryless_bar_m 9.533
+  @demo5_bar_m 4.007
 
   @oracle_fixtures [
     "gsdc_2021_08_04_sjc1_pixel5_p222_demo5_rtklib_oracle.json",
@@ -82,7 +89,7 @@ defmodule RoverMeasurement202606 do
   def main(args) do
     {opts, _argv, invalid} =
       OptionParser.parse(args,
-        strict: [work: :string, results: :string, report: :string],
+        strict: [work: :string, results: :string, report: :string, d1: :boolean],
         aliases: [w: :work, r: :results]
       )
 
@@ -90,6 +97,14 @@ defmodule RoverMeasurement202606 do
       raise ArgumentError, "invalid arguments: #{inspect(invalid)}"
     end
 
+    if Keyword.get(opts, :d1, false) do
+      main_d1(opts)
+    else
+      main_measurement(opts)
+    end
+  end
+
+  defp main_measurement(opts) do
     generator_dir = __DIR__
     fixture_dir = Path.expand("..", generator_dir)
     work = Keyword.get(opts, :work, @default_work)
@@ -120,6 +135,567 @@ defmodule RoverMeasurement202606 do
     IO.puts("wrote #{results_path}")
     IO.puts("wrote #{report_path}")
   end
+
+  defp main_d1(opts) do
+    generator_dir = __DIR__
+    fixture_dir = Path.expand("..", generator_dir)
+    work = Keyword.get(opts, :work, @default_work)
+    results_path = Keyword.get(opts, :results, @d1_default_results)
+
+    report_path =
+      Keyword.get(opts, :report, Path.join(generator_dir, "d1-doppler-dynamics-2026-06.md"))
+
+    arcs =
+      @oracle_fixtures
+      |> Enum.map(&load_arc(fixture_dir, &1, work))
+      |> Enum.map(&measure_d1_arc/1)
+
+    pooled = d1_pooled_summary(arcs)
+
+    result = %{
+      "version" => 1,
+      "generated_at_utc" =>
+        DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601(),
+      "script" => Path.relative_to(__ENV__.file, File.cwd!()),
+      "work_dir" => work,
+      "commits" => d1_commits(),
+      "settings" => %{
+        "process_noise_sigmas_m" => @d1_sigmas_m,
+        "innovation_screen_sigma" => @d1_screen_sigma,
+        "innovation_screen_min_rows" => @d1_screen_min_rows,
+        "memoryless_bar_m" => @memoryless_bar_m,
+        "demo5_bar_m" => @demo5_bar_m,
+        "velocity_source" => "phone GPS D1C Doppler, previous solved epoch velocity",
+        "receiver_position_source" => "broadcast-code SPP per epoch"
+      },
+      "arcs" => Enum.map(arcs, &d1_json_arc/1),
+      "pooled" => pooled
+    }
+
+    result = Map.put(result, "verdict", d1_verdict(pooled))
+
+    File.write!(results_path, Jason.encode!(result, pretty: true))
+    File.write!(report_path, d1_report_markdown(result, results_path))
+
+    IO.puts("wrote #{results_path}")
+    IO.puts("wrote #{report_path}")
+  end
+
+  defp measure_d1_arc(arc) do
+    IO.puts("measuring D1 #{arc.label}")
+    require_files!([arc.rover_path, arc.base_path, arc.nav_path, arc.oracle_path])
+
+    rover_obs = Observations.load!(arc.rover_path)
+    base_obs = load_rinex2_obs!(arc.base_path)
+    nav = Broadcast.load!(arc.nav_path)
+
+    base_arp = base_arp(base_obs)
+    glonass_slots = Observations.glonass_slots(rover_obs)
+    oracle_by_time = Map.new(arc.oracle["per_epoch"], &{&1["time"], &1})
+
+    {epochs, contexts} =
+      build_filter_epochs(nav, rover_obs, base_obs, glonass_slots, oracle_by_time, base_arp)
+
+    if epochs == [] do
+      raise "no usable Orbis epochs for #{arc.label}"
+    end
+
+    coverage = d1_coverage(rover_obs, oracle_by_time)
+    raw_base_static = d1_base_static_velocity(nav, base_obs, base_arp, contexts, 1.0)
+    inverted_base_static = d1_base_static_velocity(nav, base_obs, base_arp, contexts, -1.0)
+    doppler_sign = d1_choose_doppler_sign(raw_base_static, inverted_base_static)
+    doppler_sign_basis = d1_sign_basis(raw_base_static, inverted_base_static)
+
+    IO.puts(
+      "  D1C coverage: #{coverage.d1c_epochs}/#{coverage.matched_phone_epochs} epochs, sign #{d1_sign_label(doppler_sign)} (#{doppler_sign_basis})"
+    )
+
+    rover_velocity =
+      d1_rover_velocity_quality(nav, rover_obs, epochs, contexts, base_arp, doppler_sign)
+
+    base_static = %{
+      doppler_sign: doppler_sign,
+      applied_sign_label: d1_sign_label(doppler_sign),
+      sign_basis: doppler_sign_basis,
+      raw: raw_base_static,
+      inverted: inverted_base_static,
+      applied: if(doppler_sign == -1.0, do: inverted_base_static, else: raw_base_static)
+    }
+
+    segments = segment_epoch_contexts(epochs, contexts, @max_segment_epochs)
+
+    sigma_results =
+      Enum.map(@d1_sigmas_m, fn sigma ->
+        d1_measure_sigma(
+          arc.label,
+          segments,
+          nav,
+          base_arp,
+          glonass_slots,
+          rover_velocity.velocities_by_time,
+          sigma,
+          length(epochs)
+        )
+      end)
+
+    %{
+      input: arc,
+      base_arp: base_arp,
+      built_epoch_count: length(epochs),
+      skipped_oracle_epochs: length(arc.oracle["per_epoch"]) - length(epochs),
+      coverage: coverage,
+      velocity_quality: Map.delete(rover_velocity, :velocities_by_time),
+      base_static: base_static,
+      sigma_results: sigma_results
+    }
+  end
+
+  defp d1_coverage(rover_obs, oracle_by_time) do
+    rover_obs
+    |> Observations.epochs()
+    |> Enum.reduce(
+      %{
+        matched_phone_epochs: 0,
+        d1c_epochs: 0,
+        c1c_observations: 0,
+        d1c_observations: 0
+      },
+      fn entry, acc ->
+        time_key = entry.epoch |> naive_datetime() |> epoch_key()
+
+        if Map.has_key?(oracle_by_time, time_key) do
+          {:ok, values} =
+            Observations.values(rover_obs, entry.index, codes: %{"G" => ["C1C", "D1C"]})
+
+          {c1c_count, d1c_count} = d1_gps_code_counts(values)
+
+          %{
+            acc
+            | matched_phone_epochs: acc.matched_phone_epochs + 1,
+              d1c_epochs: acc.d1c_epochs + if(d1c_count > 0, do: 1, else: 0),
+              c1c_observations: acc.c1c_observations + c1c_count,
+              d1c_observations: acc.d1c_observations + d1c_count
+          }
+        else
+          acc
+        end
+      end
+    )
+    |> then(fn acc ->
+      Map.merge(acc, %{
+        d1c_epoch_coverage: ratio(acc.d1c_epochs, acc.matched_phone_epochs),
+        d1c_observation_coverage: ratio(acc.d1c_observations, acc.c1c_observations),
+        phone_carries_d1c?: acc.d1c_observations > 0
+      })
+    end)
+  end
+
+  defp d1_gps_code_counts(values) do
+    Enum.reduce(values, {0, 0}, fn {sat, observations}, {c1c_acc, d1c_acc} ->
+      if String.first(sat) == "G" do
+        by_code = Map.new(observations, &{&1.code, &1.value})
+        c1c = if is_number(by_code["C1C"]), do: 1, else: 0
+        d1c = if c1c == 1 and is_number(by_code["D1C"]), do: 1, else: 0
+        {c1c_acc + c1c, d1c_acc + d1c}
+      else
+        {c1c_acc, d1c_acc}
+      end
+    end)
+  end
+
+  defp d1_rover_velocity_quality(nav, rover_obs, epochs, contexts, base_arp, doppler_sign) do
+    index_by_time = rover_epoch_index_by_time(rover_obs)
+    truth_by_time = d1_truth_velocities(contexts)
+
+    {entries, counters} =
+      contexts
+      |> Enum.zip(epochs)
+      |> Enum.reduce({[], %{eligible: 0, spp: 0, failed: 0}}, fn {context, epoch},
+                                                                 {entries, counters} ->
+        doppler_observations =
+          rover_obs
+          |> d1_rover_doppler_observations(Map.fetch!(index_by_time, context.time), doppler_sign)
+
+        eligible? = length(doppler_observations) >= 4
+        counters = if eligible?, do: %{counters | eligible: counters.eligible + 1}, else: counters
+
+        if eligible? do
+          case spp_rover_position(nav, epoch, base_arp) do
+            nil ->
+              {entries, %{counters | failed: counters.failed + 1}}
+
+            receiver_position ->
+              counters = %{counters | spp: counters.spp + 1}
+
+              case Velocity.solve(
+                     nav,
+                     doppler_observations,
+                     context.epoch,
+                     ecef_to_tuple(receiver_position),
+                     observable: :doppler,
+                     carrier_hz: @gps_l1_hz
+                   ) do
+                {:ok, sol} ->
+                  velocity = ecef_to_tuple(sol.velocity_m_s)
+                  truth_velocity = Map.fetch!(truth_by_time, context.time)
+                  error = norm3(sub3(velocity, truth_velocity))
+
+                  entry = %{
+                    time: context.time,
+                    velocity_m_s: velocity,
+                    speed_m_s: sol.speed_m_s,
+                    truth_velocity_m_s: truth_velocity,
+                    truth_speed_m_s: norm3(truth_velocity),
+                    error_m_s: error,
+                    used_sats: sol.used_sats,
+                    n_satellites: sol.n_satellites
+                  }
+
+                  {[entry | entries], counters}
+
+                {:error, _reason} ->
+                  {entries, %{counters | failed: counters.failed + 1}}
+              end
+          end
+        else
+          {entries, counters}
+        end
+      end)
+
+    entries = Enum.reverse(entries)
+    errors = Enum.map(entries, & &1.error_m_s)
+    speeds = Enum.map(entries, & &1.speed_m_s)
+    truth_speeds = Enum.map(entries, & &1.truth_speed_m_s)
+
+    %{
+      doppler_sign: doppler_sign,
+      applied_sign_label: d1_sign_label(doppler_sign),
+      eligible_epochs: counters.eligible,
+      spp_epochs: counters.spp,
+      solved_epochs: length(entries),
+      failed_epochs: counters.failed,
+      median_error_m_s: median(errors),
+      p95_error_m_s: percentile(errors, 0.95),
+      median_speed_m_s: median(speeds),
+      p95_speed_m_s: percentile(speeds, 0.95),
+      median_truth_speed_m_s: median(truth_speeds),
+      p95_truth_speed_m_s: percentile(truth_speeds, 0.95),
+      velocities_by_time: Map.new(entries, &{&1.time, &1.velocity_m_s}),
+      samples: entries
+    }
+  end
+
+  defp rover_epoch_index_by_time(rover_obs) do
+    rover_obs
+    |> Observations.epochs()
+    |> Map.new(fn entry -> {entry.epoch |> naive_datetime() |> epoch_key(), entry.index} end)
+  end
+
+  defp d1_rover_doppler_observations(rover_obs, index, doppler_sign) do
+    {:ok, values} = Observations.values(rover_obs, index, codes: %{"G" => ["D1C"]})
+
+    values
+    |> Enum.flat_map(fn {sat, observations} ->
+      case d1_observation_value(observations, "D1C") do
+        value when is_number(value) -> [{sat, value * doppler_sign}]
+        _other -> []
+      end
+    end)
+    |> Enum.sort_by(&elem(&1, 0))
+  end
+
+  defp d1_observation_value(observations, code) when is_list(observations) do
+    observations
+    |> Enum.find_value(fn obs ->
+      if obs.code == code and is_number(obs.value), do: obs.value
+    end)
+  end
+
+  defp d1_truth_velocities(contexts) do
+    contexts
+    |> Enum.with_index()
+    |> Map.new(fn {context, index} ->
+      {context.time, d1_truth_velocity(contexts, index)}
+    end)
+  end
+
+  defp d1_truth_velocity(contexts, index) do
+    count = length(contexts)
+
+    {left_index, right_index} =
+      cond do
+        count < 2 -> {index, index}
+        index == 0 -> {0, 1}
+        index == count - 1 -> {count - 2, count - 1}
+        true -> {index - 1, index + 1}
+      end
+
+    left = Enum.at(contexts, left_index)
+    right = Enum.at(contexts, right_index)
+    dt = NaiveDateTime.diff(right.epoch, left.epoch, :microsecond) / 1_000_000.0
+
+    if dt > 0.0 do
+      scale3(sub3(truth_tuple(right), truth_tuple(left)), 1.0 / dt)
+    else
+      {0.0, 0.0, 0.0}
+    end
+  end
+
+  defp d1_base_static_velocity(nav, base_obs, base_arp, contexts, doppler_sign) do
+    first_us = contexts |> hd() |> Map.fetch!(:epoch) |> time_us()
+    last_us = contexts |> List.last() |> Map.fetch!(:epoch) |> time_us()
+    pad_us = 30 * 1_000_000
+    doppler_codes = Enum.filter(base_obs.obs_types, &(&1 in ["D1", "D1C"]))
+
+    entries =
+      base_obs.epochs
+      |> Enum.filter(fn epoch ->
+        epoch_us = time_us(epoch.epoch)
+        epoch_us >= first_us - pad_us and epoch_us <= last_us + pad_us
+      end)
+      |> Enum.flat_map(fn epoch ->
+        observations = d1_base_doppler_observations(epoch, doppler_sign)
+
+        if length(observations) >= 4 do
+          case Velocity.solve(nav, observations, epoch.epoch, base_arp,
+                 observable: :doppler,
+                 carrier_hz: @gps_l1_hz
+               ) do
+            {:ok, sol} ->
+              [
+                %{
+                  time: epoch_key(epoch.epoch),
+                  speed_m_s: sol.speed_m_s,
+                  velocity_m_s: sol.velocity_m_s,
+                  used_sats: sol.used_sats,
+                  n_satellites: sol.n_satellites
+                }
+              ]
+
+            {:error, _reason} ->
+              []
+          end
+        else
+          []
+        end
+      end)
+
+    speeds = Enum.map(entries, & &1.speed_m_s)
+    status = d1_base_static_status(doppler_codes, entries)
+
+    %{
+      doppler_sign: doppler_sign,
+      sign_label: d1_sign_label(doppler_sign),
+      status: status,
+      doppler_codes: doppler_codes,
+      solved_epochs: length(entries),
+      median_speed_m_s: median(speeds),
+      p95_speed_m_s: percentile(speeds, 0.95),
+      max_speed_m_s: max_or_nil(speeds),
+      samples: entries
+    }
+  end
+
+  defp d1_base_doppler_observations(epoch, doppler_sign) do
+    epoch.observations
+    |> Enum.flat_map(fn {sat, values} ->
+      if String.first(sat) == "G" do
+        case first_rinex2_value(values, ["D1", "D1C"]) do
+          value when is_number(value) -> [{sat, value * doppler_sign}]
+          _other -> []
+        end
+      else
+        []
+      end
+    end)
+    |> Enum.sort_by(&elem(&1, 0))
+  end
+
+  defp first_rinex2_value(values, codes) do
+    Enum.find_value(codes, fn code ->
+      case Map.get(values, code) do
+        %{value: value} when is_number(value) -> value
+        _other -> nil
+      end
+    end)
+  end
+
+  defp d1_base_static_status([], _entries), do: "unavailable_no_doppler_observables"
+  defp d1_base_static_status(_codes, []), do: "unavailable_no_solutions"
+  defp d1_base_static_status(_codes, _entries), do: "ok"
+
+  defp d1_choose_doppler_sign(raw, inverted) do
+    raw_score = raw.median_speed_m_s || 1.0e99
+    inverted_score = inverted.median_speed_m_s || 1.0e99
+
+    if inverted_score < raw_score, do: -1.0, else: 1.0
+  end
+
+  defp d1_sign_basis(raw, inverted) do
+    if raw.solved_epochs > 0 or inverted.solved_epochs > 0 do
+      "base_static_speed"
+    else
+      "raw_rinex_default_no_base_doppler"
+    end
+  end
+
+  defp d1_sign_label(1.0), do: "raw"
+  defp d1_sign_label(-1.0), do: "inverted"
+
+  defp d1_measure_sigma(
+         arc_label,
+         segments,
+         nav,
+         base_arp,
+         glonass_slots,
+         velocity_by_time,
+         sigma,
+         built_epoch_count
+       ) do
+    IO.puts("  sigma #{fmt(sigma)} m")
+
+    {per_epoch, segment_reports} =
+      d1_solve_segments(segments, nav, base_arp, glonass_slots, velocity_by_time, sigma)
+
+    summary = summarize_measurements(per_epoch)
+    final_100_median = d1_final100_median(per_epoch)
+
+    %{
+      arc: arc_label,
+      process_noise_baseline_sigma_m: sigma,
+      built_epochs: built_epoch_count,
+      solved_epochs: length(per_epoch),
+      complete?: length(per_epoch) == built_epoch_count,
+      segment_count: length(segment_reports),
+      summary: summary,
+      final_100_median_m: final_100_median,
+      screen: d1_screen_summary(per_epoch),
+      clears_memoryless_bar?: d1_clears?(summary.error_3d_median_m, @memoryless_bar_m),
+      clears_demo5_bar?: d1_clears?(summary.error_3d_median_m, @demo5_bar_m),
+      segment_reports: segment_reports,
+      per_epoch: per_epoch
+    }
+  end
+
+  defp d1_solve_segments(segments, nav, base_arp, glonass_slots, velocity_by_time, sigma) do
+    segments
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {segment, index} ->
+      d1_solve_segment(segment, index, nav, base_arp, glonass_slots, velocity_by_time, sigma)
+    end)
+    |> Enum.unzip()
+    |> case do
+      {measurements, reports} -> {List.flatten(measurements), reports}
+    end
+  end
+
+  defp d1_solve_segment(segment, index, nav, base_arp, glonass_slots, velocity_by_time, sigma) do
+    segment = d1_attach_segment_velocity(segment, velocity_by_time)
+    epochs = Enum.map(segment, &elem(&1, 0))
+    contexts = Enum.map(segment, &elem(&1, 1))
+    initial_baseline = spp_initial_baseline!(nav, epochs, base_arp)
+
+    opts =
+      initial_baseline
+      |> filter_opts(epochs, glonass_slots)
+      |> Keyword.put(:process_noise_baseline_sigma_m, sigma)
+      |> Keyword.put(:innovation_screen_sigma, @d1_screen_sigma)
+      |> Keyword.put(:innovation_screen_min_rows, @d1_screen_min_rows)
+
+    case RTK.solve_filter_baseline_epochs(base_arp, epochs, opts) do
+      {:ok, sol} ->
+        measurements =
+          sol.epochs
+          |> Enum.zip(contexts)
+          |> Enum.map(fn {result, context} ->
+            result
+            |> epoch_measurement(context, base_arp)
+            |> Map.put(:innovation_screen, Map.get(result, :innovation_screen))
+          end)
+
+        report = %{
+          index: index,
+          epochs: length(epochs),
+          first_time: hd(contexts).time,
+          last_time: List.last(contexts).time,
+          initial_baseline_m: initial_baseline,
+          screen: d1_screen_summary(measurements),
+          metadata: sol.metadata
+        }
+
+        [{measurements, report}]
+
+      {:error, reason} when length(segment) > 1 ->
+        if System.get_env("ROVER_MEAS_DEBUG_ERROR") == "1" do
+          raise "D1 segment #{index + 1} failed: #{inspect(reason)}"
+        end
+
+        {left, right} = Enum.split(segment, div(length(segment), 2))
+
+        d1_solve_segment(left, index, nav, base_arp, glonass_slots, velocity_by_time, sigma) ++
+          d1_solve_segment(right, index, nav, base_arp, glonass_slots, velocity_by_time, sigma)
+
+      {:error, reason} ->
+        context = hd(contexts)
+        IO.puts("skipping D1 unsolved epoch #{context.time}: #{inspect(reason)}")
+        []
+    end
+  end
+
+  defp d1_attach_segment_velocity(segment, velocity_by_time) do
+    {pairs, _previous_context} =
+      Enum.map_reduce(segment, nil, fn {epoch, context}, previous_context ->
+        {velocity, dt_s} =
+          if previous_context do
+            velocity = Map.get(velocity_by_time, previous_context.time)
+
+            if velocity do
+              dt_s =
+                NaiveDateTime.diff(context.epoch, previous_context.epoch, :microsecond) /
+                  1_000_000.0
+
+              {velocity, dt_s}
+            else
+              {nil, 0.0}
+            end
+          else
+            {nil, 0.0}
+          end
+
+        epoch =
+          epoch
+          |> Map.put(:baseline_velocity_m_s, velocity)
+          |> Map.put(:prediction_dt_s, dt_s)
+
+        {{epoch, context}, context}
+      end)
+
+    pairs
+  end
+
+  defp d1_final100_median(per_epoch) do
+    per_epoch
+    |> Enum.take(-100)
+    |> Enum.map(& &1.error_3d_m)
+    |> median()
+  end
+
+  defp d1_screen_summary(per_epoch) do
+    screens = per_epoch |> Enum.map(&Map.get(&1, :innovation_screen)) |> Enum.reject(&is_nil/1)
+    rejected = Enum.map(screens, & &1.rejected_rows)
+
+    %{
+      epochs_with_screen: length(screens),
+      coasted_epochs: Enum.count(screens, & &1.coasted?),
+      coasted_fraction: ratio(Enum.count(screens, & &1.coasted?), max(length(screens), 1)),
+      rejected_rows_median: median(rejected),
+      rejected_rows_p95: percentile(rejected, 0.95),
+      rejected_rows_max: max_or_nil(rejected)
+    }
+  end
+
+  defp d1_clears?(nil, _bar), do: false
+  defp d1_clears?(value, bar), do: value <= bar
 
   defp load_arc(fixture_dir, fixture, work) do
     oracle_path = Path.join(fixture_dir, fixture)
@@ -668,7 +1244,7 @@ defmodule RoverMeasurement202606 do
              Keyword.fetch!(opts, :max_iterations),
              Keyword.fetch!(opts, :process_noise_baseline_sigma_m),
              Keyword.fetch!(opts, :integer_ratio_threshold),
-             Keyword.fetch!(opts, :float_only_systems)
+             {Keyword.fetch!(opts, :float_only_systems), 0.0, 8}
            }
          ) do
       {:ok, updates} ->
@@ -831,7 +1407,7 @@ defmodule RoverMeasurement202606 do
       |> Enum.filter(&MapSet.member?(available, &1))
       |> Enum.map(&diagnostic_rust_sat(epoch, &1))
 
-    {references, nonrefs}
+    {references, nonrefs, nil, 0.0}
   end
 
   defp diagnostic_rust_sat(epoch, sat) do
@@ -852,7 +1428,7 @@ defmodule RoverMeasurement202606 do
   defp reference_satellite_id(_epoch, sat), do: sat
 
   defp diagnostic_epoch(context, epoch, update, result, refs, base_arp, previous) do
-    {state_term, reported_baseline, ratio, fixed?, newly_fixed, fixed_ids} = update
+    {state_term, reported_baseline, ratio, fixed?, newly_fixed, fixed_ids, _screen} = update
 
     {{@rtk_filter_state_version, header_refs, sd_ids, _ambiguity_sigma_m, state_epoch_count},
      carried_baseline, _sd_ambiguities, information_flat, fixed_cycles, _fixed_m} = state_term
@@ -1834,10 +2410,357 @@ defmodule RoverMeasurement202606 do
     Map.new(ledger, fn {cause, values} -> {Atom.to_string(cause), stringify_keys(values)} end)
   end
 
+  defp d1_json_arc(arc) do
+    %{
+      "label" => arc.input.label,
+      "drive" => arc.input.drive,
+      "fixture" => arc.input.fixture,
+      "inputs" => %{
+        "rover_obs" => arc.input.rover_path,
+        "base_obs" => arc.input.base_path,
+        "nav" => arc.input.nav_path,
+        "oracle" => arc.input.oracle_path
+      },
+      "base_arp_m" => tuple_json(arc.base_arp),
+      "built_epoch_count" => arc.built_epoch_count,
+      "skipped_oracle_epochs" => arc.skipped_oracle_epochs,
+      "coverage" => stringify_keys(arc.coverage),
+      "velocity_quality" => stringify_keys(arc.velocity_quality),
+      "base_static" => stringify_keys(arc.base_static),
+      "sigma_results" => Enum.map(arc.sigma_results, &d1_sigma_json/1)
+    }
+  end
+
+  defp d1_sigma_json(result) do
+    %{
+      "arc" => result.arc,
+      "process_noise_baseline_sigma_m" => result.process_noise_baseline_sigma_m,
+      "built_epochs" => result.built_epochs,
+      "solved_epochs" => result.solved_epochs,
+      "complete" => result.complete?,
+      "segment_count" => result.segment_count,
+      "summary" => stringify_keys(result.summary),
+      "final_100_median_m" => result.final_100_median_m,
+      "screen" => stringify_keys(result.screen),
+      "clears_memoryless_bar" => result.clears_memoryless_bar?,
+      "clears_demo5_bar" => result.clears_demo5_bar?,
+      "segment_reports" => stringify_keys(result.segment_reports),
+      "per_epoch" => Enum.map(result.per_epoch, &d1_epoch_json/1)
+    }
+  end
+
+  defp d1_epoch_json(epoch) do
+    %{
+      "time" => epoch.time,
+      "truth_time_utc" => epoch.truth_time_utc,
+      "error_3d_m" => epoch.error_3d_m,
+      "horizontal_error_m" => epoch.horizontal_error_m,
+      "vertical_error_m" => epoch.vertical_error_m,
+      "error_enu_m" => stringify_keys(epoch.error_enu_m),
+      "integer_status" => Atom.to_string(epoch.integer_status),
+      "ratio" => epoch.ratio,
+      "satellites" => epoch.satellites,
+      "pre_mask_satellites" => epoch.pre_mask_satellites,
+      "fixed_ambiguities" => epoch.fixed_ambiguities,
+      "newly_fixed_ambiguities" => epoch.newly_fixed_ambiguities,
+      "innovation_screen" => stringify_keys(Map.get(epoch, :innovation_screen)),
+      "residuals" => stringify_keys(epoch.residuals)
+    }
+  end
+
+  defp d1_pooled_summary(arcs) do
+    %{
+      "sigmas" => Enum.map(@d1_sigmas_m, &d1_pooled_sigma(arcs, &1))
+    }
+  end
+
+  defp d1_pooled_sigma(arcs, sigma) do
+    results = Enum.map(arcs, &d1_arc_sigma_result(&1, sigma))
+    per_epoch = Enum.flat_map(results, & &1.per_epoch)
+    summary = summarize_measurements(per_epoch)
+
+    final_100_errors =
+      results
+      |> Enum.flat_map(fn result ->
+        result.per_epoch
+        |> Enum.take(-100)
+        |> Enum.map(& &1.error_3d_m)
+      end)
+
+    %{
+      "process_noise_baseline_sigma_m" => sigma,
+      "arc_count" => length(results),
+      "complete_arcs" => Enum.count(results, & &1.complete?),
+      "built_epochs" => Enum.map(results, & &1.built_epochs) |> Enum.sum(),
+      "solved_epochs" => length(per_epoch),
+      "summary" => stringify_keys(summary),
+      "final_100_median_m" => median(final_100_errors),
+      "screen" => stringify_keys(d1_screen_summary(per_epoch)),
+      "clears_memoryless_bar" => d1_clears?(summary.error_3d_median_m, @memoryless_bar_m),
+      "clears_demo5_bar" => d1_clears?(summary.error_3d_median_m, @demo5_bar_m)
+    }
+  end
+
+  defp d1_arc_sigma_result(arc, sigma) do
+    Enum.find(arc.sigma_results, &(&1.process_noise_baseline_sigma_m == sigma))
+  end
+
+  defp d1_verdict(pooled) do
+    sigmas = pooled["sigmas"]
+
+    best =
+      Enum.min_by(sigmas, fn row ->
+        row["summary"]["error_3d_median_m"] || 1.0e99
+      end)
+
+    complete_best =
+      sigmas
+      |> Enum.filter(&(&1["complete_arcs"] == &1["arc_count"]))
+      |> case do
+        [] ->
+          nil
+
+        rows ->
+          Enum.min_by(rows, fn row -> row["summary"]["error_3d_median_m"] || 1.0e99 end)
+      end
+
+    clears_memoryless =
+      Enum.any?(sigmas, fn row ->
+        row["complete_arcs"] == row["arc_count"] and
+          d1_clears?(row["summary"]["error_3d_median_m"], @memoryless_bar_m)
+      end)
+
+    clears_demo5 =
+      Enum.any?(sigmas, fn row ->
+        row["complete_arcs"] == row["arc_count"] and
+          d1_clears?(row["summary"]["error_3d_median_m"], @demo5_bar_m)
+      end)
+
+    %{
+      "best_sigma_m" => best["process_noise_baseline_sigma_m"],
+      "best_pooled_median_m" => best["summary"]["error_3d_median_m"],
+      "best_complete_sigma_m" => complete_best && complete_best["process_noise_baseline_sigma_m"],
+      "best_complete_pooled_median_m" =>
+        complete_best && complete_best["summary"]["error_3d_median_m"],
+      "clears_memoryless_bar" => clears_memoryless,
+      "clears_demo5_bar" => clears_demo5,
+      "verdict" =>
+        cond do
+          clears_demo5 -> "clears_demo5"
+          clears_memoryless -> "clears_memoryless_only"
+          true -> "miss"
+        end
+    }
+  end
+
+  defp d1_commits do
+    %{
+      "orbis" => git_rev(File.cwd!()),
+      "astrodynamics" => git_rev("/tmp/d1-astro")
+    }
+  end
+
+  defp git_rev(path) do
+    case System.cmd("git", ["rev-parse", "HEAD"], cd: path, stderr_to_stdout: true) do
+      {sha, 0} -> String.trim(sha)
+      {_out, _status} -> nil
+    end
+  end
+
   defp option_notes_json do
     Enum.map(@filter_option_notes, fn {name, value, why} ->
       %{"option" => name, "value" => value, "why" => why}
     end)
+  end
+
+  defp d1_report_markdown(result, results_path) do
+    arcs = result["arcs"]
+    pooled = result["pooled"]
+    verdict = result["verdict"]
+    settings = result["settings"]
+    commits = result["commits"]
+
+    [
+      "# D1 Doppler dynamics exploration, June 2026",
+      "",
+      "Generated by `mix run test/fixtures/rtk/generators/rover_measurement_2026_06.exs --d1`.",
+      "Per-run JSON was emitted to `#{results_path}`.",
+      "",
+      "This is a single-sided throwaway exploration on `explore/d1-doppler-dynamics`. It prototypes a Doppler-derived baseline mean prediction between epochs, keeps ambiguity states unchanged, and keeps the C2 kernel hard screen at k=#{fmt(settings["innovation_screen_sigma"])} with min rows #{settings["innovation_screen_min_rows"]}.",
+      "",
+      "## Commits",
+      "",
+      d1_commit_table(commits),
+      "",
+      "## Doppler coverage",
+      "",
+      d1_coverage_table(arcs),
+      "",
+      "Coverage is measured over phone RINEX epochs that match the oracle GPST epoch list. Observation coverage is GPS D1C count paired with GPS C1C divided by GPS C1C count.",
+      "",
+      "## Velocity quality",
+      "",
+      d1_velocity_table(arcs),
+      "",
+      "Rover velocity is solved from phone GPS D1C at each epoch using the broadcast-code SPP position for that same epoch. Truth velocity is a finite difference of the oracle ECEF truth positions. Base rows are static P222 sanity checks over the same time span when base Doppler exists; otherwise the table reports the missing base Doppler explicitly and the sign basis falls back to the raw RINEX convention.",
+      "",
+      "## Sigma sweep",
+      "",
+      d1_sigma_table(arcs),
+      "",
+      "## Pooled sweep",
+      "",
+      d1_pooled_table(pooled),
+      "",
+      "## Verdict",
+      "",
+      d1_verdict_text(verdict)
+    ]
+    |> Enum.join("\n")
+  end
+
+  defp d1_commit_table(commits) do
+    [
+      "| Repo | Commit |",
+      "|---|---|",
+      table_row(["orbis", "`#{commits["orbis"] || "unknown"}`"]),
+      table_row(["astrodynamics", "`#{commits["astrodynamics"] || "unknown"}`"])
+    ]
+    |> Enum.join("\n")
+  end
+
+  defp d1_coverage_table(arcs) do
+    rows =
+      Enum.map(arcs, fn arc ->
+        coverage = arc["coverage"]
+
+        [
+          arc["label"],
+          pass_text(coverage["phone_carries_d1c?"]),
+          coverage["matched_phone_epochs"],
+          coverage["d1c_epochs"],
+          fmt_pct(coverage["d1c_epoch_coverage"]),
+          coverage["c1c_observations"],
+          coverage["d1c_observations"],
+          fmt_pct(coverage["d1c_observation_coverage"])
+        ]
+        |> table_row()
+      end)
+
+    Enum.join(
+      [
+        "| Arc | Carries D1C | Matched epochs | D1C epochs | Epoch coverage | GPS C1C obs | GPS D1C obs | Obs coverage |",
+        "|---|---|---:|---:|---:|---:|---:|---:|"
+      ] ++ rows,
+      "\n"
+    )
+  end
+
+  defp d1_velocity_table(arcs) do
+    rows =
+      Enum.map(arcs, fn arc ->
+        velocity = arc["velocity_quality"]
+        base = arc["base_static"]
+
+        [
+          arc["label"],
+          "#{velocity["applied_sign_label"]} (#{base["sign_basis"]})",
+          "#{velocity["solved_epochs"]}/#{velocity["eligible_epochs"]}",
+          fmt(velocity["median_error_m_s"]),
+          fmt(velocity["p95_error_m_s"]),
+          "#{fmt(velocity["median_speed_m_s"])}/#{fmt(velocity["median_truth_speed_m_s"])}",
+          d1_base_static_cell(base["raw"], :median),
+          d1_base_static_cell(base["inverted"], :median),
+          d1_base_static_cell(base["applied"], :median_p95)
+        ]
+        |> table_row()
+      end)
+
+    Enum.join(
+      [
+        "| Arc | Applied sign | Rover solved/eligible | Rover vel err median m/s | Rover vel err p95 m/s | Rover/truth speed med m/s | Base raw speed med m/s | Base inverted speed med m/s | Base applied med/p95 m/s |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|"
+      ] ++ rows,
+      "\n"
+    )
+  end
+
+  defp d1_base_static_cell(%{"status" => "ok"} = row, :median), do: fmt(row["median_speed_m_s"])
+
+  defp d1_base_static_cell(%{"status" => "ok"} = row, :median_p95),
+    do: "#{fmt(row["median_speed_m_s"])}/#{fmt(row["p95_speed_m_s"])}"
+
+  defp d1_base_static_cell(%{"status" => status}, _kind), do: d1_base_static_status_text(status)
+
+  defp d1_base_static_status_text("unavailable_no_doppler_observables"), do: "no D obs"
+  defp d1_base_static_status_text("unavailable_no_solutions"), do: "no solves"
+  defp d1_base_static_status_text(status), do: status
+
+  defp d1_sigma_table(arcs) do
+    rows =
+      arcs
+      |> Enum.flat_map(fn arc ->
+        Enum.map(arc["sigma_results"], fn result ->
+          summary = result["summary"]
+          screen = result["screen"]
+
+          [
+            arc["label"],
+            fmt(result["process_noise_baseline_sigma_m"]),
+            "#{result["solved_epochs"]}/#{result["built_epochs"]}",
+            fmt(summary["error_3d_median_m"]),
+            fmt(summary["error_3d_p95_m"]),
+            fmt(result["final_100_median_m"]),
+            "#{summary["fixed_epochs"]}/#{screen["coasted_epochs"]}",
+            "#{fmt(screen["rejected_rows_median"])}/#{fmt(screen["rejected_rows_p95"])}",
+            pass_text(result["clears_memoryless_bar"]),
+            pass_text(result["clears_demo5_bar"])
+          ]
+          |> table_row()
+        end)
+      end)
+
+    Enum.join(
+      [
+        "| Arc | Sigma m | Solved/built | 3D median m | 3D p95 m | Final-100 median m | Fixed/coasted | Rejected rows med/p95 | <=9.533m | <=4.007m |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---|---|"
+      ] ++ rows,
+      "\n"
+    )
+  end
+
+  defp d1_pooled_table(pooled) do
+    rows =
+      Enum.map(pooled["sigmas"], fn row ->
+        summary = row["summary"]
+        screen = row["screen"]
+
+        [
+          fmt(row["process_noise_baseline_sigma_m"]),
+          "#{row["complete_arcs"]}/#{row["arc_count"]}",
+          "#{row["solved_epochs"]}/#{row["built_epochs"]}",
+          fmt(summary["error_3d_median_m"]),
+          fmt(summary["error_3d_p95_m"]),
+          fmt(row["final_100_median_m"]),
+          "#{screen["coasted_epochs"]}/#{fmt_pct(screen["coasted_fraction"])}",
+          "#{fmt(screen["rejected_rows_median"])}/#{fmt(screen["rejected_rows_p95"])}",
+          pass_text(row["clears_memoryless_bar"]),
+          pass_text(row["clears_demo5_bar"])
+        ]
+        |> table_row()
+      end)
+
+    Enum.join(
+      [
+        "| Sigma m | Complete arcs | Solved/built | Pooled median m | Pooled p95 m | Pooled final-100 median m | Coasted/% | Rejected rows med/p95 | <=9.533m | <=4.007m |",
+        "|---:|---:|---:|---:|---:|---:|---:|---:|---|---|"
+      ] ++ rows,
+      "\n"
+    )
+  end
+
+  defp d1_verdict_text(verdict) do
+    "Verdict: #{verdict["verdict"]}. Best pooled median was #{fmt(verdict["best_pooled_median_m"])} m at sigma #{fmt(verdict["best_sigma_m"])} m. Best complete pooled median was #{fmt(verdict["best_complete_pooled_median_m"])} m at sigma #{fmt(verdict["best_complete_sigma_m"])} m. Memoryless bar (#{fmt(@memoryless_bar_m)} m): #{pass_text(verdict["clears_memoryless_bar"])}. demo5 bar (#{fmt(@demo5_bar_m)} m): #{pass_text(verdict["clears_demo5_bar"])}."
   end
 
   defp report_markdown(result, results_path) do
@@ -2358,6 +3281,9 @@ defmodule RoverMeasurement202606 do
   defp fmt(nil), do: ""
   defp fmt(value) when is_float(value), do: :erlang.float_to_binary(value, decimals: 3)
   defp fmt(value), do: to_string(value)
+
+  defp fmt_pct(nil), do: ""
+  defp fmt_pct(value), do: "#{fmt(value * 100.0)}%"
 end
 
 RoverMeasurement202606.main(System.argv())
