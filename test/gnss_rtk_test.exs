@@ -1,7 +1,7 @@
 defmodule Orbis.GNSS.RTKTest do
   use ExUnit.Case, async: true
 
-  alias Orbis.GNSS.RTK
+  alias Orbis.GNSS.{Antex, RTK}
 
   @base {1_110_000.0, -4_840_000.0, 3_980_000.0}
   @truth_baseline {12.5, -4.25, 2.75}
@@ -581,8 +581,75 @@ defmodule Orbis.GNSS.RTKTest do
                hatch_window_cap: 0
              ) == {:error, {:invalid_option, :hatch_window_cap}}
 
+      assert RTK.solve_float_baseline_epochs(@base, [epoch], receiver_antenna_corrections: :bad) ==
+               {:error, {:invalid_option, :receiver_antenna_corrections}}
+
       assert RTK.solve_float_baseline_epochs(@base, [epoch], phase_sigma: 0.02) ==
                {:error, {:invalid_option, :phase_sigma}}
+    end
+
+    test "float batch applies up-only receiver antenna corrections" do
+      base_pco_up_m = 0.10
+      rover_pco_up_m = 0.05
+      epoch = synthetic_baseline_epoch(@base, @truth_baseline, hd(@sat_positions))
+
+      corrected_epoch =
+        apply_receiver_antenna_corrections_to_epoch(
+          epoch,
+          base_pco_up_m,
+          rover_pco_up_m
+        )
+
+      {:ok, raw_dd} =
+        RTK.double_differences(epoch.base_observations, epoch.rover_observations,
+          reference_satellite_id: "G01"
+        )
+
+      {:ok, corrected_dd} =
+        RTK.double_differences(
+          corrected_epoch.base_observations,
+          corrected_epoch.rover_observations,
+          reference_satellite_id: "G01"
+        )
+
+      by_sat_raw = Map.new(raw_dd.double_differences, &{&1.satellite_id, &1})
+      by_sat_corrected = Map.new(corrected_dd.double_differences, &{&1.satellite_id, &1})
+      sat = "G02"
+      ref = "G01"
+
+      observed_delta =
+        by_sat_raw[sat].code_m - by_sat_corrected[sat].code_m
+
+      expected_delta =
+        receiver_antenna_dd_correction(
+          sat,
+          ref,
+          epoch.satellite_positions_m,
+          base_pco_up_m,
+          rover_pco_up_m
+        )
+
+      # The synthetic code generation uses
+      #   corrected_range = geometric_range - δr·u
+      # so observed double-difference changes by
+      #   (δr·u)_rover,sat - (δr·u)_base,sat - (δr·u)_rover,ref + (δr·u)_base,ref.
+      assert_in_delta observed_delta, expected_delta, 1.0e-6
+
+      assert_in_delta by_sat_raw[sat].phase_m - by_sat_corrected[sat].phase_m,
+                      expected_delta,
+                      1.0e-6
+
+      assert {:ok, sol} =
+               RTK.solve_float_baseline_epochs(
+                 @base,
+                 [corrected_epoch],
+                 reference_satellite_id: "G01",
+                 initial_baseline_m: {-40.0, 35.0, 12.0},
+                 receiver_antenna_corrections:
+                   receiver_antenna_corrections_option(base_pco_up_m, rover_pco_up_m)
+               )
+
+      assert position_error(sol.baseline_m, @truth_baseline) < 2.0e-5
     end
   end
 
@@ -873,6 +940,13 @@ defmodule Orbis.GNSS.RTKTest do
                ambiguity_wavelength_m: @l1_wavelength_m,
                max_residual_exclusions: -1
              ) == {:error, {:invalid_option, :max_residual_exclusions}}
+
+      assert RTK.solve_fixed_baseline_epochs(
+               @base,
+               [epoch],
+               ambiguity_wavelength_m: @l1_wavelength_m,
+               receiver_antenna_corrections: :bad
+             ) == {:error, {:invalid_option, :receiver_antenna_corrections}}
     end
   end
 
@@ -1092,6 +1166,48 @@ defmodule Orbis.GNSS.RTKTest do
                ambiguity_wavelength_m: @l1_wavelength_m,
                filter_kernel: :python
              ) == {:error, {:invalid_option, :filter_kernel}}
+
+      assert RTK.solve_filter_baseline_epochs(
+               @base,
+               [epoch],
+               ambiguity_wavelength_m: @l1_wavelength_m,
+               filter_kernel: :rust,
+               receiver_antenna_corrections: receiver_antenna_corrections_option(0.10, 0.05)
+             ) == {:error, {:unsupported_filter_kernel, :receiver_antenna_corrections}}
+    end
+
+    test "elixir filter applies up-only receiver antenna corrections" do
+      base_pco_up_m = 0.10
+      rover_pco_up_m = 0.05
+
+      epochs =
+        @sat_positions
+        |> Enum.take(3)
+        |> Enum.map(fn positions ->
+          synthetic_baseline_epoch(@base, @truth_baseline, positions)
+        end)
+        |> Enum.map(
+          &apply_receiver_antenna_corrections_to_epoch(
+            &1,
+            base_pco_up_m,
+            rover_pco_up_m
+          )
+        )
+
+      assert {:ok, sol} =
+               RTK.solve_filter_baseline_epochs(
+                 @base,
+                 epochs,
+                 reference_satellite_id: "G01",
+                 ambiguity_wavelength_m: @l1_wavelength_m,
+                 initial_baseline_m: {-40.0, 35.0, 12.0},
+                 filter_kernel: :elixir,
+                 receiver_antenna_corrections:
+                   receiver_antenna_corrections_option(base_pco_up_m, rover_pco_up_m)
+               )
+
+      assert sol.metadata.filter_kernel == :elixir
+      assert position_error(sol.baseline_m, @truth_baseline) < 2.0e-4
     end
   end
 
@@ -1670,6 +1786,86 @@ defmodule Orbis.GNSS.RTKTest do
     end)
   end
 
+  defp rover_position do
+    add3(@base, @truth_baseline)
+  end
+
+  defp receiver_antenna(freq_offset_map) do
+    %Antex.Antenna{
+      id: "UNIT_TEST/ANTENNA",
+      kind: :receiver,
+      type: "UNIT_TEST",
+      serial: "TEST",
+      dazi_deg: 0.0,
+      zenith_start_deg: 0.0,
+      zenith_end_deg: 0.0,
+      zenith_step_deg: 0.0,
+      sinex_code: nil,
+      frequencies: freq_offset_map
+    }
+  end
+
+  defp frequency_block(up_m) do
+    %Antex.Frequency{
+      frequency: "G01",
+      pco_m: {0.0, 0.0, up_m},
+      pcv_samples: []
+    }
+  end
+
+  defp receiver_antenna_corrections_option(base_pco_up_m, rover_pco_up_m) do
+    base = receiver_antenna(%{"G01" => frequency_block(base_pco_up_m)})
+    rover = receiver_antenna(%{"G01" => frequency_block(rover_pco_up_m)})
+
+    %{
+      base: %{antenna: base, frequency: "G01"},
+      rover: %{antenna: rover, frequency: "G01"}
+    }
+  end
+
+  defp apply_receiver_antenna_corrections_to_epoch(epoch, base_pco_up_m, rover_pco_up_m) do
+    sat_positions = epoch.satellite_positions_m
+
+    base_observations =
+      epoch.base_observations
+      |> Enum.map(fn {sat, code, phase} ->
+        sat_pos = Map.fetch!(sat_positions, sat)
+        correction = up_only_correction(sat_pos, @base, base_pco_up_m)
+        {sat, code - correction, phase - correction}
+      end)
+
+    rover_observations =
+      epoch.rover_observations
+      |> Enum.map(fn {sat, code, phase} ->
+        sat_pos = Map.fetch!(sat_positions, sat)
+        correction = up_only_correction(sat_pos, rover_position(), rover_pco_up_m)
+        {sat, code - correction, phase - correction}
+      end)
+
+    %{epoch | base_observations: base_observations, rover_observations: rover_observations}
+  end
+
+  defp receiver_antenna_dd_correction(sat, ref, sat_positions, base_pco_up_m, rover_pco_up_m) do
+    sat_pos = Map.fetch!(sat_positions, sat)
+    ref_pos = Map.fetch!(sat_positions, ref)
+
+    rover_sat_corr = up_only_correction(sat_pos, rover_position(), rover_pco_up_m)
+    base_sat_corr = up_only_correction(sat_pos, @base, base_pco_up_m)
+    rover_ref_corr = up_only_correction(ref_pos, rover_position(), rover_pco_up_m)
+    base_ref_corr = up_only_correction(ref_pos, @base, base_pco_up_m)
+
+    rover_sat_corr - base_sat_corr - rover_ref_corr + base_ref_corr
+  end
+
+  defp up_only_correction(sat_pos, receiver_pos, pco_up_m) do
+    with {:ok, los} <- unit3(sub3(sat_pos, receiver_pos)),
+         {:ok, up_unit} <- unit3(receiver_pos) do
+      pco_up_m * dot3(los, up_unit)
+    else
+      _ -> 0.0
+    end
+  end
+
   defp noise_at(noise_by_sat, sat, idx) do
     case Map.fetch(noise_by_sat, sat) do
       {:ok, values} -> Enum.at(values, idx, 0.0)
@@ -1799,6 +1995,17 @@ defmodule Orbis.GNSS.RTKTest do
   defp add3({ax, ay, az}, {bx, by, bz}), do: {ax + bx, ay + by, az + bz}
   defp sub3({ax, ay, az}, {bx, by, bz}), do: {ax - bx, ay - by, az - bz}
   defp norm({x, y, z}), do: :math.sqrt(x * x + y * y + z * z)
+
+  defp unit3(v) do
+    if norm(v) > 0.0 do
+      {:ok, scale3(v, 1.0 / norm(v))}
+    else
+      :zero
+    end
+  end
+
+  defp scale3({x, y, z}, s), do: {x * s, y * s, z * s}
+  defp dot3({ax, ay, az}, {bx, by, bz}), do: ax * bx + ay * by + az * bz
 
   defp sagnac_range(sat_pos, receiver) do
     {sx, sy, _sz} = sat_pos
