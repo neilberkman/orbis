@@ -754,6 +754,34 @@ defmodule Orbis.GNSS.RTK do
     |> Enum.sort()
   end
 
+  defp ensure_single_widelane_system(epochs) do
+    epochs
+    |> Enum.reduce_while(MapSet.new(), fn epoch, systems ->
+      systems =
+        epoch
+        |> dual_observation_sats()
+        |> Enum.reduce(systems, fn sat, acc -> MapSet.put(acc, satellite_system(sat)) end)
+
+      if MapSet.size(systems) > 1 do
+        {:halt, {:error, {:unsupported_widelane, :multi_gnss}}}
+      else
+        {:cont, systems}
+      end
+    end)
+    |> case do
+      {:error, _reason} = err -> err
+      _systems -> :ok
+    end
+  end
+
+  defp dual_observation_sats(epoch) do
+    epoch.base
+    |> Map.keys()
+    |> MapSet.new()
+    |> MapSet.union(epoch.rover |> Map.keys() |> MapSet.new())
+    |> MapSet.to_list()
+  end
+
   defp reference_satellite_set(refs), do: refs |> Map.values() |> MapSet.new()
 
   defp nonreference_sats(all_sats, refs) do
@@ -1011,6 +1039,11 @@ defmodule Orbis.GNSS.RTK do
   narrow-lane integers; `wide_lane_ambiguities_cycles` reports the fixed
   wide-lane integers.
 
+  This path is intentionally limited to one constellation at a time. If the
+  normalized dual-frequency observations contain multiple constellation
+  letters, it returns `{:error, {:unsupported_widelane, :multi_gnss}}` before
+  wide-lane estimation.
+
   Options are the same as `solve_fixed_baseline_epochs/3`, except
   `:ambiguity_wavelength_m` and `:ambiguity_offset_m` are derived internally.
   Additional wide-lane options:
@@ -1047,6 +1080,7 @@ defmodule Orbis.GNSS.RTK do
          {:ok, base} <- Types.normalize_ecef(base_position, :invalid_base_position),
          :ok <- ensure_nonempty_epochs(dual_epochs),
          {:ok, normalized_dual_epochs} <- normalize_dual_baseline_epochs(dual_epochs),
+         :ok <- ensure_single_widelane_system(normalized_dual_epochs),
          {:ok, prepared_dual_epochs, slip_meta} <-
            prepare_dual_baseline_cycle_slips(normalized_dual_epochs, opts),
          {:ok, common_sats, _dropped_sats} <- common_epoch_sats(prepared_dual_epochs),

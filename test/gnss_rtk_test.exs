@@ -1301,6 +1301,31 @@ defmodule Orbis.GNSS.RTKTest do
       assert position_error(sol.baseline_m, @truth_baseline) < 1.0e-5
     end
 
+    test "multi-GNSS dual-frequency input is rejected before wide-lane estimation" do
+      e_wide_lane_cycles = %{"E02" => 2, "E11" => -3, "E19" => 1}
+
+      epochs =
+        @sat_positions
+        |> Enum.zip(@extra_sat_positions)
+        |> Enum.with_index()
+        |> Enum.map(fn {{g_positions, extra_positions}, idx} ->
+          positions =
+            extra_positions
+            |> Map.take(Map.keys(@e_cycles))
+            |> Map.merge(g_positions)
+
+          synthetic_dual_baseline_epoch(@base, @truth_baseline, positions,
+            epoch: idx,
+            n1_cycles: Map.merge(@fixed_cycles, @e_cycles),
+            wide_lane_cycles: Map.merge(@wide_lane_cycles, e_wide_lane_cycles)
+          )
+        end)
+
+      assert RTK.solve_widelane_fixed_baseline_epochs(@base, epochs,
+               reference_satellite_id: "G01"
+             ) == {:error, {:unsupported_widelane, :multi_gnss}}
+    end
+
     test "bad dual-frequency inputs are tagged" do
       epoch =
         synthetic_dual_baseline_epoch(@base, @truth_baseline, hd(@sat_positions),
