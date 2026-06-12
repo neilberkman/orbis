@@ -668,7 +668,7 @@ defmodule RoverMeasurement202606 do
              Keyword.fetch!(opts, :max_iterations),
              Keyword.fetch!(opts, :process_noise_baseline_sigma_m),
              Keyword.fetch!(opts, :integer_ratio_threshold),
-             Keyword.fetch!(opts, :float_only_systems)
+             {Keyword.fetch!(opts, :float_only_systems), 0.0, 8, "reject"}
            }
          ) do
       {:ok, updates} ->

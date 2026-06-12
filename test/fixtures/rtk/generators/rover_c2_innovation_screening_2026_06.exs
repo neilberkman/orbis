@@ -29,6 +29,7 @@ defmodule RoverC2InnovationScreening202606 do
   @stable_reference_median_m 9.533
   @demo5_reference_median_m 4.007
   @innovation_screen_sigmas [5.0, 8.0, 10.0, 15.0, 25.0]
+  @c2b_soft_weight_sigmas [3.0, 5.0, 8.0]
   @innovation_screen_min_rows 8
   @process_noise_sweep_sigmas [1.0, 3.0, 5.5, 10.0, 30.0]
   @continuity_gap_s 2.5
@@ -126,7 +127,8 @@ defmodule RoverC2InnovationScreening202606 do
           results: :string,
           report: :string,
           limit: :integer,
-          epoch_limit: :integer
+          epoch_limit: :integer,
+          c2b: :boolean
         ],
         aliases: [w: :work, r: :results]
       )
@@ -147,7 +149,11 @@ defmodule RoverC2InnovationScreening202606 do
         Path.join(generator_dir, "c2-innovation-screening-2026-06.md")
       )
 
-    run_c2_exploration(opts, fixture_dir, work, results_path, report_path)
+    if Keyword.get(opts, :c2b, false) do
+      run_c2b_exploration(opts, fixture_dir, work, results_path, report_path)
+    else
+      run_c2_exploration(opts, fixture_dir, work, results_path, report_path)
+    end
   end
 
   # This runner is forked from the larger C1 exploration harness. Keep captures
@@ -357,6 +363,243 @@ defmodule RoverC2InnovationScreening202606 do
       },
       demo5: demo5,
       innovation_screen_sweep: sweep
+    }
+  end
+
+  defp run_c2b_exploration(opts, fixture_dir, work, results_path, report_path) do
+    arcs =
+      @oracle_fixtures
+      |> maybe_limit(Keyword.get(opts, :limit))
+      |> Enum.map(&load_arc(fixture_dir, &1, work))
+      |> Enum.map(&measure_c2b_arc(&1, Keyword.get(opts, :epoch_limit)))
+
+    pooled = c2b_pooled_summary(arcs)
+
+    result = %{
+      "version" => 2,
+      "generated_at_utc" =>
+        DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601(),
+      "script" => Path.relative_to(__ENV__.file, File.cwd!()),
+      "work_dir" => work,
+      "brief" => "/tmp/c2b-brief.md",
+      "epoch_limit" => Keyword.get(opts, :epoch_limit),
+      "filter_kernel" => "rust",
+      "innovation_screen_min_rows" => @innovation_screen_min_rows,
+      "c2b_soft_weight_sigmas" => @c2b_soft_weight_sigmas,
+      "detector_config" => detector_config_json(),
+      "case_specs" => Enum.map(c2b_case_specs(), &c2b_case_spec_json/1),
+      "commit_shas" => %{
+        "astrodynamics_kernel" => git_sha("/tmp/c2k-astro"),
+        "orbis_harness" => git_sha(File.cwd!())
+      },
+      "arcs" => Enum.map(arcs, &c2b_arc_json/1),
+      "pooled" => stringify_keys(pooled)
+    }
+
+    File.write!(results_path, Jason.encode!(result, pretty: true))
+    File.write!(report_path, "\n\n" <> c2b_report_markdown(result, results_path), [:append])
+
+    IO.puts("wrote #{results_path}")
+    IO.puts("appended #{report_path}")
+  end
+
+  defp measure_c2b_arc(arc, epoch_limit) do
+    IO.puts("C2b soft weighting / Hatch smoothing: #{arc.label}")
+    require_files!([arc.rover_path, arc.base_path, arc.nav_path, arc.oracle_path])
+
+    rover_obs = Observations.load!(arc.rover_path)
+    base_obs = load_rinex2_obs!(arc.base_path)
+    nav = Broadcast.load!(arc.nav_path)
+
+    base_arp = base_arp(base_obs)
+    glonass_slots = Observations.glonass_slots(rover_obs)
+    oracle_by_time = Map.new(arc.oracle["per_epoch"], &{&1["time"], &1})
+    detector = detect_rover_slips(rover_obs, glonass_slots)
+
+    {segmented_epochs, segmented_contexts} =
+      build_filter_epochs(
+        nav,
+        rover_obs,
+        base_obs,
+        glonass_slots,
+        oracle_by_time,
+        base_arp,
+        detector.ambiguity_ids
+      )
+      |> maybe_limit_epoch_contexts(epoch_limit)
+
+    if segmented_epochs == [] do
+      raise "no usable Orbis epochs for #{arc.label}"
+    end
+
+    comparison_segments =
+      segment_epoch_contexts(segmented_epochs, segmented_contexts, @comparison_segment_epochs)
+
+    {comparison_per_epoch, comparison_segment_reports} =
+      solve_segments(comparison_segments, nav, base_arp, glonass_slots,
+        diagnostics?: false,
+        log?: false
+      )
+
+    comparison_orbis = summarize_measurements(comparison_per_epoch)
+    demo5 = demo5_summary(arc.oracle["per_epoch"])
+
+    cases =
+      Enum.map(c2b_case_specs(), fn spec ->
+        IO.puts("  #{spec.label}")
+
+        filter_case =
+          run_filter_case(
+            spec.id,
+            segmented_epochs,
+            segmented_contexts,
+            nav,
+            base_arp,
+            glonass_slots,
+            @max_segment_epochs,
+            [
+              diagnostics?: false,
+              log?: false,
+              max_sd_ambiguity_ids: @detector_segment_max_sd_ambiguity_ids,
+              filter_kernel: :rust
+            ] ++ spec.opts
+          )
+
+        c2b_case_cell(spec, filter_case, length(segmented_epochs))
+      end)
+
+    %{
+      input: arc,
+      base_arp: base_arp,
+      built_epoch_count: length(segmented_epochs),
+      skipped_oracle_epochs: length(arc.oracle["per_epoch"]) - length(segmented_epochs),
+      detector: detector,
+      comparison: %{
+        mode: "per_epoch_segments_comparison_only",
+        max_segment_epochs: @comparison_segment_epochs,
+        segment_count: length(comparison_segment_reports),
+        segment_reports: comparison_segment_reports,
+        per_epoch: comparison_per_epoch,
+        orbis: comparison_orbis
+      },
+      demo5: demo5,
+      c2b_cases: cases
+    }
+  end
+
+  defp c2b_case_specs do
+    [
+      %{
+        id: "hard_k5_reference",
+        family: "reference",
+        label: "Hard k=5 reference",
+        k: 5.0,
+        mode: "reject",
+        code_smoothing?: false,
+        opts: [
+          innovation_screen_sigma: 5.0,
+          innovation_screen_min_rows: @innovation_screen_min_rows
+        ]
+      },
+      %{
+        id: "hard_k5_hatch",
+        family: "stock",
+        label: "Hard k=5 + Hatch",
+        k: 5.0,
+        mode: "reject",
+        code_smoothing?: true,
+        opts: [
+          code_smoothing: true,
+          innovation_screen_sigma: 5.0,
+          innovation_screen_min_rows: @innovation_screen_min_rows
+        ]
+      },
+      %{
+        id: "hatch_only",
+        family: "stock",
+        label: "Hatch only",
+        k: nil,
+        mode: "none",
+        code_smoothing?: true,
+        opts: [code_smoothing: true]
+      }
+    ] ++
+      Enum.map(@c2b_soft_weight_sigmas, fn sigma ->
+        %{
+          id: "huber_k_#{innovation_screen_label(sigma)}",
+          family: "soft_weight",
+          label: "Huber soft k=#{fmt(sigma)}",
+          k: sigma,
+          mode: "huber_weight",
+          code_smoothing?: false,
+          opts: [
+            innovation_screen_sigma: sigma,
+            innovation_screen_min_rows: @innovation_screen_min_rows,
+            innovation_screen_mode: :huber_weight
+          ]
+        }
+      end)
+  end
+
+  defp c2b_case_cell(spec, filter_case, built_epoch_count) do
+    completed_arc = filter_case.solved_epoch_count == built_epoch_count
+
+    screen_rows =
+      Enum.map(filter_case.per_epoch, & &1.innovation_screen) |> Enum.reject(&is_nil/1)
+
+    rejected_rows = Enum.map(screen_rows, & &1.rejected_rows)
+    accepted_rows = Enum.map(screen_rows, & &1.accepted_rows)
+    input_rows = Enum.map(screen_rows, & &1.input_rows)
+    downweighted_rows = Enum.map(screen_rows, &Map.get(&1, :downweighted_rows, 0))
+
+    applied_weight_sums =
+      Enum.map(screen_rows, &Map.get(&1, :applied_weight_sum, &1.accepted_rows))
+
+    coasted_epochs = Enum.count(screen_rows, & &1.coasted?)
+    total_rejected_rows = Enum.sum(rejected_rows)
+    total_input_rows = Enum.sum(input_rows)
+    total_downweighted_rows = Enum.sum(downweighted_rows)
+    total_applied_weight_sum = Enum.sum(applied_weight_sums)
+    errors = Enum.map(filter_case.per_epoch, & &1.error_3d_m)
+    tail = Enum.take(errors, -min(length(errors), 100))
+
+    %{
+      id: spec.id,
+      family: spec.family,
+      label: spec.label,
+      k: spec.k,
+      mode: spec.mode,
+      code_smoothing: spec.code_smoothing?,
+      innovation_screen_min_rows: @innovation_screen_min_rows,
+      built_epoch_count: built_epoch_count,
+      solved_epoch_count: filter_case.solved_epoch_count,
+      completed_arc: completed_arc,
+      segment_count: filter_case.segment_count,
+      longest_stable_prefix_epochs: filter_case.longest_stable_prefix_epochs,
+      first_unstable_time: filter_case.first_unstable_time,
+      orbis: filter_case.orbis,
+      completed_arc_median_m: if(completed_arc, do: filter_case.orbis.error_3d_median_m),
+      completed_arc_p95_m: if(completed_arc, do: filter_case.orbis.error_3d_p95_m),
+      final_100_median_m: median(tail),
+      final_100_p95_m: percentile(tail, 0.95),
+      coasted_epochs: coasted_epochs,
+      coasting_fraction: ratio(coasted_epochs, max(filter_case.solved_epoch_count, 1)),
+      rejected_row_count: total_rejected_rows,
+      input_row_count: total_input_rows,
+      row_rejection_fraction: ratio(total_rejected_rows, max(total_input_rows, 1)),
+      downweighted_row_count: total_downweighted_rows,
+      downweighted_row_fraction: ratio(total_downweighted_rows, max(total_input_rows, 1)),
+      applied_weight_sum: total_applied_weight_sum,
+      effective_information_fraction:
+        if(total_input_rows > 0,
+          do: ratio(total_applied_weight_sum, total_input_rows),
+          else: 1.0
+        ),
+      rows_rejected_per_epoch: distribution(rejected_rows),
+      rows_accepted_per_epoch: distribution(accepted_rows),
+      rows_downweighted_per_epoch: distribution(downweighted_rows),
+      errors_3d_m: errors,
+      error_series: Enum.map(filter_case.per_epoch, &error_series_epoch/1)
     }
   end
 
@@ -1906,8 +2149,10 @@ defmodule RoverC2InnovationScreening202606 do
     opts
     |> maybe_put_filter_option(solve_opts, :process_noise_baseline_sigma_m)
     |> maybe_put_filter_option(solve_opts, :filter_kernel)
+    |> maybe_put_filter_option(solve_opts, :code_smoothing)
     |> maybe_put_filter_option(solve_opts, :innovation_screen_sigma)
     |> maybe_put_filter_option(solve_opts, :innovation_screen_min_rows)
+    |> maybe_put_filter_option(solve_opts, :innovation_screen_mode)
   end
 
   defp maybe_put_filter_option(opts, solve_opts, key) do
@@ -1965,7 +2210,8 @@ defmodule RoverC2InnovationScreening202606 do
              Keyword.fetch!(opts, :max_iterations),
              Keyword.fetch!(opts, :process_noise_baseline_sigma_m),
              Keyword.fetch!(opts, :integer_ratio_threshold),
-             Keyword.fetch!(opts, :float_only_systems)
+             {Keyword.fetch!(opts, :float_only_systems), 0.0, @innovation_screen_min_rows,
+              "reject"}
            }
          ) do
       {:ok, updates} ->
@@ -3149,6 +3395,110 @@ defmodule RoverC2InnovationScreening202606 do
     }
   end
 
+  defp c2b_pooled_summary(arcs) do
+    demo5_epochs = Enum.flat_map(arcs, & &1.input.oracle["per_epoch"])
+    comparison_epochs = Enum.flat_map(arcs, & &1.comparison.per_epoch)
+    demo5 = demo5_summary(demo5_epochs)
+    comparison = summarize_measurements(comparison_epochs)
+    cases = c2b_pooled_cases(arcs, demo5, comparison)
+
+    %{
+      demo5: demo5,
+      comparison: comparison,
+      c2b_cases: cases,
+      verdict: c2b_verdict(cases, demo5, comparison)
+    }
+  end
+
+  defp c2b_pooled_cases(arcs, demo5, comparison) do
+    for spec <- c2b_case_specs() do
+      cells =
+        Enum.map(arcs, fn arc ->
+          Enum.find(arc.c2b_cases, &(&1.id == spec.id))
+        end)
+
+      completed_cells = Enum.filter(cells, & &1.completed_arc)
+      completed_errors = Enum.flat_map(completed_cells, & &1.errors_3d_m)
+
+      tail_errors =
+        Enum.flat_map(cells, fn cell ->
+          Enum.take(cell.errors_3d_m, -min(length(cell.errors_3d_m), 100))
+        end)
+
+      coasted_epochs = cells |> Enum.map(& &1.coasted_epochs) |> Enum.sum()
+      solved_epochs = cells |> Enum.map(& &1.solved_epoch_count) |> Enum.sum()
+      rejected_row_count = cells |> Enum.map(& &1.rejected_row_count) |> Enum.sum()
+      downweighted_row_count = cells |> Enum.map(& &1.downweighted_row_count) |> Enum.sum()
+      input_row_count = cells |> Enum.map(& &1.input_row_count) |> Enum.sum()
+      applied_weight_sum = cells |> Enum.map(& &1.applied_weight_sum) |> Enum.sum()
+      median_m = median(completed_errors)
+
+      %{
+        id: spec.id,
+        family: spec.family,
+        label: spec.label,
+        k: spec.k,
+        mode: spec.mode,
+        code_smoothing: spec.code_smoothing?,
+        completed_arcs: length(completed_cells),
+        total_arcs: length(cells),
+        all_arcs_completed: length(completed_cells) == length(cells),
+        min_stable_prefix_epochs:
+          cells |> Enum.map(& &1.longest_stable_prefix_epochs) |> Enum.min(),
+        max_stable_prefix_epochs:
+          cells |> Enum.map(& &1.longest_stable_prefix_epochs) |> Enum.max(),
+        completed_pooled_median_m: median_m,
+        completed_pooled_p95_m: percentile(completed_errors, 0.95),
+        final_100_pooled_median_m: median(tail_errors),
+        final_100_pooled_p95_m: percentile(tail_errors, 0.95),
+        coasted_epochs: coasted_epochs,
+        solved_epoch_count: solved_epochs,
+        coasting_fraction: ratio(coasted_epochs, max(solved_epochs, 1)),
+        rejected_row_count: rejected_row_count,
+        downweighted_row_count: downweighted_row_count,
+        input_row_count: input_row_count,
+        row_rejection_fraction: ratio(rejected_row_count, max(input_row_count, 1)),
+        downweighted_row_fraction: ratio(downweighted_row_count, max(input_row_count, 1)),
+        applied_weight_sum: applied_weight_sum,
+        effective_information_fraction:
+          if(input_row_count > 0, do: ratio(applied_weight_sum, input_row_count), else: 1.0),
+        beats_one_epoch_bar: is_number(median_m) and median_m <= @stable_reference_median_m,
+        beats_current_one_epoch: is_number(median_m) and median_m <= comparison.error_3d_median_m,
+        beats_demo5: is_number(median_m) and median_m <= demo5.error_3d_median_m,
+        beats_demo5_x_1_25: is_number(median_m) and median_m <= demo5.error_3d_median_m * 1.25
+      }
+    end
+  end
+
+  defp c2b_verdict(cases, demo5, comparison) do
+    completed =
+      cases
+      |> Enum.filter(&is_number(&1.completed_pooled_median_m))
+
+    best = Enum.min_by(completed, & &1.completed_pooled_median_m, fn -> nil end)
+
+    best_soft =
+      completed
+      |> Enum.filter(&(&1.family == "soft_weight"))
+      |> Enum.min_by(& &1.completed_pooled_median_m, fn -> nil end)
+
+    %{
+      best_case: best && best.id,
+      best_label: best && best.label,
+      best_completed_pooled_median_m: best && best.completed_pooled_median_m,
+      best_final_100_pooled_median_m: best && best.final_100_pooled_median_m,
+      best_soft_case: best_soft && best_soft.id,
+      best_soft_label: best_soft && best_soft.label,
+      best_soft_completed_pooled_median_m: best_soft && best_soft.completed_pooled_median_m,
+      one_epoch_reference_median_m: @stable_reference_median_m,
+      measured_one_epoch_pooled_median_m: comparison.error_3d_median_m,
+      demo5_reference_median_m: @demo5_reference_median_m,
+      measured_demo5_pooled_median_m: demo5.error_3d_median_m,
+      beats_report_bar: best && best.completed_pooled_median_m <= @stable_reference_median_m,
+      beats_demo5: best && best.completed_pooled_median_m <= @demo5_reference_median_m
+    }
+  end
+
   defp c2_pooled_sweep(arcs, demo5, comparison) do
     for sigma <- @innovation_screen_sigmas do
       cells =
@@ -3230,6 +3580,74 @@ defmodule RoverC2InnovationScreening202606 do
       "demo5" => stringify_keys(arc.demo5),
       "innovation_screen_sweep" =>
         Enum.map(arc.innovation_screen_sweep, &innovation_screen_sweep_json/1)
+    }
+  end
+
+  defp c2b_case_spec_json(spec) do
+    %{
+      "id" => spec.id,
+      "family" => spec.family,
+      "label" => spec.label,
+      "k" => spec.k,
+      "mode" => spec.mode,
+      "code_smoothing" => spec.code_smoothing?,
+      "opts" => stringify_keys(spec.opts)
+    }
+  end
+
+  defp c2b_arc_json(arc) do
+    %{
+      "label" => arc.input.label,
+      "drive" => arc.input.drive,
+      "fixture" => arc.input.fixture,
+      "built_epoch_count" => arc.built_epoch_count,
+      "skipped_oracle_epochs" => arc.skipped_oracle_epochs,
+      "detector" => detector_json(arc.detector),
+      "comparison" => %{
+        "mode" => arc.comparison.mode,
+        "max_segment_epochs" => arc.comparison.max_segment_epochs,
+        "segment_count" => arc.comparison.segment_count,
+        "orbis" => stringify_keys(arc.comparison.orbis)
+      },
+      "demo5" => stringify_keys(arc.demo5),
+      "c2b_cases" => Enum.map(arc.c2b_cases, &c2b_case_json/1)
+    }
+  end
+
+  defp c2b_case_json(cell) do
+    %{
+      "id" => cell.id,
+      "family" => cell.family,
+      "label" => cell.label,
+      "k" => cell.k,
+      "mode" => cell.mode,
+      "code_smoothing" => cell.code_smoothing,
+      "innovation_screen_min_rows" => cell.innovation_screen_min_rows,
+      "built_epoch_count" => cell.built_epoch_count,
+      "solved_epoch_count" => cell.solved_epoch_count,
+      "completed_arc" => cell.completed_arc,
+      "segment_count" => cell.segment_count,
+      "longest_stable_prefix_epochs" => cell.longest_stable_prefix_epochs,
+      "first_unstable_time" => cell.first_unstable_time,
+      "orbis" => stringify_keys(cell.orbis),
+      "completed_arc_median_m" => cell.completed_arc_median_m,
+      "completed_arc_p95_m" => cell.completed_arc_p95_m,
+      "final_100_median_m" => cell.final_100_median_m,
+      "final_100_p95_m" => cell.final_100_p95_m,
+      "coasted_epochs" => cell.coasted_epochs,
+      "coasting_fraction" => cell.coasting_fraction,
+      "rejected_row_count" => cell.rejected_row_count,
+      "input_row_count" => cell.input_row_count,
+      "row_rejection_fraction" => cell.row_rejection_fraction,
+      "downweighted_row_count" => cell.downweighted_row_count,
+      "downweighted_row_fraction" => cell.downweighted_row_fraction,
+      "applied_weight_sum" => cell.applied_weight_sum,
+      "effective_information_fraction" => cell.effective_information_fraction,
+      "rows_rejected_per_epoch" => stringify_keys(cell.rows_rejected_per_epoch),
+      "rows_accepted_per_epoch" => stringify_keys(cell.rows_accepted_per_epoch),
+      "rows_downweighted_per_epoch" => stringify_keys(cell.rows_downweighted_per_epoch),
+      "errors_3d_m" => cell.errors_3d_m,
+      "error_series" => Enum.map(cell.error_series, &stringify_keys/1)
     }
   end
 
@@ -3339,6 +3757,183 @@ defmodule RoverC2InnovationScreening202606 do
       ""
     ]
     |> Enum.join("\n")
+  end
+
+  defp c2b_report_markdown(result, results_path) do
+    arcs = result["arcs"]
+    pooled = result["pooled"]
+
+    [
+      "## C2b soft robust weighting + Hatch smoothing",
+      "",
+      "Generated by `mix run test/fixtures/rtk/generators/rover_c2_innovation_screening_2026_06.exs --c2b`.",
+      "Per-run JSON was emitted to `#{results_path}`.",
+      "",
+      "### Setup",
+      "",
+      "- Inputs match C2: phone RINEX from `/tmp/gsdc-work`, P222 CORS base observations, and BKG combined broadcast NAV.",
+      "- Detector segmentation is ON via the C1 detector-injected rover ambiguity ids.",
+      epoch_limit_note(result),
+      "- `code_smoothing: true` is accepted by `solve_filter_baseline_epochs`; the shared prep applies Hatch smoothing before Rust epoch terms are built, so it reaches the Rust filter path.",
+      "- Soft weighting uses `innovation_screen_mode: :huber_weight`: rows are retained and each row receives information factor `min(1, k / abs(normalized_innovation))`; epochs still coast when summed factors fall below #{@innovation_screen_min_rows}.",
+      "",
+      "### Cells",
+      "",
+      c2b_case_table(arcs, pooled),
+      "",
+      "Full-arc median and p95 columns are reported only for arcs that solved every built epoch. Retained info is summed applied factors divided by unweighted input rows; no-screen rows report 100%.",
+      "",
+      "### Attribution",
+      "",
+      c2b_attribution_text(pooled),
+      "",
+      "### Verdict",
+      "",
+      c2b_verdict_text(pooled),
+      "",
+      "### Commit SHAs",
+      "",
+      c2b_commit_table(result)
+    ]
+    |> Enum.join("\n")
+  end
+
+  defp c2b_case_table(arcs, pooled) do
+    pooled_by_id = Map.new(pooled["c2b_cases"], &{&1["id"], &1})
+
+    rows =
+      Enum.map(c2b_case_specs(), fn spec ->
+        cells =
+          Enum.map(arcs, fn arc ->
+            Enum.find(arc["c2b_cases"], &(&1["id"] == spec.id))
+          end)
+
+        pooled_cell = Map.fetch!(pooled_by_id, spec.id)
+
+        [
+          spec.label,
+          c2b_k_text(spec.k),
+          spec.mode,
+          yes_no(spec.code_smoothing?),
+          "#{pooled_cell["completed_arcs"]}/#{pooled_cell["total_arcs"]}",
+          Enum.map_join(cells, "/", &completed_metric(&1, "completed_arc_median_m")),
+          Enum.map_join(cells, "/", &completed_metric(&1, "completed_arc_p95_m")),
+          "#{fmt(pooled_cell["completed_pooled_median_m"])}/#{fmt(pooled_cell["completed_pooled_p95_m"])}",
+          "#{fmt(pooled_cell["final_100_pooled_median_m"])}/#{fmt(pooled_cell["final_100_pooled_p95_m"])}",
+          "#{pooled_cell["coasted_epochs"]}/#{fmt(100.0 * pooled_cell["coasting_fraction"])}%",
+          "#{fmt(100.0 * pooled_cell["effective_information_fraction"])}%",
+          c2b_row_action_text(pooled_cell),
+          yes_no(pooled_cell["beats_one_epoch_bar"]),
+          yes_no(pooled_cell["beats_demo5"])
+        ]
+        |> table_row()
+      end)
+
+    Enum.join(
+      [
+        "| Cell | k | Mode | Hatch | Complete arcs | Arc medians m SJC1/SVL1/MTV15/MTV28 | Arc p95 m SJC1/SVL1/MTV15/MTV28 | Pooled med/p95 m | Final-100 med/p95 m | Coasted epochs/% | Retained info | Rejected/downweighted rows | <=9.53m | <=demo5 4.007m |",
+        "|---|---:|---|---|---:|---|---|---:|---:|---:|---:|---:|---|---|"
+      ] ++ rows,
+      "\n"
+    )
+  end
+
+  defp c2b_k_text(nil), do: ""
+  defp c2b_k_text(k), do: fmt(k)
+
+  defp c2b_row_action_text(%{"mode" => "huber_weight"} = cell) do
+    "#{fmt(100.0 * cell["downweighted_row_fraction"])}% downweighted"
+  end
+
+  defp c2b_row_action_text(%{"mode" => "none"}), do: "0.000%"
+
+  defp c2b_row_action_text(cell) do
+    "#{fmt(100.0 * cell["row_rejection_fraction"])}% rejected"
+  end
+
+  defp c2b_attribution_text(pooled) do
+    hard = c2b_pooled_case(pooled, "hard_k5_reference")
+    hatch = c2b_pooled_case(pooled, "hard_k5_hatch")
+    hatch_only = c2b_pooled_case(pooled, "hatch_only")
+    best_soft = c2b_best_family_case(pooled, "soft_weight")
+
+    [
+      "Hard k=5 reference: #{c2b_case_brief(hard)}.",
+      "Adding Hatch to hard k=5: #{c2b_delta_sentence(hatch, hard)}.",
+      "Hatch alone: #{c2b_case_brief(hatch_only)}.",
+      "Best soft weighting: #{c2b_case_brief(best_soft)}; #{c2b_delta_sentence(best_soft, hard)}."
+    ]
+    |> Enum.join(" ")
+  end
+
+  defp c2b_case_brief(nil), do: "not available"
+
+  defp c2b_case_brief(cell) do
+    "#{cell["label"]} pooled #{fmt(cell["completed_pooled_median_m"])}/#{fmt(cell["completed_pooled_p95_m"])} m, final-100 #{fmt(cell["final_100_pooled_median_m"])}/#{fmt(cell["final_100_pooled_p95_m"])} m, retained #{fmt(100.0 * cell["effective_information_fraction"])}%"
+  end
+
+  defp c2b_delta_sentence(nil, _base), do: "not available"
+  defp c2b_delta_sentence(_cell, nil), do: "no hard reference available"
+
+  defp c2b_delta_sentence(cell, base) do
+    median_delta =
+      nil_safe_sub(cell["completed_pooled_median_m"], base["completed_pooled_median_m"])
+
+    tail_delta =
+      nil_safe_sub(cell["final_100_pooled_median_m"], base["final_100_pooled_median_m"])
+
+    "median delta #{signed_fmt(median_delta)} m and final-100 delta #{signed_fmt(tail_delta)} m versus hard k=5"
+  end
+
+  defp c2b_verdict_text(pooled) do
+    verdict = pooled["verdict"]
+
+    case verdict["best_label"] do
+      nil ->
+        "No C2b case completed enough epochs to score against the bars."
+
+      label ->
+        report_answer = yes_no(verdict["beats_report_bar"])
+        demo5_answer = yes_no(verdict["beats_demo5"])
+
+        "Best row: #{label}, pooled median #{fmt(verdict["best_completed_pooled_median_m"])} m and final-100 median #{fmt(verdict["best_final_100_pooled_median_m"])} m. Clears the 9.533 m memoryless bar: #{report_answer}. Clears demo5 4.007 m: #{demo5_answer}."
+    end
+  end
+
+  defp c2b_commit_table(result) do
+    shas = result["commit_shas"] || %{}
+
+    Enum.join(
+      [
+        "| Repo | SHA |",
+        "|---|---|",
+        table_row(["astrodynamics kernel", Map.get(shas, "astrodynamics_kernel", "")]),
+        table_row(["orbis harness", Map.get(shas, "orbis_harness", "")])
+      ],
+      "\n"
+    )
+  end
+
+  defp c2b_pooled_case(pooled, id) do
+    Enum.find(pooled["c2b_cases"], &(&1["id"] == id))
+  end
+
+  defp c2b_best_family_case(pooled, family) do
+    pooled["c2b_cases"]
+    |> Enum.filter(&(&1["family"] == family and is_number(&1["completed_pooled_median_m"])))
+    |> Enum.min_by(& &1["completed_pooled_median_m"], fn -> nil end)
+  end
+
+  defp signed_fmt(nil), do: ""
+
+  defp signed_fmt(value) when value >= 0.0, do: "+" <> fmt(value)
+  defp signed_fmt(value), do: fmt(value)
+
+  defp git_sha(path) do
+    case System.cmd("git", ["rev-parse", "HEAD"], cd: path, stderr_to_stdout: true) do
+      {sha, 0} -> String.trim(sha)
+      _other -> nil
+    end
   end
 
   defp epoch_limit_note(%{"epoch_limit" => limit}) when is_integer(limit) do

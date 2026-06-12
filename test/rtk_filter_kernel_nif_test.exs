@@ -31,7 +31,7 @@ defmodule Orbis.RTKFilterKernelNIFTest do
     model = {0.3, 0.003, "simple", false, false}
     wavelengths = for {id, _pos, _cycles} <- tl(sats), do: {id, lambda}
     offsets = for {id, _pos, _cycles} <- tl(sats), do: {id, 0.0}
-    opts = {1.0, 1.0e-3, 1.0e-6, 10, 0.0, 3.0, {[], 0.0, 8}}
+    opts = {1.0, 1.0e-3, 1.0e-6, 10, 0.0, 3.0, {[], 0.0, 8, "reject"}}
 
     bad_reference_state =
       {{3, [{"G", "G99"}], [], 10_000.0, 0}, {-30.0, 25.0, -10.0}, [],
@@ -117,7 +117,7 @@ defmodule Orbis.RTKFilterKernelNIFTest do
     model = {0.3, 0.003, "simple", false, false}
     wavelengths = for {id, _pos, _cycles} <- tl(sats), do: {id, lambda}
     offsets = for {id, _pos, _cycles} <- tl(sats), do: {id, 0.0}
-    opts = {1.0, 1.0e-3, 1.0e-6, 10, 0.0, 3.0, {[], 0.0, 8}}
+    opts = {1.0, 1.0e-3, 1.0e-6, 10, 0.0, 3.0, {[], 0.0, 8, "reject"}}
 
     assert {:ok,
             [

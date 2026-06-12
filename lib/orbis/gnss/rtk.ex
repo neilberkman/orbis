@@ -123,6 +123,7 @@ defmodule Orbis.GNSS.RTK do
                                :process_noise_baseline_sigma_m,
                                :innovation_screen_sigma,
                                :innovation_screen_min_rows,
+                               :innovation_screen_mode,
                                :filter_kernel
                              ]
   @dual_wide_lane_options [
@@ -683,6 +684,8 @@ defmodule Orbis.GNSS.RTK do
     * `:innovation_screen_min_rows` - minimum accepted row count for the
       innovation screen. If fewer rows survive, the epoch coasts on the
       predicted state (default `#{@default_filter_innovation_screen_min_rows}`).
+    * `:innovation_screen_mode` - `:reject` (default) rejects rows above the
+      threshold; `:huber_weight` keeps rows and scales their information weight.
     * `:filter_kernel` - `:rust` (default) or `:elixir` — the Elixir reference
       implementation, bit-identical to the kernel; every kernel capability is
       gated by === trace tests against it. The kernel carries the per-system
@@ -2633,6 +2636,8 @@ defmodule Orbis.GNSS.RTK do
     min_rows =
       Keyword.get(opts, :innovation_screen_min_rows, @default_filter_innovation_screen_min_rows)
 
+    mode = Keyword.get(opts, :innovation_screen_mode, :reject)
+
     cond do
       not is_nil(threshold) and (not is_number(threshold) or threshold <= 0.0) ->
         {:error, {:invalid_option, :innovation_screen_sigma}}
@@ -2640,11 +2645,20 @@ defmodule Orbis.GNSS.RTK do
       not is_integer(min_rows) or min_rows < 1 ->
         {:error, {:invalid_option, :innovation_screen_min_rows}}
 
+      mode not in [:reject, :huber_weight] ->
+        {:error, {:invalid_option, :innovation_screen_mode}}
+
       is_nil(threshold) ->
-        {:ok, %{enabled?: false, threshold_sigma: nil, min_rows: min_rows}}
+        {:ok, %{enabled?: false, threshold_sigma: nil, min_rows: min_rows, mode: mode}}
 
       true ->
-        {:ok, %{enabled?: true, threshold_sigma: threshold / 1.0, min_rows: min_rows}}
+        {:ok,
+         %{
+           enabled?: true,
+           threshold_sigma: threshold / 1.0,
+           min_rows: min_rows,
+           mode: mode
+         }}
     end
   end
 
@@ -4490,7 +4504,8 @@ defmodule Orbis.GNSS.RTK do
       {
         float_only_systems,
         rust_innovation_screen_sigma(filter_opts.innovation_screen),
-        filter_opts.innovation_screen.min_rows
+        filter_opts.innovation_screen.min_rows,
+        Atom.to_string(filter_opts.innovation_screen.mode)
       }
     }
   end
@@ -4502,9 +4517,11 @@ defmodule Orbis.GNSS.RTK do
 
   defp rust_innovation_screen_meta(
          {threshold, min_rows, input_rows, accepted_rows, rejected_rows, rejected_code_rows,
-          {rejected_phase_rows, max_normalized, max_rejected_normalized, coasted?}}
+          {rejected_phase_rows, max_normalized, max_rejected_normalized, coasted?,
+           {mode, downweighted_rows, applied_weight_sum, effective_information_fraction}}}
        ) do
     %{
+      mode: String.to_atom(mode),
       threshold_sigma: threshold,
       min_rows: min_rows,
       input_rows: input_rows,
@@ -4512,6 +4529,9 @@ defmodule Orbis.GNSS.RTK do
       rejected_rows: rejected_rows,
       rejected_code_rows: rejected_code_rows,
       rejected_phase_rows: rejected_phase_rows,
+      downweighted_rows: downweighted_rows,
+      applied_weight_sum: applied_weight_sum,
+      effective_information_fraction: effective_information_fraction,
       max_abs_normalized_innovation: max_normalized,
       max_rejected_abs_normalized_innovation: max_rejected_normalized,
       coasted?: coasted?

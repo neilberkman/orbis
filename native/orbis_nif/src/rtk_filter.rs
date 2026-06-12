@@ -6,8 +6,8 @@
 //! into Rust without introducing a second Elixir struct layer.
 
 use astrodynamics_gnss::rtk_filter::{
-    update_epoch, Epoch, FilterState, InnovationScreen, InnovationScreenOpts, MeasModel, SatMeas,
-    SearchOpts, StochasticModel, UpdateError, UpdateOpts,
+    update_epoch, Epoch, FilterState, InnovationScreen, InnovationScreenMode, InnovationScreenOpts,
+    MeasModel, SatMeas, SearchOpts, StochasticModel, UpdateError, UpdateOpts,
 };
 use rustler::{Encoder, Env, NifResult, Term};
 use std::collections::BTreeMap;
@@ -30,7 +30,8 @@ type StateTerm = (
     Vec<(String, i64)>,
     Vec<(String, f64)>,
 );
-type ScreenTailTerm = (usize, Option<f64>, Option<f64>, bool);
+type ScreenExtraTerm = (String, usize, f64, f64);
+type ScreenTailTerm = (usize, Option<f64>, Option<f64>, bool, ScreenExtraTerm);
 type ScreenTerm = (f64, usize, usize, usize, usize, usize, ScreenTailTerm);
 type UpdateTerm = (
     StateTerm,
@@ -42,7 +43,7 @@ type UpdateTerm = (
     Option<ScreenTerm>,
 );
 type ModelTerm = (f64, f64, String, bool, bool);
-type UpdateOptsExtraTerm = (Vec<String>, f64, usize);
+type UpdateOptsExtraTerm = (Vec<String>, f64, usize, String);
 type UpdateOptsTerm = (f64, f64, f64, usize, f64, f64, UpdateOptsExtraTerm);
 
 mod atoms {
@@ -168,8 +169,21 @@ fn encode_innovation_screen(screen: InnovationScreen) -> ScreenTerm {
             screen.max_abs_normalized_innovation,
             screen.max_rejected_abs_normalized_innovation,
             screen.coasted,
+            (
+                encode_innovation_screen_mode(screen.mode).to_string(),
+                screen.downweighted_rows,
+                screen.applied_weight_sum,
+                screen.effective_information_fraction,
+            ),
         ),
     )
+}
+
+fn encode_innovation_screen_mode(mode: InnovationScreenMode) -> &'static str {
+    match mode {
+        InnovationScreenMode::Reject => "reject",
+        InnovationScreenMode::HuberWeight => "huber_weight",
+    }
 }
 
 fn encode_update_error<'a>(env: Env<'a>, err: UpdateError) -> Term<'a> {
@@ -309,7 +323,12 @@ fn decode_opts(term: UpdateOptsTerm) -> UpdateOpts {
         max_iterations,
         process_noise_baseline_sigma_m,
         ratio_threshold,
-        (float_only_systems, innovation_screen_sigma, innovation_screen_min_rows),
+        (
+            float_only_systems,
+            innovation_screen_sigma,
+            innovation_screen_min_rows,
+            innovation_screen_mode,
+        ),
     ) = term;
     UpdateOpts {
         hold_sigma_m,
@@ -322,11 +341,19 @@ fn decode_opts(term: UpdateOptsTerm) -> UpdateOpts {
             Some(InnovationScreenOpts {
                 threshold_sigma: innovation_screen_sigma,
                 min_rows: innovation_screen_min_rows,
+                mode: decode_innovation_screen_mode(&innovation_screen_mode),
             })
         } else {
             None
         },
         search: SearchOpts { ratio_threshold },
+    }
+}
+
+fn decode_innovation_screen_mode(mode: &str) -> InnovationScreenMode {
+    match mode {
+        "huber_weight" => InnovationScreenMode::HuberWeight,
+        _ => InnovationScreenMode::Reject,
     }
 }
 
