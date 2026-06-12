@@ -115,3 +115,24 @@ Do not promote C1 yet. Detector segmentation extended the minimum stable prefix 
 | `integer_ratio_threshold` | `3.0` | Matches the pre-registered oracle/spec AR bar. |
 | `integer_candidate_limit` | `200000` | Matches the real-arc RTK filter tests. |
 | `float_only_systems` | `["R"]` | Required by the brief; GLONASS FDMA is not integer-fixed. |
+
+## Process-noise scaling sweep
+
+This section runs hypothesis 2 against the same four arcs and harness settings, changing only `process_noise_baseline_sigma_m` over 1.000, 3.000, 5.500, 10.000, 30.000 m. `stock` is the carried-state filter without detector segmentation; `detector` is the carried-state filter with the C1 pre-segmented rover ambiguity ids.
+
+| Mode | Sigma m | Complete arcs | Prefix SJC1-08-04/SVL1-08-24/MTV1-12-15/MTV1-12-28 | Completed median m SJC1-08-04/SVL1-08-24/MTV1-12-15/MTV1-12-28 | Completed p95 m SJC1-08-04/SVL1-08-24/MTV1-12-15/MTV1-12-28 | Pooled completed med/p95 m | Epoch-2 cond est SJC1-08-04/SVL1-08-24/MTV1-12-15/MTV1-12-28 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| stock | 1.000 | 4/4 | 1/1/1/1 | 1659549.788/3611214.671/3265752.542/2475905.697 | 5719423.073/13276597.596/8126975.419/6168806.451 | 2529201.498/8599578.100 | 2.00084e+14/2.00078e+14/2.00081e+14/2.00080e+14 |
+| stock | 3.000 | 4/4 | 1/1/1/1 | 1606187.125/3573178.370/3260702.910/2532663.124 | 4473514.796/13307975.572/8129542.501/6243657.707 | 2519162.159/8560092.550 | 2.00084e+14/2.00078e+14/2.00081e+14/2.00080e+14 |
+| stock | 5.500 | 4/4 | 1/1/1/1 | 1622553.850/3544282.078/3258613.844/2527695.706 | 5729405.588/13359831.741/7978798.886/6244057.064 | 2573271.980/8569520.055 | 2.00084e+14/2.00078e+14/2.00081e+14/2.00080e+14 |
+| stock | 10.000 | 4/4 | 1/1/1/1 | 1600401.968/3344381.715/3138707.744/2533202.902 | 5729430.589/11966561.954/8129950.998/6170619.996 | 2495859.187/8493614.034 | 2.00084e+14/2.00078e+14/2.00081e+14/2.00080e+14 |
+| stock | 30.000 | 4/4 | 1/1/1/1 | 1594257.376/3113289.176/3215383.541/2547353.808 | 5719913.956/11769737.599/8129985.459/6214320.969 | 2470542.367/8439426.781 | 2.00084e+14/2.00078e+14/2.00081e+14/2.00080e+14 |
+| detector | 1.000 | 4/4 | 7/10/6/9 | 1675476.107/3611217.287/3248481.867/2483845.246 | 5719423.073/13348142.828/8126975.316/6168806.451 | 2519855.018/8903761.171 | 2.00084e+14/2.00078e+14/9.53521e+3/2.00080e+14 |
+| detector | 3.000 | 4/4 | 7/10/6/9 | 1611453.674/3573178.680/3232208.046/2525713.624 | 4473514.796/13300168.049/8129542.586/6243657.707 | 2507940.472/8560100.492 | 2.00084e+14/2.00078e+14/9.53521e+3/2.00080e+14 |
+| detector | 5.500 | 4/4 | 7/10/6/9 | 1628076.052/3544775.093/3247471.010/2517104.072 | 5729405.588/13376217.798/7936635.045/6244057.064 | 2571912.300/8586555.167 | 2.00084e+14/2.00078e+14/9.53521e+3/2.00080e+14 |
+| detector | 10.000 | 4/4 | 7/10/6/9 | 1609456.802/3344381.715/3138707.744/2546579.850 | 5729430.589/11966561.954/8129950.919/6170619.996 | 2501643.206/8493604.116 | 2.00084e+14/2.00078e+14/9.53521e+3/2.00080e+14 |
+| detector | 30.000 | 4/4 | 7/10/6/9 | 1609218.343/3113289.176/3219235.294/2547345.866 | 5719913.956/11769737.599/8129985.513/6214320.860 | 2456033.329/8436397.944 | 2.00084e+14/2.00078e+14/9.53521e+3/2.00080e+14 |
+
+The condition estimate is the same row-sum information-matrix estimate used above, sampled at the second carried-state epoch. Median and p95 are reported only for arcs whose cell solved every built epoch; pooled values combine only those completed arcs.
+
+Verdict: no. Process-noise scaling alone does not fix epoch-2 survival: the best stock row has a four-arc minimum stable prefix of 1 at sigma 1.000 m. Stock epoch-2 condition estimates span 2.00078e+14-2.00084e+14, which supports C2: intrinsic conditioning / missing innovation screening rather than only epoch-rate process noise. Detector segmentation survives epoch 2 for sigma 1.000, 3.000, 5.500, 10.000, 30.000 m, but its best completed pooled median is 2456033.329 m versus demo5 4.007 m (612935.2x), so survival is not accuracy recovery.

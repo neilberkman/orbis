@@ -26,6 +26,7 @@ defmodule RoverC1SlipExploration202606 do
   @divergence_threshold_m 1_000.0
   @rtk_filter_state_version 3
   @stable_reference_median_m 9.533
+  @process_noise_sweep_sigmas [1.0, 3.0, 5.5, 10.0, 30.0]
   @continuity_gap_s 2.5
   @code_phase_min_threshold_m 15.0
   @code_phase_sigma_multiplier 8.0
@@ -278,6 +279,17 @@ defmodule RoverC1SlipExploration202606 do
       invariant: invariant_verdict(comparison_per_epoch)
     }
 
+    process_noise_sweep =
+      run_process_noise_sweep(
+        epochs,
+        contexts,
+        segmented_epochs,
+        segmented_contexts,
+        nav,
+        base_arp,
+        glonass_slots
+      )
+
     cost =
       segmentation_costs(
         detector,
@@ -301,8 +313,97 @@ defmodule RoverC1SlipExploration202606 do
       comparison: comparison,
       comparison_per_epoch: comparison_per_epoch,
       demo5: demo5,
+      process_noise_sweep: process_noise_sweep,
       cost: cost
     }
+  end
+
+  defp run_process_noise_sweep(
+         epochs,
+         contexts,
+         segmented_epochs,
+         segmented_contexts,
+         nav,
+         base_arp,
+         glonass_slots
+       ) do
+    [
+      {"stock", epochs, contexts, []},
+      {"detector", segmented_epochs, segmented_contexts,
+       [max_sd_ambiguity_ids: @detector_segment_max_sd_ambiguity_ids]}
+    ]
+    |> Enum.flat_map(fn {mode, case_epochs, case_contexts, extra_opts} ->
+      Enum.map(@process_noise_sweep_sigmas, fn sigma_m ->
+        IO.puts("  process-noise sweep #{mode}: sigma=#{fmt(sigma_m)} m")
+
+        opts =
+          [
+            diagnostics?: true,
+            log?: false,
+            process_noise_baseline_sigma_m: sigma_m
+          ] ++ extra_opts
+
+        filter_case =
+          run_filter_case(
+            "#{mode}_process_noise_#{process_noise_label(sigma_m)}",
+            case_epochs,
+            case_contexts,
+            nav,
+            base_arp,
+            glonass_slots,
+            @max_segment_epochs,
+            opts
+          )
+
+        process_noise_sweep_cell(mode, sigma_m, filter_case, length(case_epochs))
+      end)
+    end)
+  end
+
+  defp process_noise_label(sigma_m) do
+    sigma_m
+    |> :erlang.float_to_binary(decimals: 1)
+    |> String.replace(".", "_")
+  end
+
+  defp process_noise_sweep_cell(mode, sigma_m, filter_case, built_epoch_count) do
+    completed_arc = filter_case.solved_epoch_count == built_epoch_count
+
+    %{
+      mode: mode,
+      process_noise_baseline_sigma_m: sigma_m,
+      built_epoch_count: built_epoch_count,
+      solved_epoch_count: filter_case.solved_epoch_count,
+      completed_arc: completed_arc,
+      segment_count: filter_case.segment_count,
+      longest_stable_prefix_epochs: filter_case.longest_stable_prefix_epochs,
+      first_unstable_time: filter_case.first_unstable_time,
+      epoch2: process_noise_epoch2(filter_case.per_epoch),
+      orbis: filter_case.orbis,
+      completed_arc_median_m: if(completed_arc, do: filter_case.orbis.error_3d_median_m),
+      completed_arc_p95_m: if(completed_arc, do: filter_case.orbis.error_3d_p95_m),
+      errors_3d_m: Enum.map(filter_case.per_epoch, & &1.error_3d_m)
+    }
+  end
+
+  defp process_noise_epoch2(per_epoch) do
+    case Enum.at(per_epoch, 1) do
+      nil ->
+        nil
+
+      epoch ->
+        state = epoch.state_diagnostics || %{}
+
+        %{
+          time: epoch.time,
+          stable: stable_epoch?(epoch),
+          error_3d_m: epoch.error_3d_m,
+          carried_baseline_error_3d_m: Map.get(state, :carried_baseline_error_3d_m),
+          information_condition_estimate: Map.get(state, :information_condition_estimate),
+          sd_ambiguity_columns: Map.get(state, :sd_ambiguity_columns),
+          hold_count: Map.get(state, :hold_count)
+        }
+    end
   end
 
   defp run_filter_case(
@@ -1337,7 +1438,12 @@ defmodule RoverC1SlipExploration202606 do
     epochs = Enum.map(segment, &elem(&1, 0))
     contexts = Enum.map(segment, &elem(&1, 1))
     initial_baseline = spp_initial_baseline!(nav, epochs, base_arp)
-    opts = filter_opts(initial_baseline, epochs, glonass_slots)
+
+    opts =
+      initial_baseline
+      |> filter_opts(epochs, glonass_slots)
+      |> maybe_override_process_noise(solve_opts)
+
     diagnostics? = Keyword.get(solve_opts, :diagnostics?, true)
     log? = Keyword.get(solve_opts, :log?, true)
 
@@ -1391,6 +1497,13 @@ defmodule RoverC1SlipExploration202606 do
         context = hd(contexts)
         IO.puts("skipping unsolved epoch #{context.time}: #{inspect(reason)}")
         []
+    end
+  end
+
+  defp maybe_override_process_noise(opts, solve_opts) do
+    case Keyword.fetch(solve_opts, :process_noise_baseline_sigma_m) do
+      {:ok, sigma_m} -> Keyword.put(opts, :process_noise_baseline_sigma_m, sigma_m)
+      :error -> opts
     end
   end
 
@@ -2490,9 +2603,48 @@ defmodule RoverC1SlipExploration202606 do
           comparative: comparative_verdict(comparison, demo5, :pooled),
           invariant: invariant_verdict(comparison_epochs)
         }),
+      "process_noise_sweep" => stringify_keys(pooled_process_noise_sweep(arcs)),
       "cost" => stringify_keys(pooled_cost(arcs)),
       "promotion" => stringify_keys(promotion)
     }
+  end
+
+  defp pooled_process_noise_sweep(arcs) do
+    for mode <- ["stock", "detector"], sigma_m <- @process_noise_sweep_sigmas do
+      cells =
+        Enum.map(arcs, fn arc ->
+          Enum.find(arc.process_noise_sweep, fn cell ->
+            cell.mode == mode and cell.process_noise_baseline_sigma_m == sigma_m
+          end)
+        end)
+
+      completed_cells = Enum.filter(cells, & &1.completed_arc)
+      completed_errors = Enum.flat_map(completed_cells, & &1.errors_3d_m)
+
+      %{
+        mode: mode,
+        process_noise_baseline_sigma_m: sigma_m,
+        completed_arcs: length(completed_cells),
+        total_arcs: length(cells),
+        all_arcs_completed: length(completed_cells) == length(cells),
+        min_stable_prefix_epochs:
+          cells |> Enum.map(& &1.longest_stable_prefix_epochs) |> Enum.min(),
+        max_stable_prefix_epochs:
+          cells |> Enum.map(& &1.longest_stable_prefix_epochs) |> Enum.max(),
+        completed_pooled_median_m: median(completed_errors),
+        completed_pooled_p95_m: percentile(completed_errors, 0.95),
+        epoch2_condition_min:
+          cells |> Enum.map(&epoch2_condition/1) |> Enum.reject(&is_nil/1) |> min_or_nil(),
+        epoch2_condition_max:
+          cells |> Enum.map(&epoch2_condition/1) |> Enum.reject(&is_nil/1) |> max_or_nil()
+      }
+    end
+  end
+
+  defp epoch2_condition(%{epoch2: nil}), do: nil
+
+  defp epoch2_condition(cell) do
+    cell.epoch2.information_condition_estimate
   end
 
   defp time_alignment(contexts) do
@@ -2584,7 +2736,25 @@ defmodule RoverC1SlipExploration202606 do
       "segmented" => filter_case_json(arc.segmented, arc.demo5),
       "comparison" => comparison_json(arc.comparison, arc.demo5),
       "demo5" => stringify_keys(arc.demo5),
+      "process_noise_sweep" => Enum.map(arc.process_noise_sweep, &process_noise_sweep_json/1),
       "cost" => stringify_keys(arc.cost)
+    }
+  end
+
+  defp process_noise_sweep_json(cell) do
+    %{
+      "mode" => cell.mode,
+      "process_noise_baseline_sigma_m" => cell.process_noise_baseline_sigma_m,
+      "built_epoch_count" => cell.built_epoch_count,
+      "solved_epoch_count" => cell.solved_epoch_count,
+      "completed_arc" => cell.completed_arc,
+      "segment_count" => cell.segment_count,
+      "longest_stable_prefix_epochs" => cell.longest_stable_prefix_epochs,
+      "first_unstable_time" => cell.first_unstable_time,
+      "epoch2" => stringify_keys(cell.epoch2),
+      "orbis" => stringify_keys(cell.orbis),
+      "completed_arc_median_m" => cell.completed_arc_median_m,
+      "completed_arc_p95_m" => cell.completed_arc_p95_m
     }
   end
 
@@ -2744,6 +2914,16 @@ defmodule RoverC1SlipExploration202606 do
       "## Filter options",
       "",
       option_table(),
+      "",
+      "## Process-noise scaling sweep",
+      "",
+      "This section runs hypothesis 2 against the same four arcs and harness settings, changing only `process_noise_baseline_sigma_m` over #{Enum.map_join(@process_noise_sweep_sigmas, ", ", &fmt/1)} m. `stock` is the carried-state filter without detector segmentation; `detector` is the carried-state filter with the C1 pre-segmented rover ambiguity ids.",
+      "",
+      process_noise_sweep_table(arcs, pooled),
+      "",
+      "The condition estimate is the same row-sum information-matrix estimate used above, sampled at the second carried-state epoch. Median and p95 are reported only for arcs whose cell solved every built epoch; pooled values combine only those completed arcs.",
+      "",
+      process_noise_sweep_verdict_text(pooled),
       ""
     ]
     |> Enum.join("\n")
@@ -2982,6 +3162,140 @@ defmodule RoverC1SlipExploration202606 do
       "Do not promote C1 yet. Detector segmentation extended the minimum stable prefix from #{promotion["stock_min_stable_prefix_epochs"]} to #{promotion["segmented_min_stable_prefix_epochs"]} epochs, but pooled median was #{fmt(segmented_median)} m versus the #{fmt(reference_median)} m reference and #{fmt(one_epoch_median)} m for the measured one-epoch row."
     end
   end
+
+  defp process_noise_sweep_table(arcs, pooled) do
+    arc_labels = Enum.map(arcs, &short_arc_label/1)
+
+    rows =
+      for mode <- ["stock", "detector"], sigma_m <- @process_noise_sweep_sigmas do
+        cells = Enum.map(arcs, &find_process_noise_cell(&1, mode, sigma_m))
+        pooled_cell = find_pooled_process_noise_cell(pooled, mode, sigma_m)
+
+        [
+          mode,
+          fmt(sigma_m),
+          "#{pooled_cell["completed_arcs"]}/#{pooled_cell["total_arcs"]}",
+          cells |> Enum.map_join("/", & &1["longest_stable_prefix_epochs"]),
+          cells |> Enum.map_join("/", &completed_metric(&1, "completed_arc_median_m")),
+          cells |> Enum.map_join("/", &completed_metric(&1, "completed_arc_p95_m")),
+          pooled_completed_metric(pooled_cell),
+          cells |> Enum.map_join("/", &epoch2_condition_text/1)
+        ]
+        |> table_row()
+      end
+
+    label_text = Enum.join(arc_labels, "/")
+
+    Enum.join(
+      [
+        "| Mode | Sigma m | Complete arcs | Prefix #{label_text} | Completed median m #{label_text} | Completed p95 m #{label_text} | Pooled completed med/p95 m | Epoch-2 cond est #{label_text} |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|"
+      ] ++ rows,
+      "\n"
+    )
+  end
+
+  defp short_arc_label(arc) do
+    label = arc["label"]
+
+    cond do
+      String.contains?(label, "08_04") -> "SJC1-08-04"
+      String.contains?(label, "svl1") -> "SVL1-08-24"
+      String.contains?(label, "12_15") -> "MTV1-12-15"
+      String.contains?(label, "12_28") -> "MTV1-12-28"
+      true -> label
+    end
+  end
+
+  defp find_process_noise_cell(arc, mode, sigma_m) do
+    Enum.find(arc["process_noise_sweep"], fn cell ->
+      cell["mode"] == mode and same_sigma?(cell["process_noise_baseline_sigma_m"], sigma_m)
+    end)
+  end
+
+  defp find_pooled_process_noise_cell(pooled, mode, sigma_m) do
+    Enum.find(pooled["process_noise_sweep"], fn cell ->
+      cell["mode"] == mode and same_sigma?(cell["process_noise_baseline_sigma_m"], sigma_m)
+    end)
+  end
+
+  defp same_sigma?(a, b), do: abs(a - b) < 1.0e-9
+
+  defp completed_metric(%{"completed_arc" => true} = cell, key), do: fmt(cell[key])
+  defp completed_metric(_cell, _key), do: "n/a"
+
+  defp pooled_completed_metric(%{"completed_arcs" => 0}), do: "n/a"
+
+  defp pooled_completed_metric(cell) do
+    "#{fmt(cell["completed_pooled_median_m"])}/#{fmt(cell["completed_pooled_p95_m"])}"
+  end
+
+  defp epoch2_condition_text(%{"epoch2" => nil}), do: "n/a"
+
+  defp epoch2_condition_text(cell) do
+    cell
+    |> get_in(["epoch2", "information_condition_estimate"])
+    |> fmt_sci()
+  end
+
+  defp process_noise_sweep_verdict_text(pooled) do
+    sweep = pooled["process_noise_sweep"]
+    stock_rows = Enum.filter(sweep, &(&1["mode"] == "stock"))
+    detector_rows = Enum.filter(sweep, &(&1["mode"] == "detector"))
+    stock_survivors = Enum.filter(stock_rows, &(&1["min_stable_prefix_epochs"] > 1))
+    detector_survivors = Enum.filter(detector_rows, &(&1["min_stable_prefix_epochs"] > 1))
+    best_stock = Enum.max_by(stock_rows, & &1["min_stable_prefix_epochs"])
+
+    if stock_survivors == [] do
+      detector_sentence =
+        case detector_survivors do
+          [] ->
+            "Detector segmentation also fails to make every arc survive epoch 2 in this sweep."
+
+          rows ->
+            sigmas = rows |> Enum.map_join(", ", &fmt(&1["process_noise_baseline_sigma_m"]))
+            best_detector = best_completed_process_noise_row(rows)
+
+            gap =
+              ratio(
+                best_detector["completed_pooled_median_m"],
+                pooled["demo5"]["error_3d_median_m"]
+              )
+
+            "Detector segmentation survives epoch 2 for sigma #{sigmas} m, but its best completed pooled median is #{fmt(best_detector["completed_pooled_median_m"])} m versus demo5 #{fmt(pooled["demo5"]["error_3d_median_m"])} m (#{fmt_ratio(gap)}x), so survival is not accuracy recovery."
+        end
+
+      "Verdict: no. Process-noise scaling alone does not fix epoch-2 survival: the best stock row has a four-arc minimum stable prefix of #{best_stock["min_stable_prefix_epochs"]} at sigma #{fmt(best_stock["process_noise_baseline_sigma_m"])} m. Stock epoch-2 condition estimates span #{condition_range_text(stock_rows)}, which supports C2: intrinsic conditioning / missing innovation screening rather than only epoch-rate process noise. #{detector_sentence}"
+    else
+      best = best_completed_process_noise_row(stock_survivors)
+      median_gap = ratio(best["completed_pooled_median_m"], pooled["demo5"]["error_3d_median_m"])
+      p95_gap = ratio(best["completed_pooled_p95_m"], pooled["demo5"]["error_3d_p95_m"])
+
+      "Verdict: yes. Process-noise scaling fixes epoch-2 survival without C1 segmentation at sigma #{fmt(best["process_noise_baseline_sigma_m"])} m, with completed pooled median/p95 #{fmt(best["completed_pooled_median_m"])}/#{fmt(best["completed_pooled_p95_m"])} m. Demo5 pooled median/p95 is #{fmt(pooled["demo5"]["error_3d_median_m"])}/#{fmt(pooled["demo5"]["error_3d_p95_m"])} m, leaving #{fmt_ratio(median_gap)}x median and #{fmt_ratio(p95_gap)}x p95 residual gaps. The capability candidate is epoch-rate-aware process noise guidance, likely a per-sqrt-second scaling option; remaining accuracy work still needs the next ledger item."
+    end
+  end
+
+  defp best_completed_process_noise_row(rows) do
+    rows
+    |> Enum.filter(&(&1["completed_arcs"] > 0))
+    |> case do
+      [] -> Enum.min_by(rows, &(&1["completed_pooled_median_m"] || 1.0e300))
+      completed -> Enum.min_by(completed, &(&1["completed_pooled_median_m"] || 1.0e300))
+    end
+  end
+
+  defp condition_range_text(rows) do
+    mins = rows |> Enum.map(& &1["epoch2_condition_min"]) |> Enum.reject(&is_nil/1)
+    maxes = rows |> Enum.map(& &1["epoch2_condition_max"]) |> Enum.reject(&is_nil/1)
+
+    case {mins, maxes} do
+      {[], []} -> "n/a"
+      _ -> "#{fmt_sci(Enum.min(mins))}-#{fmt_sci(Enum.max(maxes))}"
+    end
+  end
+
+  defp fmt_ratio(nil), do: "n/a"
+  defp fmt_ratio(value), do: :erlang.float_to_binary(value, decimals: 1)
 
   defp option_table do
     rows =
@@ -3304,6 +3618,9 @@ defmodule RoverC1SlipExploration202606 do
   defp max_or_nil([]), do: nil
   defp max_or_nil(values), do: Enum.max(values)
 
+  defp min_or_nil([]), do: nil
+  defp min_or_nil(values), do: Enum.min(values)
+
   defp interpolate(a, b, fraction), do: a + (b - a) * fraction
 
   defp ecef_to_geodetic({x, y, z}) do
@@ -3433,6 +3750,14 @@ defmodule RoverC1SlipExploration202606 do
   defp fmt(nil), do: ""
   defp fmt(value) when is_float(value), do: :erlang.float_to_binary(value, decimals: 3)
   defp fmt(value), do: to_string(value)
+
+  defp fmt_sci(nil), do: ""
+
+  defp fmt_sci(value) when is_float(value) do
+    :io_lib.format("~.6e", [value]) |> IO.iodata_to_binary()
+  end
+
+  defp fmt_sci(value), do: to_string(value)
 end
 
 RoverC1SlipExploration202606.main(System.argv())
