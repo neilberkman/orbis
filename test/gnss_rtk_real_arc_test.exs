@@ -336,26 +336,17 @@ defmodule Orbis.GNSS.RTKRealArcTest do
 
     assert rust_fixed_epochs >= precise_oracle["reference"]["fixed_epochs"] - 1
     assert position_error(rust_full_filter.baseline_m, antenna_baseline) < 0.01
-    assert position_error(rust_full_filter.baseline_m, full_filter.baseline_m) < 1.0e-6
+    assert_exact_position(rust_full_filter.baseline_m, full_filter.baseline_m)
 
     for {rust_epoch, elixir_epoch} <- Enum.zip(rust_full_filter.epochs, full_filter.epochs) do
       assert rust_epoch.index == elixir_epoch.index
       assert rust_epoch.integer_status == elixir_epoch.integer_status
       assert rust_epoch.newly_fixed_ambiguities == elixir_epoch.newly_fixed_ambiguities
       assert rust_epoch.fixed_ambiguities == elixir_epoch.fixed_ambiguities
-      assert position_error(rust_epoch.baseline_m, elixir_epoch.baseline_m) < 1.0e-6
+      assert_exact_position(rust_epoch.baseline_m, elixir_epoch.baseline_m)
 
       if is_number(rust_epoch.integer_ratio) and is_number(elixir_epoch.integer_ratio) do
-        # The kernels agree on the ratio to ~1e-6 RELATIVE (measured on this
-        # arc: 7.3e-8 at the ratio-3.03 decision epoch, 7.2e-7 at ratio 4816).
-        # The absolute delta scales with the ratio because a clean fix drives
-        # the best LAMBDA score toward zero and the quotient amplifies the
-        # kernels' ~1e-6 state-level FP differences (Sherman-Morrison vs dense
-        # inverse, elevation op order). A relative gate stays tight at the
-        # fix/no-fix decision boundary (ratio ~ threshold) where an absolute
-        # one would be 100_000x looser than the actual agreement.
-        delta = abs(rust_epoch.integer_ratio - elixir_epoch.integer_ratio)
-        assert delta < 1.0e-5 * max(elixir_epoch.integer_ratio, 1.0)
+        assert rust_epoch.integer_ratio === elixir_epoch.integer_ratio
       end
     end
   end
@@ -425,6 +416,31 @@ defmodule Orbis.GNSS.RTKRealArcTest do
 
     assert Enum.max(fixed_errors) < 0.02
     assert Enum.sum(fixed_errors) / length(fixed_errors) < 0.01
+
+    # Trace gate: the Rust kernel reproduces the kinematic Elixir reference
+    # bit-for-bit, including the process-noise time update (the Lambda^-1 + Q
+    # covariance round-trip) and the conditioned baseline.
+    assert {:ok, rust_kinematic} =
+             RTK.solve_filter_baseline_epochs(
+               base_arp,
+               epochs,
+               [process_noise_baseline_sigma_m: 30.0, filter_kernel: :rust] ++ base_opts
+             )
+
+    assert rust_kinematic.metadata.filter_kernel == :rust
+    assert length(rust_kinematic.epochs) == length(kinematic.epochs)
+    assert_exact_position(rust_kinematic.baseline_m, kinematic.baseline_m)
+
+    for {rust_epoch, elixir_epoch} <- Enum.zip(rust_kinematic.epochs, kinematic.epochs) do
+      assert rust_epoch.index == elixir_epoch.index
+      assert rust_epoch.integer_status == elixir_epoch.integer_status
+      assert rust_epoch.fixed_ambiguities == elixir_epoch.fixed_ambiguities
+      assert_exact_position(rust_epoch.baseline_m, elixir_epoch.baseline_m)
+
+      if is_number(rust_epoch.integer_ratio) and is_number(elixir_epoch.integer_ratio) do
+        assert rust_epoch.integer_ratio === elixir_epoch.integer_ratio
+      end
+    end
   end
 
   defp real_gps_l1_rtk_epochs(sp3, base_obs, rover_obs, count) do
@@ -685,5 +701,15 @@ defmodule Orbis.GNSS.RTKRealArcTest do
         (y - truth_y) * (y - truth_y) +
         (z - truth_z) * (z - truth_z)
     )
+  end
+
+  defp assert_exact_position(%{x_m: x, y_m: y, z_m: z}, %{
+         x_m: truth_x,
+         y_m: truth_y,
+         z_m: truth_z
+       }) do
+    assert x === truth_x
+    assert y === truth_y
+    assert z === truth_z
   end
 end

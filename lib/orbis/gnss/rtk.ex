@@ -82,7 +82,7 @@ defmodule Orbis.GNSS.RTK do
   @default_filter_ambiguity_prior_sigma_m 1_000.0
   @default_filter_hold_sigma_m 1.0e-4
   @default_filter_process_noise_baseline_sigma_m 0.0
-  @rtk_filter_state_version 1
+  @rtk_filter_state_version 2
   @min_elevation_sin 0.05
   @double_difference_options [:reference_satellite_id]
   @float_baseline_options [
@@ -3591,6 +3591,8 @@ defmodule Orbis.GNSS.RTK do
           epochs,
           reference_sat,
           initial_baseline,
+          sd_ambiguity_ids,
+          initial_ambiguities,
           filter_opts.baseline_prior_sigma_m,
           filter_opts.ambiguity_prior_sigma_m
         ),
@@ -3859,34 +3861,42 @@ defmodule Orbis.GNSS.RTK do
     rust_offsets = rust_sd_keyed_values(dd_ambiguity_pairs, offsets)
     rust_epochs = Enum.map(epochs, &rust_epoch_term(&1, reference_sat, physical_sats))
 
-    with {:ok, updates} <-
-           NIF.rtk_filter_update_epochs(
-             acc.rust_state,
-             rust_epochs,
-             base,
-             rust_model_term(weights),
-             rust_wavelengths,
-             rust_offsets,
-             rust_update_opts_term(filter_opts, solve_opts, integer_opts)
-           ) do
-      epochs
-      |> Enum.zip(updates)
-      |> Enum.reduce_while({:ok, acc}, fn {epoch, update}, {:ok, acc} ->
-        case apply_rust_filter_update(
-               update,
-               base,
-               epoch,
-               reference_sat,
-               physical_sats,
-               dd_ambiguity_pairs,
-               dd_ambiguity_satellites,
-               weights,
-               acc
-             ) do
-          {:ok, next} -> {:cont, {:ok, next}}
-          {:error, _reason} = err -> {:halt, err}
-        end
-      end)
+    case NIF.rtk_filter_update_epochs(
+           acc.rust_state,
+           rust_epochs,
+           base,
+           rust_model_term(weights),
+           rust_wavelengths,
+           rust_offsets,
+           rust_update_opts_term(filter_opts, solve_opts, integer_opts)
+         ) do
+      {:ok, updates} ->
+        epochs
+        |> Enum.zip(updates)
+        |> Enum.reduce_while({:ok, acc}, fn {epoch, update}, {:ok, acc} ->
+          case apply_rust_filter_update(
+                 update,
+                 base,
+                 epoch,
+                 reference_sat,
+                 physical_sats,
+                 dd_ambiguity_pairs,
+                 dd_ambiguity_satellites,
+                 weights,
+                 acc
+               ) do
+            {:ok, next} -> {:cont, {:ok, next}}
+            {:error, _reason} = err -> {:halt, err}
+          end
+        end)
+
+      # The batch NIF tags a mid-arc failure with its epoch index
+      # ({:error, epoch_index, reason}); carry both to the caller.
+      {:error, epoch_index, reason} ->
+        {:error, {reason, epoch_index: epoch_index}}
+
+      {:error, _reason} = err ->
+        err
     end
   end
 
@@ -3983,18 +3993,30 @@ defmodule Orbis.GNSS.RTK do
          [first_epoch | _],
          reference_sat,
          initial_baseline,
+         sd_ambiguity_ids,
+         initial_ambiguities,
          baseline_prior_sigma_m,
          ambiguity_prior_sigma_m
        ) do
     ref_sd_id = single_difference(first_epoch, reference_sat).ambiguity_id
 
+    # Pre-size the kernel state with the reference's globally-sorted column order
+    # (sd_ambiguity_ids) and seeds, so the kernel's information matrix is
+    # column-identical to the Elixir reference. Otherwise the kernel grows columns
+    # by first-sighting insertion (reference first) — a permutation of the sorted
+    # order that takes different partial pivots in the solve, breaking 0-ULP.
+    # `ensure_ambiguity` is idempotent, so the per-epoch seeding is a no-op.
+    n = baseline_unknown_count(sd_ambiguity_ids)
+
     information =
-      sequential_initial_information(3, baseline_prior_sigma_m, ambiguity_prior_sigma_m)
+      sequential_initial_information(n, baseline_prior_sigma_m, ambiguity_prior_sigma_m)
+
+    ambiguities_m = Enum.map(sd_ambiguity_ids, &Map.fetch!(initial_ambiguities, &1))
 
     {
-      {@rtk_filter_state_version, ref_sd_id, [], ambiguity_prior_sigma_m},
+      {@rtk_filter_state_version, ref_sd_id, sd_ambiguity_ids, ambiguity_prior_sigma_m, 0},
       initial_baseline,
-      [],
+      ambiguities_m,
       List.flatten(information),
       [],
       []
@@ -4043,6 +4065,7 @@ defmodule Orbis.GNSS.RTK do
       solve_opts.position_tolerance_m,
       solve_opts.ambiguity_tolerance_m,
       solve_opts.max_iterations,
+      filter_opts.process_noise_baseline_sigma_m,
       integer_opts.ratio_threshold
     }
   end
@@ -4056,8 +4079,8 @@ defmodule Orbis.GNSS.RTK do
   end
 
   defp rust_filter_state_to_elixir(
-         {{@rtk_filter_state_version, _reference_sat, sd_ids, _ambiguity_prior_sigma_m}, baseline,
-          sd_ambiguities, information, fixed_cycles, fixed_m}
+         {{@rtk_filter_state_version, _reference_sat, sd_ids, _ambiguity_prior_sigma_m,
+           _epoch_count}, baseline, sd_ambiguities, information, fixed_cycles, fixed_m}
        )
        when length(sd_ids) == length(sd_ambiguities) do
     n = 3 + length(sd_ids)
@@ -4248,27 +4271,86 @@ defmodule Orbis.GNSS.RTK do
     sigma = Map.get(filter_opts, :process_noise_baseline_sigma_m, 0.0)
 
     if acc.epochs != [] and sigma > 0.0 do
-      q = sigma * sigma
-
-      with {:ok, covariance} <- invert_matrix(acc.information),
-           {:ok, information} <- invert_matrix(inflate_baseline_covariance(covariance, q)) do
-        %{acc | information: information}
-      else
-        _ -> acc
+      case inflate_baseline_information(acc.information, sigma * sigma) do
+        {:ok, information} -> %{acc | information: information}
+        :error -> acc
       end
     else
       acc
     end
   end
 
-  # Add process-noise variance q to the 3x3 baseline (position) diagonal of the
-  # covariance, leaving the ambiguity block and all cross-covariances untouched.
-  defp inflate_baseline_covariance(covariance, q) do
-    covariance
-    |> Enum.with_index()
-    |> Enum.map(fn {row, i} ->
-      if i < 3, do: List.update_at(row, i, &(&1 + q)), else: row
-    end)
+  # Rank-3 (Woodbury) baseline process-noise inflation in information space:
+  #
+  #   Λ' = Λ - Λ[:,0..2] · (Q⁻¹ + Λ₀₀)⁻¹ · Λ[0..2,:],   Q = q·I₃
+  #
+  # Mathematically equal to adding q to the baseline covariance diagonal and
+  # re-inverting, but via a single 3×3 inverse instead of two full n×n inversions.
+  # The double full-invert corrupts near-singular ambiguity directions when q does
+  # not dominate (the filter then goes singular at small process noise); this
+  # rank-3 form is stable for any q and preserves the ambiguity block exactly.
+  # Returns `:error` on a singular 3×3 system (caller keeps the un-inflated prior).
+  defp inflate_baseline_information(information, q) do
+    inv_q = 1.0 / q
+
+    m =
+      for i <- 0..2 do
+        for j <- 0..2 do
+          at2(information, i, j) + if(i == j, do: inv_q, else: 0.0)
+        end
+      end
+
+    case invert_3x3(m) do
+      {:ok, m_inv} ->
+        # cols = Λ[:,0..2] (n×3); Λ symmetric ⇒ Λ[0..2,:] = colsᵀ.
+        cols = Enum.map(information, &Enum.take(&1, 3))
+        # w = cols · M⁻¹ (n×3); Λ' = Λ - w · colsᵀ.
+        w =
+          Enum.map(cols, fn ci ->
+            for a <- 0..2 do
+              Enum.reduce(0..2, 0.0, fn b, acc -> acc + Enum.at(ci, b) * at2(m_inv, b, a) end)
+            end
+          end)
+
+        updated =
+          [information, w]
+          |> Enum.zip()
+          |> Enum.map(fn {row, wi} ->
+            [row, cols]
+            |> Enum.zip()
+            |> Enum.map(fn {value, cj} ->
+              value -
+                Enum.reduce(0..2, 0.0, fn a, acc -> acc + Enum.at(wi, a) * Enum.at(cj, a) end)
+            end)
+          end)
+
+        {:ok, updated}
+
+      :error ->
+        :error
+    end
+  end
+
+  defp at2(matrix, i, j), do: matrix |> Enum.at(i) |> Enum.at(j)
+
+  # Closed-form 3×3 inverse (adjugate / determinant). Deterministic arithmetic so
+  # the Elixir reference and the Rust kernel match bit-for-bit. `<= 1e-12` matches
+  # the singular-guard convention used elsewhere in the filter.
+  defp invert_3x3([[a, b, c], [d, e, f], [g, h, i]]) do
+    det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g)
+
+    if abs(det) <= 1.0e-12 do
+      :error
+    else
+      inv_det = 1.0 / det
+
+      {:ok,
+       [
+         [(e * i - f * h) * inv_det, (c * h - b * i) * inv_det, (b * f - c * e) * inv_det],
+         [(f * g - d * i) * inv_det, (a * i - c * g) * inv_det, (c * d - a * f) * inv_det],
+         [(d * h - e * g) * inv_det, (b * g - a * h) * inv_det, (a * e - b * d) * inv_det]
+       ]}
+    end
   end
 
   # Ambiguity-conditioned ("fixed") baseline for the reported solution. The float

@@ -18,7 +18,7 @@ type SatObsTerm = (f64, f64, f64, f64);
 type SatPosTerm = (Vec3, Vec3, Vec3);
 type SatTerm = (SatIdsTerm, SatObsTerm, SatPosTerm);
 type EpochTerm = (SatTerm, Vec<SatTerm>);
-type StateHeaderTerm = (u16, String, Vec<String>, f64);
+type StateHeaderTerm = (u16, String, Vec<String>, f64, usize);
 type StateTerm = (
     StateHeaderTerm,
     Vec3,
@@ -29,7 +29,7 @@ type StateTerm = (
 );
 type UpdateTerm = (StateTerm, Vec3, f64, bool, Vec<String>, Vec<String>);
 type ModelTerm = (f64, f64, String, bool, bool);
-type UpdateOptsTerm = (f64, f64, f64, usize, f64);
+type UpdateOptsTerm = (f64, f64, f64, usize, f64, f64);
 
 mod atoms {
     rustler::atoms! {
@@ -117,9 +117,7 @@ pub fn rtk_filter_update_epochs<'a>(
             Ok(update) => update,
             // Carry the failing epoch index so a long-arc failure is a lookup,
             // not a debugging session: {:error, epoch_index, reason}.
-            Err(err) => {
-                return Ok((atoms::error(), idx, encode_update_error(env, err)).encode(env))
-            }
+            Err(err) => return Ok((atoms::error(), idx, encode_update_error(env, err)).encode(env)),
         };
 
         state = update.state.clone();
@@ -176,7 +174,7 @@ fn encode_ils_error<'a>(env: Env<'a>, err: astrodynamics_gnss::ils::IlsError) ->
 
 fn decode_state(term: StateTerm) -> FilterState {
     let (
-        (version, reference_sat, sd_ambiguity_ids, ambiguity_prior_sigma_m),
+        (version, reference_sat, sd_ambiguity_ids, ambiguity_prior_sigma_m, epoch_count),
         baseline_m,
         sd_ambiguities_m,
         information,
@@ -192,6 +190,7 @@ fn decode_state(term: StateTerm) -> FilterState {
         sd_ambiguities_m,
         information,
         ambiguity_prior_sigma_m,
+        epoch_count,
         fixed_cycles: fixed_cycles.into_iter().collect(),
         fixed_m: fixed_m.into_iter().collect(),
     }
@@ -204,6 +203,7 @@ fn encode_state(state: FilterState) -> StateTerm {
             state.reference_sat,
             state.sd_ambiguity_ids,
             state.ambiguity_prior_sigma_m,
+            state.epoch_count,
         ),
         tuple3(state.baseline_m),
         state.sd_ambiguities_m,
@@ -260,12 +260,20 @@ fn decode_model(term: ModelTerm) -> Option<MeasModel> {
 }
 
 fn decode_opts(term: UpdateOptsTerm) -> UpdateOpts {
-    let (hold_sigma_m, position_tol_m, ambiguity_tol_m, max_iterations, ratio_threshold) = term;
+    let (
+        hold_sigma_m,
+        position_tol_m,
+        ambiguity_tol_m,
+        max_iterations,
+        process_noise_baseline_sigma_m,
+        ratio_threshold,
+    ) = term;
     UpdateOpts {
         hold_sigma_m,
         position_tol_m,
         ambiguity_tol_m,
         max_iterations,
+        process_noise_baseline_sigma_m,
         search: SearchOpts { ratio_threshold },
     }
 }
