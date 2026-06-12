@@ -63,3 +63,17 @@ PCO/PCV, solid tides, wind-up implementations stay DEFERRED until the step-2
 ledger reports. They are mm-to-cm effects; if the measured gap is meters of
 multipath (expected for phone-grade C/N0), they are below the problem's noise
 floor and their natural moment is when a cm-grade claim is on the table.
+
+
+## Amendment 1 (ratified by Neil, 2026-06-12)
+
+A refusal-invariant verdict requires BOTH:
+a. Minimum population: fixed n >= 20 in the evaluated scope (arc or pooled);
+   below that the verdict is "underpowered", never pass or fail.
+b. Absolute credibility floor: the fixed population's median 3D error must be
+   <= 2x the demo5 oracle's median on the same arc; otherwise the verdict is
+   FAIL regardless of the relative comparison. Confident garbage fails;
+   "less catastrophic than float" is not a pass.
+Verdicts in pre-amendment reports are reinterpreted accordingly: the 2026-06
+multi-epoch invariant verdicts become FAIL-by-floor; the single-epoch
+comparison row stands.
