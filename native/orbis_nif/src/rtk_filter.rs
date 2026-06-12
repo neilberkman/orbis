@@ -6,8 +6,8 @@
 //! into Rust without introducing a second Elixir struct layer.
 
 use astrodynamics_gnss::rtk_filter::{
-    update_epoch, Epoch, FilterState, MeasModel, SatMeas, SearchOpts, StochasticModel, UpdateError,
-    UpdateOpts,
+    update_epoch, Epoch, FilterState, InnovationScreen, InnovationScreenOpts, MeasModel, SatMeas,
+    SearchOpts, StochasticModel, UpdateError, UpdateOpts,
 };
 use rustler::{Encoder, Env, NifResult, Term};
 use std::collections::BTreeMap;
@@ -30,9 +30,20 @@ type StateTerm = (
     Vec<(String, i64)>,
     Vec<(String, f64)>,
 );
-type UpdateTerm = (StateTerm, Vec3, f64, bool, Vec<String>, Vec<String>);
+type ScreenTailTerm = (usize, Option<f64>, Option<f64>, bool);
+type ScreenTerm = (f64, usize, usize, usize, usize, usize, ScreenTailTerm);
+type UpdateTerm = (
+    StateTerm,
+    Vec3,
+    f64,
+    bool,
+    Vec<String>,
+    Vec<String>,
+    Option<ScreenTerm>,
+);
 type ModelTerm = (f64, f64, String, bool, bool);
-type UpdateOptsTerm = (f64, f64, f64, usize, f64, f64, Vec<String>);
+type UpdateOptsExtraTerm = (Vec<String>, f64, usize);
+type UpdateOptsTerm = (f64, f64, f64, usize, f64, f64, UpdateOptsExtraTerm);
 
 mod atoms {
     rustler::atoms! {
@@ -140,6 +151,24 @@ fn encode_update(update: astrodynamics_gnss::rtk_filter::EpochUpdate) -> UpdateT
         update.integer_fixed,
         update.newly_fixed,
         update.fixed_ids,
+        update.innovation_screen.map(encode_innovation_screen),
+    )
+}
+
+fn encode_innovation_screen(screen: InnovationScreen) -> ScreenTerm {
+    (
+        screen.threshold_sigma,
+        screen.min_rows,
+        screen.input_rows,
+        screen.accepted_rows,
+        screen.rejected_rows,
+        screen.rejected_code_rows,
+        (
+            screen.rejected_phase_rows,
+            screen.max_abs_normalized_innovation,
+            screen.max_rejected_abs_normalized_innovation,
+            screen.coasted,
+        ),
     )
 }
 
@@ -280,7 +309,7 @@ fn decode_opts(term: UpdateOptsTerm) -> UpdateOpts {
         max_iterations,
         process_noise_baseline_sigma_m,
         ratio_threshold,
-        float_only_systems,
+        (float_only_systems, innovation_screen_sigma, innovation_screen_min_rows),
     ) = term;
     UpdateOpts {
         hold_sigma_m,
@@ -289,6 +318,14 @@ fn decode_opts(term: UpdateOptsTerm) -> UpdateOpts {
         max_iterations,
         process_noise_baseline_sigma_m,
         float_only_systems,
+        innovation_screen: if innovation_screen_sigma > 0.0 {
+            Some(InnovationScreenOpts {
+                threshold_sigma: innovation_screen_sigma,
+                min_rows: innovation_screen_min_rows,
+            })
+        } else {
+            None
+        },
         search: SearchOpts { ratio_threshold },
     }
 }
