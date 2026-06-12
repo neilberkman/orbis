@@ -485,19 +485,20 @@ defmodule Orbis.GNSS.RTKRealArcTest do
 
     assert length(epochs) == oracle["reference"]["epochs"]
 
-    assert {:ok, sol} =
-             RTK.solve_filter_baseline_epochs(base_arp, epochs,
-               initial_baseline_m: {0.0, 0.0, 0.0},
-               max_iterations: 10,
-               on_cycle_slip: :split_arc,
-               elevation_mask_deg: 10.0,
-               stochastic_model: :rtklib,
-               code_sigma_m: 0.3,
-               phase_sigma_m: 0.003,
-               ambiguity_wavelength_m: multignss_wavelength_map(epochs, glonass_slots),
-               integer_candidate_limit: 200_000,
-               float_only_systems: ["R"]
-             )
+    opts = [
+      initial_baseline_m: {0.0, 0.0, 0.0},
+      max_iterations: 10,
+      on_cycle_slip: :split_arc,
+      elevation_mask_deg: 10.0,
+      stochastic_model: :rtklib,
+      code_sigma_m: 0.3,
+      phase_sigma_m: 0.003,
+      ambiguity_wavelength_m: multignss_wavelength_map(epochs, glonass_slots),
+      integer_candidate_limit: 200_000,
+      float_only_systems: ["R"]
+    ]
+
+    assert {:ok, sol} = RTK.solve_filter_baseline_epochs(base_arp, epochs, opts)
 
     # Each observed system carries its own double-difference reference.
     assert %{"G" => "G" <> _, "R" => "R" <> _, "E" => "E" <> _, "C" => "C" <> _} =
@@ -537,6 +538,32 @@ defmodule Orbis.GNSS.RTKRealArcTest do
       end)
 
     assert Enum.min(sat_counts) >= oracle_min_sats
+
+    assert {:ok, rust_sol} =
+             RTK.solve_filter_baseline_epochs(base_arp, epochs, opts ++ [filter_kernel: :rust])
+
+    assert rust_sol.metadata.filter_kernel == :rust
+    assert rust_sol.metadata.reference_satellites == sol.metadata.reference_satellites
+    assert rust_sol.metadata.float_only_systems == ["R"]
+
+    for epoch <- rust_sol.epochs do
+      refute Enum.any?(epoch.fixed_ambiguities, &String.starts_with?(&1, "R"))
+    end
+
+    refute Enum.any?(Map.keys(rust_sol.fixed_ambiguities_cycles), &String.starts_with?(&1, "R"))
+    assert Enum.count(rust_sol.epochs, &(&1.integer_status == :fixed)) == fixed_epochs
+    assert_exact_position(rust_sol.baseline_m, sol.baseline_m)
+
+    for {rust_epoch, elixir_epoch} <- Enum.zip(rust_sol.epochs, sol.epochs) do
+      assert rust_epoch.index == elixir_epoch.index
+      assert rust_epoch.integer_status == elixir_epoch.integer_status
+      assert rust_epoch.fixed_ambiguities == elixir_epoch.fixed_ambiguities
+      assert_exact_position(rust_epoch.baseline_m, elixir_epoch.baseline_m)
+
+      if is_number(rust_epoch.integer_ratio) and is_number(elixir_epoch.integer_ratio) do
+        assert rust_epoch.integer_ratio === elixir_epoch.integer_ratio
+      end
+    end
   end
 
   defp real_gps_l1_rtk_epochs(sp3, base_obs, rover_obs, count),

@@ -1470,13 +1470,35 @@ defmodule Orbis.GNSS.RTKTest do
       assert position_error(sol.baseline_m, @truth_baseline) < 1.0e-3
     end
 
-    test "the Rust filter kernel rejects multi-system epochs" do
-      epochs = multignss_epochs(["G", "E"])
+    test "the Rust filter kernel matches multi-system Elixir filter with float-only systems" do
+      epochs = multignss_epochs(["G", "E", "R"])
 
-      assert RTK.solve_filter_baseline_epochs(@base, epochs,
-               ambiguity_wavelength_m: multignss_wavelengths(),
-               filter_kernel: :rust
-             ) == {:error, {:unsupported_filter_kernel, :multi_gnss}}
+      opts = [
+        ambiguity_wavelength_m: multignss_wavelengths(),
+        float_only_systems: ["R"],
+        initial_baseline_m: {-40.0, 35.0, 12.0}
+      ]
+
+      assert {:ok, elixir_sol} = RTK.solve_filter_baseline_epochs(@base, epochs, opts)
+
+      assert {:ok, rust_sol} =
+               RTK.solve_filter_baseline_epochs(@base, epochs, opts ++ [filter_kernel: :rust])
+
+      assert rust_sol.metadata.filter_kernel == :rust
+      assert rust_sol.metadata.reference_satellites == elixir_sol.metadata.reference_satellites
+      assert rust_sol.metadata.float_only_systems == ["R"]
+      assert rust_sol.metadata.fixed_epoch_count == elixir_sol.metadata.fixed_epoch_count
+      assert rust_sol.fixed_ambiguities_cycles == elixir_sol.fixed_ambiguities_cycles
+      refute Enum.any?(Map.keys(rust_sol.fixed_ambiguities_cycles), &String.starts_with?(&1, "R"))
+      assert position_error(rust_sol.baseline_m, @truth_baseline) < 1.0e-3
+
+      for {rust_epoch, elixir_epoch} <- Enum.zip(rust_sol.epochs, elixir_sol.epochs) do
+        assert rust_epoch.index == elixir_epoch.index
+        assert rust_epoch.integer_status == elixir_epoch.integer_status
+        assert rust_epoch.newly_fixed_ambiguities == elixir_epoch.newly_fixed_ambiguities
+        assert rust_epoch.fixed_ambiguities == elixir_epoch.fixed_ambiguities
+        assert ecef_delta_norm(rust_epoch.baseline_m, elixir_epoch.baseline_m) < 1.0e-6
+      end
     end
   end
 

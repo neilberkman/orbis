@@ -17,8 +17,11 @@ type SatIdsTerm = (String, String);
 type SatObsTerm = (f64, f64, f64, f64);
 type SatPosTerm = (Vec3, Vec3, Vec3);
 type SatTerm = (SatIdsTerm, SatObsTerm, SatPosTerm);
-type EpochTerm = (SatTerm, Vec<SatTerm>);
-type StateHeaderTerm = (u16, String, Vec<String>, f64, usize);
+// References: the per-system reference satellites present this epoch (one per
+// constellation letter), then the non-reference satellites.
+type EpochTerm = (Vec<SatTerm>, Vec<SatTerm>);
+// Header references: sorted [{system_letter, reference_sd_ambiguity_id}].
+type StateHeaderTerm = (u16, Vec<(String, String)>, Vec<String>, f64, usize);
 type StateTerm = (
     StateHeaderTerm,
     Vec3,
@@ -29,7 +32,7 @@ type StateTerm = (
 );
 type UpdateTerm = (StateTerm, Vec3, f64, bool, Vec<String>, Vec<String>);
 type ModelTerm = (f64, f64, String, bool, bool);
-type UpdateOptsTerm = (f64, f64, f64, usize, f64, f64);
+type UpdateOptsTerm = (f64, f64, f64, usize, f64, f64, Vec<String>);
 
 mod atoms {
     rustler::atoms! {
@@ -37,6 +40,8 @@ mod atoms {
         error,
         invalid_stochastic_model,
         reference_changed,
+        unknown_reference_system,
+        missing_system_reference,
         missing_ambiguity_column,
         missing_wavelength,
         missing_offset,
@@ -140,8 +145,16 @@ fn encode_update(update: astrodynamics_gnss::rtk_filter::EpochUpdate) -> UpdateT
 
 fn encode_update_error<'a>(env: Env<'a>, err: UpdateError) -> Term<'a> {
     match err {
-        UpdateError::ReferenceChanged { expected, actual } => {
-            (atoms::reference_changed(), expected, actual).encode(env)
+        UpdateError::ReferenceChanged {
+            system,
+            expected,
+            actual,
+        } => (atoms::reference_changed(), system, expected, actual).encode(env),
+        UpdateError::UnknownReferenceSystem(system) => {
+            (atoms::unknown_reference_system(), system).encode(env)
+        }
+        UpdateError::MissingSystemReference(system) => {
+            (atoms::missing_system_reference(), system).encode(env)
         }
         UpdateError::MissingAmbiguityColumn(id) => {
             (atoms::missing_ambiguity_column(), id).encode(env)
@@ -174,7 +187,7 @@ fn encode_ils_error<'a>(env: Env<'a>, err: astrodynamics_gnss::ils::IlsError) ->
 
 fn decode_state(term: StateTerm) -> FilterState {
     let (
-        (version, reference_sat, sd_ambiguity_ids, ambiguity_prior_sigma_m, epoch_count),
+        (version, references, sd_ambiguity_ids, ambiguity_prior_sigma_m, epoch_count),
         baseline_m,
         sd_ambiguities_m,
         information,
@@ -184,7 +197,7 @@ fn decode_state(term: StateTerm) -> FilterState {
 
     FilterState {
         version,
-        reference_sat,
+        references: references.into_iter().collect(),
         sd_ambiguity_ids,
         baseline_m: vec3(baseline_m),
         sd_ambiguities_m,
@@ -200,7 +213,7 @@ fn encode_state(state: FilterState) -> StateTerm {
     (
         (
             state.version,
-            state.reference_sat,
+            state.references.into_iter().collect(),
             state.sd_ambiguity_ids,
             state.ambiguity_prior_sigma_m,
             state.epoch_count,
@@ -214,9 +227,9 @@ fn encode_state(state: FilterState) -> StateTerm {
 }
 
 fn decode_epoch(term: EpochTerm) -> Epoch {
-    let (reference, nonref) = term;
+    let (references, nonref) = term;
     Epoch {
-        reference: decode_sat(reference),
+        references: references.into_iter().map(decode_sat).collect(),
         nonref: nonref.into_iter().map(decode_sat).collect(),
     }
 }
@@ -267,6 +280,7 @@ fn decode_opts(term: UpdateOptsTerm) -> UpdateOpts {
         max_iterations,
         process_noise_baseline_sigma_m,
         ratio_threshold,
+        float_only_systems,
     ) = term;
     UpdateOpts {
         hold_sigma_m,
@@ -274,6 +288,7 @@ fn decode_opts(term: UpdateOptsTerm) -> UpdateOpts {
         ambiguity_tol_m,
         max_iterations,
         process_noise_baseline_sigma_m,
+        float_only_systems,
         search: SearchOpts { ratio_threshold },
     }
 }

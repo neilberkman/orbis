@@ -22,20 +22,22 @@ defmodule Orbis.RTKFilterKernelNIFTest do
         sat_term(id, pos, base, rover, cycles, lambda)
       end)
 
-    epoch = {reference, nonref}
+    epoch = {[reference], nonref}
 
     state =
-      {{2, "G01", [], 10_000.0, 0}, {-30.0, 25.0, -10.0}, [], prior_information(10_000.0), [], []}
+      {{3, [{"G", "G01"}], [], 10_000.0, 0}, {-30.0, 25.0, -10.0}, [],
+       prior_information(10_000.0), [], []}
 
     model = {0.3, 0.003, "simple", false, false}
     wavelengths = for {id, _pos, _cycles} <- tl(sats), do: {id, lambda}
     offsets = for {id, _pos, _cycles} <- tl(sats), do: {id, 0.0}
-    opts = {1.0, 1.0e-3, 1.0e-6, 10, 0.0, 3.0}
+    opts = {1.0, 1.0e-3, 1.0e-6, 10, 0.0, 3.0, []}
 
     bad_reference_state =
-      {{2, "G99", [], 10_000.0, 0}, {-30.0, 25.0, -10.0}, [], prior_information(10_000.0), [], []}
+      {{3, [{"G", "G99"}], [], 10_000.0, 0}, {-30.0, 25.0, -10.0}, [],
+       prior_information(10_000.0), [], []}
 
-    assert {:error, {:reference_changed, "G99", "G01"}} =
+    assert {:error, {:reference_changed, "G", "G99", "G01"}} =
              NIF.rtk_filter_update_epoch(
                bad_reference_state,
                epoch,
@@ -58,8 +60,8 @@ defmodule Orbis.RTKFilterKernelNIFTest do
     # The reported (ambiguity-conditioned) baseline tracks truth on the fixing epoch.
     assert distance(reported_baseline, truth) < 1.0e-3
 
-    assert {{2, "G01", ["G01", "G02", "G03", "G04", "G05"], 10_000.0, 1}, baseline, _, _, cycles,
-            metres} = next_state
+    assert {{3, [{"G", "G01"}], ["G01", "G02", "G03", "G04", "G05"], 10_000.0, 1}, baseline, _, _,
+            cycles, metres} = next_state
 
     assert distance(baseline, truth) < 1.0e-3
     assert cycles == [{"G02", 3}, {"G03", -7}, {"G04", 12}, {"G05", -4}]
@@ -82,8 +84,8 @@ defmodule Orbis.RTKFilterKernelNIFTest do
 
     assert second_ratio == 0.0
 
-    assert {{2, "G01", ["G01", "G02", "G03", "G04", "G05"], 10_000.0, 2}, _baseline, _, _,
-            ^cycles, _metres} = second_state
+    assert {{3, [{"G", "G01"}], ["G01", "G02", "G03", "G04", "G05"], 10_000.0, 2}, _baseline, _,
+            _, ^cycles, _metres} = second_state
   end
 
   test "updates a batch of RTK filter epochs in one NIF call" do
@@ -105,15 +107,16 @@ defmodule Orbis.RTKFilterKernelNIFTest do
         sat_term(id, pos, base, rover, cycles, lambda)
       end)
 
-    epoch = {reference, nonref}
+    epoch = {[reference], nonref}
 
     state =
-      {{2, "G01", [], 10_000.0, 0}, {-30.0, 25.0, -10.0}, [], prior_information(10_000.0), [], []}
+      {{3, [{"G", "G01"}], [], 10_000.0, 0}, {-30.0, 25.0, -10.0}, [],
+       prior_information(10_000.0), [], []}
 
     model = {0.3, 0.003, "simple", false, false}
     wavelengths = for {id, _pos, _cycles} <- tl(sats), do: {id, lambda}
     offsets = for {id, _pos, _cycles} <- tl(sats), do: {id, 0.0}
-    opts = {1.0, 1.0e-3, 1.0e-6, 10, 0.0, 3.0}
+    opts = {1.0, 1.0e-3, 1.0e-6, 10, 0.0, 3.0, []}
 
     assert {:ok,
             [
@@ -137,14 +140,14 @@ defmodule Orbis.RTKFilterKernelNIFTest do
     assert second_ratio == 0.0
     assert second_fixed_ids == first_fixed_ids
 
-    assert {{2, "G01", ["G01", "G02", "G03", "G04", "G05"], 10_000.0, 1}, first_baseline, _, _,
-            cycles, _metres} = first_state
+    assert {{3, [{"G", "G01"}], ["G01", "G02", "G03", "G04", "G05"], 10_000.0, 1}, first_baseline,
+            _, _, cycles, _metres} = first_state
 
     assert distance(first_baseline, truth) < 1.0e-3
     assert cycles == [{"G02", 3}, {"G03", -7}, {"G04", 12}, {"G05", -4}]
 
-    assert {{2, "G01", ["G01", "G02", "G03", "G04", "G05"], 10_000.0, 2}, second_baseline, _, _,
-            ^cycles, _metres} = second_state
+    assert {{3, [{"G", "G01"}], ["G01", "G02", "G03", "G04", "G05"], 10_000.0, 2},
+            second_baseline, _, _, ^cycles, _metres} = second_state
 
     assert distance(second_baseline, truth) < 1.0e-3
   end
