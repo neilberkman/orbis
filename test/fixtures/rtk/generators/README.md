@@ -30,6 +30,7 @@ Each config below changes exactly **one** variable from the canonical
 | ----------------------------------------------- | ---------------------------------- | ----------------------------------------------------- | --------------------------------------------------------------------------- |
 | `wtzr_wtzz_kinematic_gps_rtklib_oracle.json`    | `track_a_kinematic_gps_l1.conf`    | `posmode` static→**kinematic** (GPS L1)               | 119/120 fixed, ~7mm converged; epoch-0 kinematic cold-start transient (~1m) |
 | `wtzr_wtzz_multignss_static_rtklib_oracle.json` | `track_b_static_multignss_l1.conf` | `navsys` GPS→**GPS+GLO+GAL+BDS** (GLONASS float-only) | 120/120 fixed, ~1.8mm, 14–17 sats                                           |
+| `gsdc_2021_08_24_svl1_pixel5_p222_demo5_rtklib_oracle.json` | `track_a_gsdc_p222_grec_l1.conf` | real GSDC moving rover, demo5, G/R/E/C L1, P222 base | 10/3136 fixed with AR ratio gate 3.0; median 3.98m 3D / 3.07m horizontal, p95 8.78m 3D |
 
 **GLONASS is float-only** (`pos2-gloarmode=off`): FDMA inter-channel biases break
 the clean double-difference integer assumption, so GLONASS contributes to the
@@ -60,11 +61,43 @@ the committed JSON shape unchanged. The RTKLIB status trace reports 14-17 total
 satellites over the 120 epochs, including 5-6 GLONASS satellites per epoch
 (GPS 5-6, Galileo 3-5, BeiDou 0 on this RTKLIB 2.4.2 L1 arc).
 
-## Next: kinematic moving-rover arcs (queued, not yet vendored)
+## GSDC Track A moving rover
 
-The real Track A gate is genuinely-moving rovers (GSDC drive logs: moving phones,
-published ground-truth CSVs). Those arcs use the **demo5** RTKLIB fork as the
-oracle binary — the de-facto reference for low-cost/phone kinematic RTK that
-vanilla 2.4.2 handles poorly — vendored with its own version/commit provenance.
-Truth swaps from a surveyed baseline to a per-epoch trajectory; the JSON shape is
-unchanged.
+The GSDC oracle uses the RTKLIB Explorer **demo5** fork (`rnx2rtkp RTKLIB EX
+2.5.0`, commit `57d39e7`) because vanilla RTKLIB 2.4.2 is weak on smartphone
+carrier-phase logs. The raw GSDC competition files are not redistributable, so
+only the generated JSON, config, generator, and provenance are committed.
+
+Regenerate locally from the extracted drive and downloaded base/nav files:
+
+```sh
+RNX=/tmp/RTKLIB-demo5/app/consapp/rnx2rtkp/gcc/rnx2rtkp
+WORK=/tmp/gsdc-work
+DRIVE=$WORK/train/2021-08-24-US-SVL-1/GooglePixel5
+NAV=$WORK/cors/BRDC00WRD_R_20212360000_01D_MN.rnx
+
+$RNX -k track_a_gsdc_p222_grec_l1.conf \
+  -ts 2021/08/24 20:33:00 -te 2021/08/24 21:25:20 \
+  -o $WORK/track_a_gsdc_p222_grec_l1.pos \
+  $DRIVE/supplemental/gnss_rinex.21o \
+  $WORK/cors/p2222360.21o $NAV
+
+python3 pos_to_oracle.py $WORK/track_a_gsdc_p222_grec_l1.pos \
+  track_a_gsdc_p222_grec_l1.conf \
+  gsdc_svl1_pixel5_p222_grec_l1_demo5 \
+  "RTKLIB demo5 moving-rover oracle for GSDC 2022 train/2021-08-24-US-SVL-1/GooglePixel5 against NOAA CORS P222 (G/R/E/C L1, combined, fix-and-hold, AR ratio gate 3.0). Validated fixes on this phone arc are meter-class, not cm-class; the oracle is an honest trajectory accuracy reference, not a fix-rate target." \
+  ../gsdc_2021_08_24_svl1_pixel5_p222_demo5_rtklib_oracle.json \
+  --moving-truth-csv $DRIVE/ground_truth.csv \
+  --truth-source train/2021-08-24-US-SVL-1/GooglePixel5/ground_truth.csv \
+  --drive train/2021-08-24-US-SVL-1/GooglePixel5 \
+  --rover-source train/2021-08-24-US-SVL-1/GooglePixel5/supplemental/gnss_rinex.21o \
+  --base-source https://geodesy.noaa.gov/corsdata/rinex/2021/236/p222/p2222360.21d.gz \
+  --nav-source https://igs.bkg.bund.de/root_ftp/IGS/BRDC/2021/236/BRDC00WRD_R_20212360000_01D_MN.rnx.gz \
+  --base-station P222 \
+  --base-ecef-m=-2689639.5060,-4290438.6360,3865050.9560 \
+  --base-distance-km 18.936 \
+  --rtklib-version "EX 2.5.0" --rtklib-commit 57d39e7
+```
+
+The local byte-for-byte regeneration check is tagged `:local_data` and excluded
+by default.
