@@ -108,7 +108,8 @@ defmodule Orbis.GNSS.RTK do
     :integer_ratio_threshold,
     :integer_candidate_limit,
     :partial_ambiguity_resolution,
-    :partial_min_ambiguities
+    :partial_min_ambiguities,
+    :float_only_systems
   ]
   @residual_validation_options [:residual_threshold_sigma, :max_residual_exclusions]
   @fixed_baseline_options @float_baseline_options ++
@@ -175,7 +176,7 @@ defmodule Orbis.GNSS.RTK do
     @type t :: %__MODULE__{
             baseline_m: ecef(),
             rover_position_m: ecef(),
-            reference_satellite_id: String.t(),
+            reference_satellite_id: String.t() | %{String.t() => String.t()},
             used_sats: [String.t()],
             ambiguities_m: %{String.t() => float()},
             residuals_m: [residual()],
@@ -184,6 +185,7 @@ defmodule Orbis.GNSS.RTK do
               converged: boolean(),
               status: :state_tolerance | :max_iterations,
               physical_sats: [String.t()],
+              reference_satellites: %{String.t() => String.t()},
               ambiguity_satellites: %{String.t() => String.t()},
               ambiguity_float: %{
                 order: [String.t()],
@@ -248,7 +250,7 @@ defmodule Orbis.GNSS.RTK do
     @type t :: %__MODULE__{
             baseline_m: ecef(),
             rover_position_m: ecef(),
-            reference_satellite_id: String.t(),
+            reference_satellite_id: String.t() | %{String.t() => String.t()},
             used_sats: [String.t()],
             fixed_ambiguities_cycles: %{String.t() => integer()},
             fixed_ambiguities_m: %{String.t() => float()},
@@ -289,6 +291,7 @@ defmodule Orbis.GNSS.RTK do
               optional(:wide_lane_fixed) => boolean(),
               optional(:wide_lane_ambiguities_cycles) => %{String.t() => integer()},
               optional(:physical_sats) => [String.t()],
+              optional(:reference_satellites) => %{String.t() => String.t()},
               optional(:ambiguity_satellites) => %{String.t() => String.t()},
               optional(:partial_ambiguity_resolution) => boolean(),
               optional(:partial_fixed) => boolean(),
@@ -345,7 +348,7 @@ defmodule Orbis.GNSS.RTK do
     @type t :: %__MODULE__{
             baseline_m: ecef(),
             rover_position_m: ecef(),
-            reference_satellite_id: String.t(),
+            reference_satellite_id: String.t() | %{String.t() => String.t()},
             fixed_ambiguities_cycles: %{String.t() => integer()},
             epochs: [epoch_result()],
             metadata: map()
@@ -485,9 +488,14 @@ defmodule Orbis.GNSS.RTK do
 
   Options:
 
-    * `:reference_satellite_id` - fixed reference satellite. When omitted, the
-      highest-average-elevation satellite common to every epoch is used, with a
-      lexicographic tie-break.
+    * `:reference_satellite_id` - fixed double-difference reference. Accepts a
+      satellite id binary (single-system data only) or a per-system map such as
+      `%{"G" => "G04", "E" => "E11"}` covering every observed system. When
+      omitted, each system uses its highest-average-elevation satellite common
+      to every epoch in which the system appears, with a lexicographic
+      tie-break. Every non-reference satellite forms its double difference
+      against its own system's reference; there are no cross-system double
+      differences.
     * `:initial_baseline_m` - initial base-to-rover ECEF vector, default
       `{0.0, 0.0, 0.0}`.
     * `:code_sigma_m` / `:phase_sigma_m` - undifferenced receiver measurement
@@ -534,22 +542,21 @@ defmodule Orbis.GNSS.RTK do
     with :ok <- validate_options(opts, @float_baseline_options),
          {:ok, base} <- Types.normalize_ecef(base_position, :invalid_base_position),
          {:ok, normalized_epochs, prep_meta} <- prepare_baseline_epochs(base, epochs, opts),
-         {:ok, common_sats, _not_common_sats} <- common_epoch_sats(normalized_epochs),
          {:ok, all_sats} <- all_epoch_sats(normalized_epochs),
          :ok <- ensure_baseline_satellites(all_sats),
-         {:ok, reference_sat} <-
-           baseline_reference_satellite(common_sats, opts, base, normalized_epochs),
+         {:ok, refs} <-
+           baseline_reference_satellites(opts, base, normalized_epochs, all_sats),
          {:ok, solve_opts} <- baseline_solve_options(opts),
          {:ok, weights} <- baseline_weights(opts),
          {:ok, initial_baseline} <- initial_baseline(opts),
          {:ok, ambiguity_ids, ambiguity_satellites} <-
-           baseline_ambiguity_index(normalized_epochs, all_sats, reference_sat) do
-      physical_sats = Enum.reject(all_sats, &(&1 == reference_sat))
+           baseline_ambiguity_index(normalized_epochs, all_sats, refs) do
+      physical_sats = nonreference_sats(all_sats, refs)
 
-      if baseline_row_count(normalized_epochs, reference_sat) <
+      if baseline_row_count(normalized_epochs, refs) <
            baseline_unknown_count(ambiguity_ids) do
         {:error,
-         {:underdetermined, baseline_row_count(normalized_epochs, reference_sat),
+         {:underdetermined, baseline_row_count(normalized_epochs, refs),
           baseline_unknown_count(ambiguity_ids)}}
       else
         state = %{
@@ -560,7 +567,7 @@ defmodule Orbis.GNSS.RTK do
         iterate_baseline(
           base,
           normalized_epochs,
-          reference_sat,
+          refs,
           physical_sats,
           ambiguity_ids,
           ambiguity_satellites,
@@ -608,6 +615,11 @@ defmodule Orbis.GNSS.RTK do
       as float states (default `false`).
     * `:partial_min_ambiguities` - minimum subset size for partial ambiguity
       resolution (default `#{@default_partial_min_ambiguities}`).
+    * `:float_only_systems` - list of constellation letters (for example
+      `["R"]`) whose double-difference ambiguities are never entered into the
+      integer search; they contribute float measurement rows only. GLONASS is
+      the canonical use: FDMA inter-channel biases break the clean DD integer
+      assumption (default `[]`).
     * `:residual_threshold_sigma` - optional normalized-residual gate. When set,
       the float solve is checked before integer search; the worst offending
       satellite is excluded and the solve retried up to `:max_residual_exclusions`.
@@ -626,6 +638,7 @@ defmodule Orbis.GNSS.RTK do
     float_opts = Keyword.take(opts, @float_baseline_options)
 
     with :ok <- validate_options(opts, @fixed_baseline_options),
+         {:ok, _float_only_systems} <- float_only_systems(opts),
          {:ok, residual_opts} <- residual_validation_options(opts) do
       solve_fixed_baseline_epochs_attempt(
         base_position,
@@ -662,7 +675,11 @@ defmodule Orbis.GNSS.RTK do
     * `:hold_sigma_m` - pseudo-measurement sigma for fixed ambiguity holds
       (default `#{@default_filter_hold_sigma_m}`).
     * `:filter_kernel` - `:elixir` (default) or `:rust`; the Rust kernel path
-      is opt-in while its trace parity gates mature.
+      is opt-in while its trace parity gates mature. The Rust kernel is a
+      single-system port: multi-system epochs return
+      `{:error, {:unsupported_filter_kernel, :multi_gnss}}` and
+      `:float_only_systems` returns
+      `{:error, {:unsupported_filter_kernel, :float_only_systems}}`.
 
   Returns `{:ok, %FilterBaselineSolution{}}` or a tagged error.
   """
@@ -677,36 +694,38 @@ defmodule Orbis.GNSS.RTK do
          {:ok, base} <- Types.normalize_ecef(base_position, :invalid_base_position),
          {:ok, filter_opts} <- sequential_filter_options(opts),
          {:ok, filter_kernel} <- filter_kernel(opts),
+         {:ok, float_only_systems} <- float_only_systems(opts),
          {:ok, normalized_epochs, prep_meta} <- prepare_baseline_epochs(base, epochs, float_opts),
-         {:ok, common_sats, _not_common_sats} <- common_epoch_sats(normalized_epochs),
          {:ok, all_sats} <- all_epoch_sats(normalized_epochs),
          :ok <- ensure_baseline_satellites(all_sats),
-         {:ok, reference_sat} <-
-           baseline_reference_satellite(common_sats, opts, base, normalized_epochs),
+         :ok <- validate_filter_kernel_systems(filter_kernel, all_sats, float_only_systems),
+         {:ok, refs} <-
+           baseline_reference_satellites(opts, base, normalized_epochs, all_sats),
          {:ok, weights} <- baseline_weights(float_opts),
          {:ok, solve_opts} <- baseline_solve_options(float_opts),
          {:ok, initial_baseline} <- initial_baseline(float_opts),
          {:ok, sd_ambiguity_ids, sd_ambiguity_satellites} <-
            single_difference_ambiguity_index(normalized_epochs, all_sats),
          {:ok, dd_ambiguity_ids, dd_ambiguity_satellites, dd_ambiguity_pairs} <-
-           sequential_dd_ambiguity_index(normalized_epochs, all_sats, reference_sat),
+           sequential_dd_ambiguity_index(normalized_epochs, all_sats, refs),
          {:ok, wavelengths} <-
            ambiguity_wavelengths(dd_ambiguity_ids, dd_ambiguity_satellites, opts),
          {:ok, offsets} <- ambiguity_offsets(dd_ambiguity_ids, dd_ambiguity_satellites, opts),
          {:ok, integer_opts} <- integer_options(opts),
          :ok <- validate_filter_integer_options(integer_opts) do
-      physical_sats = Enum.reject(all_sats, &(&1 == reference_sat))
+      physical_sats = nonreference_sats(all_sats, refs)
 
       run_sequential_baseline_filter(
         base,
         normalized_epochs,
-        reference_sat,
+        refs,
         physical_sats,
         sd_ambiguity_ids,
         sd_ambiguity_satellites,
         dd_ambiguity_ids,
         dd_ambiguity_satellites,
         dd_ambiguity_pairs,
+        float_only_systems,
         wavelengths,
         offsets,
         weights,
@@ -726,6 +745,163 @@ defmodule Orbis.GNSS.RTK do
     do: {:error, {:unsupported_option, :partial_ambiguity_resolution}}
 
   defp validate_filter_integer_options(_integer_opts), do: :ok
+
+  # The satellite system is the constellation letter, the first grapheme of the
+  # RINEX satellite id ("G01" -> "G", "R12" -> "R").
+  defp satellite_system(satellite_id), do: String.first(satellite_id)
+
+  defp satellite_systems(sats) do
+    sats
+    |> Enum.map(&satellite_system/1)
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
+
+  defp reference_satellite_set(refs), do: refs |> Map.values() |> MapSet.new()
+
+  defp nonreference_sats(all_sats, refs) do
+    ref_set = reference_satellite_set(refs)
+    Enum.reject(all_sats, &MapSet.member?(ref_set, &1))
+  end
+
+  # Reported reference shape: a single-system solve keeps today's bare satellite
+  # id; a multi-system solve reports the per-system reference map.
+  defp reference_satellite_report(refs) when map_size(refs) == 1, do: refs |> Map.values() |> hd()
+
+  defp reference_satellite_report(refs), do: refs
+
+  defp float_only_systems(opts) do
+    case Keyword.get(opts, :float_only_systems, []) do
+      systems when is_list(systems) ->
+        if Enum.all?(systems, &system_letter?/1),
+          do: {:ok, systems},
+          else: {:error, {:invalid_option, :float_only_systems}}
+
+      _other ->
+        {:error, {:invalid_option, :float_only_systems}}
+    end
+  end
+
+  defp system_letter?(<<letter>>) when letter in ?A..?Z, do: true
+  defp system_letter?(_other), do: false
+
+  defp float_only_ambiguity_ids(ambiguity_satellites, []) when is_map(ambiguity_satellites),
+    do: MapSet.new()
+
+  defp float_only_ambiguity_ids(ambiguity_satellites, float_only_systems)
+       when is_map(ambiguity_satellites) do
+    ambiguity_satellites
+    |> Enum.filter(fn {_ambiguity_id, sat} -> satellite_system(sat) in float_only_systems end)
+    |> MapSet.new(fn {ambiguity_id, _sat} -> ambiguity_id end)
+  end
+
+  # The Rust filter kernel is a bit-exact single-system port; running it on
+  # multi-system epochs (or with float-only systems it does not know about)
+  # would silently produce wrong results, so it is rejected up front.
+  defp validate_filter_kernel_systems(:rust, all_sats, float_only_systems) do
+    cond do
+      length(satellite_systems(all_sats)) > 1 ->
+        {:error, {:unsupported_filter_kernel, :multi_gnss}}
+
+      float_only_systems != [] ->
+        {:error, {:unsupported_filter_kernel, :float_only_systems}}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_filter_kernel_systems(_kernel, _all_sats, _float_only_systems), do: :ok
+
+  # Per-system common satellites: for each system, the satellites common to
+  # every epoch in which that system appears. This is the single-reference
+  # invariant ("the reference must be available in every epoch") applied per
+  # system.
+  defp per_system_common_sats(epochs) do
+    epochs
+    |> Enum.reduce(%{}, fn epoch, acc ->
+      epoch
+      |> epoch_sats()
+      |> Enum.group_by(&satellite_system/1)
+      |> Enum.reduce(acc, fn {system, sats}, acc ->
+        sats = MapSet.new(sats)
+        Map.update(acc, system, sats, &MapSet.intersection(&1, sats))
+      end)
+    end)
+    |> Map.new(fn {system, sats} -> {system, sats |> MapSet.to_list() |> Enum.sort()} end)
+  end
+
+  defp per_system_epochs(epochs, system) do
+    Enum.filter(epochs, fn epoch ->
+      epoch |> epoch_sats() |> Enum.any?(&(satellite_system(&1) == system))
+    end)
+  end
+
+  # Per-system double-difference reference selection.
+  #
+  #   * no option       — per system, the highest-average-elevation satellite of
+  #     that system's common set (lexicographic tie-break), scored over the
+  #     epochs in which the system appears;
+  #   * binary (legacy) — valid only when a single system is observed;
+  #   * map             — explicit per-system references covering every observed
+  #     system.
+  #
+  # Returns `{:ok, %{"G" => "G04", ...}}`. With a single system this degenerates
+  # to exactly today's selection (same candidate list, same scoring epochs).
+  defp baseline_reference_satellites(opts, base, epochs, all_sats) do
+    systems = satellite_systems(all_sats)
+    common_by_system = per_system_common_sats(epochs)
+
+    case Keyword.get(opts, :reference_satellite_id) do
+      nil ->
+        Enum.reduce_while(systems, {:ok, %{}}, fn system, {:ok, refs} ->
+          case Map.get(common_by_system, system, []) do
+            [] ->
+              {:halt, {:error, {:no_common_reference_satellite, system}}}
+
+            common ->
+              reference =
+                highest_elevation_reference(common, base, per_system_epochs(epochs, system))
+
+              {:cont, {:ok, Map.put(refs, system, reference)}}
+          end
+        end)
+
+      sat when is_binary(sat) ->
+        case systems do
+          [system] ->
+            if sat in Map.get(common_by_system, system, []) do
+              {:ok, %{system => sat}}
+            else
+              {:error, {:reference_satellite_missing, sat}}
+            end
+
+          _multiple ->
+            {:error, {:reference_satellite_single_system, sat}}
+        end
+
+      refs when is_map(refs) ->
+        Enum.reduce_while(systems, {:ok, %{}}, fn system, {:ok, acc} ->
+          case Map.fetch(refs, system) do
+            :error ->
+              {:halt, {:error, {:reference_satellite_missing_system, system}}}
+
+            {:ok, sat} when is_binary(sat) ->
+              if sat in Map.get(common_by_system, system, []) do
+                {:cont, {:ok, Map.put(acc, system, sat)}}
+              else
+                {:halt, {:error, {:reference_satellite_missing, sat}}}
+              end
+
+            {:ok, _other} ->
+              {:halt, {:error, {:invalid_option, :reference_satellite_id}}}
+          end
+        end)
+
+      _other ->
+        {:error, {:invalid_option, :reference_satellite_id}}
+    end
+  end
 
   defp solve_fixed_baseline_epochs_attempt(
          base_position,
@@ -787,8 +963,15 @@ defmodule Orbis.GNSS.RTK do
              opts
            ),
          {:ok, integer_opts} <- integer_options(opts),
+         {:ok, float_only_systems} <- float_only_systems(opts),
          {:ok, fixed_cycles, fixed_meta} <-
-           search_baseline_ambiguities(float_sol, wavelengths, offsets, integer_opts),
+           search_baseline_ambiguities(
+             float_sol,
+             wavelengths,
+             offsets,
+             integer_opts,
+             float_only_systems
+           ),
          fixed_m = fixed_ambiguities_m(fixed_cycles, wavelengths, offsets),
          free_ambiguity_ids = free_ambiguity_ids(float_sol.used_sats, fixed_cycles),
          {:ok, base} <- Types.normalize_ecef(base_position, :invalid_base_position),
@@ -803,7 +986,7 @@ defmodule Orbis.GNSS.RTK do
       case iterate_fixed_baseline(
              base,
              normalized_epochs,
-             float_sol.reference_satellite_id,
+             Map.fetch!(float_sol.metadata, :reference_satellites),
              Map.fetch!(float_sol.metadata, :physical_sats),
              float_sol.used_sats,
              free_ambiguity_ids,
@@ -938,8 +1121,11 @@ defmodule Orbis.GNSS.RTK do
   Options:
 
     * `:reference_satellite_id` - reference satellite for the second
-      difference. When omitted, the lexicographically first common satellite is
-      selected deterministically.
+      difference: a satellite id binary (single-system data only) or a
+      per-system map covering every observed system. When omitted, each
+      system's lexicographically first common satellite is selected
+      deterministically. Non-reference satellites difference against their own
+      system's reference.
 
   Returns `{:ok, result}` or a tagged error. At least two common satellites are
   required so one non-reference double difference can be produced.
@@ -954,34 +1140,44 @@ defmodule Orbis.GNSS.RTK do
          {:ok, base} <- normalize_observations(base_observations, :invalid_base_observations),
          {:ok, rover} <- normalize_observations(rover_observations, :invalid_rover_observations),
          {:ok, common, dropped} <- common_observations(base, rover),
-         {:ok, reference_sat} <- reference_satellite(common, opts) do
-      ref_base = Map.fetch!(base, reference_sat)
-      ref_rover = Map.fetch!(rover, reference_sat)
-      ref_code_sd = ref_rover.code_m - ref_base.code_m
-      ref_phase_sd = ref_rover.phase_m - ref_base.phase_m
-      ref_sd_id = single_difference_ambiguity_id(reference_sat, ref_base, ref_rover)
-      ref_dd = %{satellite_id: reference_sat, ambiguity_id: ref_sd_id}
+         {:ok, refs} <- reference_satellites(common, opts) do
+      ref_set = reference_satellite_set(refs)
+
+      ref_data =
+        Map.new(refs, fn {system, reference_sat} ->
+          ref_base = Map.fetch!(base, reference_sat)
+          ref_rover = Map.fetch!(rover, reference_sat)
+
+          {system,
+           %{
+             satellite_id: reference_sat,
+             ambiguity_id: single_difference_ambiguity_id(reference_sat, ref_base, ref_rover),
+             code_sd: ref_rover.code_m - ref_base.code_m,
+             phase_sd: ref_rover.phase_m - ref_base.phase_m
+           }}
+        end)
 
       dds =
         common
-        |> Enum.reject(&(&1 == reference_sat))
+        |> Enum.reject(&MapSet.member?(ref_set, &1))
         |> Enum.map(fn sat ->
+          ref = Map.fetch!(ref_data, satellite_system(sat))
           base_obs = Map.fetch!(base, sat)
           rover_obs = Map.fetch!(rover, sat)
           sat_sd_id = single_difference_ambiguity_id(sat, base_obs, rover_obs)
 
           %{
             satellite_id: sat,
-            reference_satellite_id: reference_sat,
-            ambiguity_id: double_difference_ambiguity_id(sat, sat_sd_id, ref_dd),
-            code_m: rover_obs.code_m - base_obs.code_m - ref_code_sd,
-            phase_m: rover_obs.phase_m - base_obs.phase_m - ref_phase_sd
+            reference_satellite_id: ref.satellite_id,
+            ambiguity_id: double_difference_ambiguity_id(sat, sat_sd_id, ref),
+            code_m: rover_obs.code_m - base_obs.code_m - ref.code_sd,
+            phase_m: rover_obs.phase_m - base_obs.phase_m - ref.phase_sd
           }
         end)
 
       {:ok,
        %{
-         reference_satellite_id: reference_sat,
+         reference_satellite_id: reference_satellite_report(refs),
          double_differences: dds,
          dropped_sats: dropped
        }}
@@ -2274,11 +2470,11 @@ defmodule Orbis.GNSS.RTK do
     {:ok, all}
   end
 
-  defp epoch_available_nonrefs(epoch, reference_sat, physical_sats \\ nil) do
+  defp epoch_available_nonrefs(epoch, refs, physical_sats \\ nil) do
     available =
       epoch
       |> epoch_sats()
-      |> MapSet.delete(reference_sat)
+      |> MapSet.difference(reference_satellite_set(refs))
 
     case physical_sats do
       nil -> available
@@ -2482,16 +2678,17 @@ defmodule Orbis.GNSS.RTK do
     |> Types.normalize_ecef(:invalid_initial_baseline)
   end
 
-  defp baseline_ambiguity_index(epochs, common_sats, reference_sat) do
-    physical_sats = Enum.reject(common_sats, &(&1 == reference_sat))
+  defp baseline_ambiguity_index(epochs, common_sats, refs) do
+    physical_sats = nonreference_sats(common_sats, refs)
 
     epochs
     |> Enum.reduce_while({:ok, %{}}, fn epoch, {:ok, acc} ->
-      ref_dd = single_difference(epoch, reference_sat)
+      ref_sds = epoch_reference_sds(epoch, refs)
 
       epoch
-      |> epoch_available_nonrefs(reference_sat, physical_sats)
+      |> epoch_available_nonrefs(refs, physical_sats)
       |> Enum.reduce_while({:ok, acc}, fn sat, {:ok, acc} ->
+        ref_dd = Map.fetch!(ref_sds, satellite_system(sat))
         ambiguity_id = double_difference_measurement(epoch, sat, ref_dd).ambiguity_id
 
         case Map.fetch(acc, ambiguity_id) do
@@ -2562,16 +2759,17 @@ defmodule Orbis.GNSS.RTK do
     end
   end
 
-  defp sequential_dd_ambiguity_index(epochs, all_sats, reference_sat) do
-    physical_sats = Enum.reject(all_sats, &(&1 == reference_sat))
+  defp sequential_dd_ambiguity_index(epochs, all_sats, refs) do
+    physical_sats = nonreference_sats(all_sats, refs)
 
     epochs
     |> Enum.reduce_while({:ok, {%{}, %{}}}, fn epoch, {:ok, {satellites, pairs}} ->
-      ref_dd = single_difference(epoch, reference_sat)
+      ref_sds = epoch_reference_sds(epoch, refs)
 
       epoch
-      |> epoch_available_nonrefs(reference_sat, physical_sats)
+      |> epoch_available_nonrefs(refs, physical_sats)
       |> Enum.reduce_while({:ok, {satellites, pairs}}, fn sat, {:ok, {satellites, pairs}} ->
+        ref_dd = Map.fetch!(ref_sds, satellite_system(sat))
         sd = single_difference(epoch, sat)
         dd_id = double_difference_ambiguity_id(sat, sd.ambiguity_id, ref_dd)
         pair = %{sat_sd_id: sd.ambiguity_id, ref_sd_id: ref_dd.ambiguity_id}
@@ -2674,9 +2872,9 @@ defmodule Orbis.GNSS.RTK do
     end
   end
 
-  defp baseline_row_count(epochs, reference_sat) do
+  defp baseline_row_count(epochs, refs) do
     epochs
-    |> Enum.map(fn epoch -> length(epoch_available_nonrefs(epoch, reference_sat)) end)
+    |> Enum.map(fn epoch -> length(epoch_available_nonrefs(epoch, refs)) end)
     |> Enum.sum()
     |> Kernel.*(2)
   end
@@ -2686,7 +2884,7 @@ defmodule Orbis.GNSS.RTK do
   defp iterate_baseline(
          base,
          epochs,
-         reference_sat,
+         refs,
          physical_sats,
          ambiguity_ids,
          ambiguity_satellites,
@@ -2701,7 +2899,7 @@ defmodule Orbis.GNSS.RTK do
            build_baseline_rows(
              base,
              epochs,
-             reference_sat,
+             refs,
              physical_sats,
              ambiguity_ids,
              state,
@@ -2718,7 +2916,7 @@ defmodule Orbis.GNSS.RTK do
           finalize_baseline(
             base,
             epochs,
-            reference_sat,
+            refs,
             physical_sats,
             ambiguity_ids,
             ambiguity_satellites,
@@ -2735,7 +2933,7 @@ defmodule Orbis.GNSS.RTK do
           finalize_baseline(
             base,
             epochs,
-            reference_sat,
+            refs,
             physical_sats,
             ambiguity_ids,
             ambiguity_satellites,
@@ -2752,7 +2950,7 @@ defmodule Orbis.GNSS.RTK do
           iterate_baseline(
             base,
             epochs,
-            reference_sat,
+            refs,
             physical_sats,
             ambiguity_ids,
             ambiguity_satellites,
@@ -2767,21 +2965,13 @@ defmodule Orbis.GNSS.RTK do
     end
   end
 
-  defp build_baseline_rows(
-         base,
-         epochs,
-         reference_sat,
-         physical_sats,
-         ambiguity_ids,
-         state,
-         weights
-       ) do
+  defp build_baseline_rows(base, epochs, refs, physical_sats, ambiguity_ids, state, weights) do
     epochs
     |> Enum.reduce_while({:ok, []}, fn epoch, {:ok, acc} ->
       case build_epoch_baseline_rows(
              base,
              epoch,
-             reference_sat,
+             refs,
              physical_sats,
              ambiguity_ids,
              state,
@@ -2797,23 +2987,15 @@ defmodule Orbis.GNSS.RTK do
     end
   end
 
-  defp build_epoch_baseline_rows(
-         base,
-         epoch,
-         reference_sat,
-         physical_sats,
-         ambiguity_ids,
-         state,
-         weights
-       ) do
-    ref_dd = single_difference(epoch, reference_sat)
-    ref_pos = Map.fetch!(epoch.positions, reference_sat)
-    ref_base_pos = Map.fetch!(epoch.base_positions, reference_sat)
-    ref_rover_pos = Map.fetch!(epoch.rover_positions, reference_sat)
+  defp build_epoch_baseline_rows(base, epoch, refs, physical_sats, ambiguity_ids, state, weights) do
+    ref_data = epoch_reference_data(epoch, refs)
 
     epoch
-    |> epoch_available_nonrefs(reference_sat, physical_sats)
+    |> epoch_available_nonrefs(refs, physical_sats)
     |> Enum.reduce({:ok, []}, fn sat, {:ok, acc} ->
+      %{sd: ref_dd, pos: ref_pos, base_pos: ref_base_pos, rover_pos: ref_rover_pos} =
+        Map.fetch!(ref_data, satellite_system(sat))
+
       obs_dd = double_difference_measurement(epoch, sat, ref_dd)
       sat_pos = Map.fetch!(epoch.positions, sat)
       sat_base_pos = Map.fetch!(epoch.base_positions, sat)
@@ -2842,6 +3024,7 @@ defmodule Orbis.GNSS.RTK do
         epoch_idx: epoch.idx,
         epoch: epoch.epoch,
         sat: sat,
+        ref_sat: ref_dd.satellite_id,
         ambiguity_id: ambiguity_id,
         h: h_base,
         y: obs_dd.code_m - geom_dd,
@@ -2855,6 +3038,7 @@ defmodule Orbis.GNSS.RTK do
         epoch_idx: epoch.idx,
         epoch: epoch.epoch,
         sat: sat,
+        ref_sat: ref_dd.satellite_id,
         ambiguity_id: ambiguity_id,
         h: h_phase,
         y: obs_dd.phase_m - (geom_dd + ambiguity),
@@ -2874,21 +3058,21 @@ defmodule Orbis.GNSS.RTK do
   defp build_epoch_sequential_baseline_rows(
          base,
          epoch,
-         reference_sat,
+         refs,
          physical_sats,
          sd_ambiguity_ids,
          dd_ambiguity_pairs,
          state,
          weights
        ) do
-    ref_dd = single_difference(epoch, reference_sat)
-    ref_pos = Map.fetch!(epoch.positions, reference_sat)
-    ref_base_pos = Map.fetch!(epoch.base_positions, reference_sat)
-    ref_rover_pos = Map.fetch!(epoch.rover_positions, reference_sat)
+    ref_data = epoch_reference_data(epoch, refs)
 
     epoch
-    |> epoch_available_nonrefs(reference_sat, physical_sats)
+    |> epoch_available_nonrefs(refs, physical_sats)
     |> Enum.reduce({:ok, []}, fn sat, {:ok, acc} ->
+      %{sd: ref_dd, pos: ref_pos, base_pos: ref_base_pos, rover_pos: ref_rover_pos} =
+        Map.fetch!(ref_data, satellite_system(sat))
+
       obs_dd = double_difference_measurement(epoch, sat, ref_dd)
       sat_pos = Map.fetch!(epoch.positions, sat)
       sat_base_pos = Map.fetch!(epoch.base_positions, sat)
@@ -2922,6 +3106,7 @@ defmodule Orbis.GNSS.RTK do
         epoch_idx: epoch.idx,
         epoch: epoch.epoch,
         sat: sat,
+        ref_sat: ref_dd.satellite_id,
         ambiguity_id: obs_dd.ambiguity_id,
         h: h_base,
         y: obs_dd.code_m - geom_dd,
@@ -2935,6 +3120,7 @@ defmodule Orbis.GNSS.RTK do
         epoch_idx: epoch.idx,
         epoch: epoch.epoch,
         sat: sat,
+        ref_sat: ref_dd.satellite_id,
         ambiguity_id: obs_dd.ambiguity_id,
         h: h_phase,
         y: obs_dd.phase_m - (geom_dd + ambiguity),
@@ -2949,6 +3135,33 @@ defmodule Orbis.GNSS.RTK do
       {:ok, rows} -> {:ok, Enum.reverse(rows)}
       {:error, _reason} = err -> err
     end
+  end
+
+  # Per-epoch reference-satellite data, one entry per system whose reference is
+  # observed in this epoch. The per-system common invariant guarantees the
+  # reference is present in every epoch in which its system appears.
+  defp epoch_reference_data(epoch, refs) do
+    available = epoch_sats(epoch)
+
+    refs
+    |> Enum.filter(fn {_system, ref} -> MapSet.member?(available, ref) end)
+    |> Map.new(fn {system, ref} ->
+      {system,
+       %{
+         sd: single_difference(epoch, ref),
+         pos: Map.fetch!(epoch.positions, ref),
+         base_pos: Map.fetch!(epoch.base_positions, ref),
+         rover_pos: Map.fetch!(epoch.rover_positions, ref)
+       }}
+    end)
+  end
+
+  defp epoch_reference_sds(epoch, refs) do
+    available = epoch_sats(epoch)
+
+    refs
+    |> Enum.filter(fn {_system, ref} -> MapSet.member?(available, ref) end)
+    |> Map.new(fn {system, ref} -> {system, single_difference(epoch, ref)} end)
   end
 
   defp single_difference(epoch, sat) do
@@ -3116,7 +3329,7 @@ defmodule Orbis.GNSS.RTK do
   defp finalize_baseline(
          base,
          epochs,
-         reference_sat,
+         refs,
          physical_sats,
          ambiguity_ids,
          ambiguity_satellites,
@@ -3132,7 +3345,7 @@ defmodule Orbis.GNSS.RTK do
            build_baseline_rows(
              base,
              epochs,
-             reference_sat,
+             refs,
              physical_sats,
              ambiguity_ids,
              state,
@@ -3146,7 +3359,7 @@ defmodule Orbis.GNSS.RTK do
              length(ambiguity_ids)
            ),
          {:ok, covariance_inverse_m} <- invert_matrix(covariance_m),
-         {:ok, residuals} <- baseline_residuals(rows, reference_sat) do
+         {:ok, residuals} <- baseline_residuals(rows) do
       code_residuals = Enum.map(residuals, & &1.code_m)
       phase_residuals = Enum.map(residuals, & &1.phase_m)
       rover = add3(base, state.baseline)
@@ -3155,7 +3368,7 @@ defmodule Orbis.GNSS.RTK do
        %FloatBaselineSolution{
          baseline_m: ecef_map(state.baseline),
          rover_position_m: ecef_map(rover),
-         reference_satellite_id: reference_sat,
+         reference_satellite_id: reference_satellite_report(refs),
          used_sats: ambiguity_ids,
          ambiguities_m: state.ambiguities,
          residuals_m: residuals,
@@ -3164,6 +3377,7 @@ defmodule Orbis.GNSS.RTK do
            converged: converged?,
            status: status,
            physical_sats: physical_sats,
+           reference_satellites: refs,
            ambiguity_satellites: ambiguity_satellites,
            ambiguity_float: %{
              order: ambiguity_ids,
@@ -3202,39 +3416,80 @@ defmodule Orbis.GNSS.RTK do
     end
   end
 
-  defp search_baseline_ambiguities(float_sol, wavelengths, offsets, integer_opts) do
-    covariance_cycles =
-      covariance_m_to_cycles(
-        float_sol.metadata.ambiguity_float.covariance_m,
-        float_sol.used_sats,
-        wavelengths
-      )
+  defp search_baseline_ambiguities(
+         float_sol,
+         wavelengths,
+         offsets,
+         integer_opts,
+         float_only_systems
+       ) do
+    ambiguity_satellites = Map.fetch!(float_sol.metadata, :ambiguity_satellites)
+    float_only_ids = float_only_ambiguity_ids(ambiguity_satellites, float_only_systems)
+    search_sats = Enum.reject(float_sol.used_sats, &MapSet.member?(float_only_ids, &1))
 
-    float_cycles =
-      Map.new(float_sol.used_sats, fn sat ->
-        ambiguity_m = Map.fetch!(float_sol.ambiguities_m, sat)
-        offset_m = Map.fetch!(offsets, sat)
-        {sat, (ambiguity_m - offset_m) / Map.fetch!(wavelengths, sat)}
-      end)
-
-    with {:ok, fixed_cycles, meta} <-
-           IntegerLeastSquares.search(float_cycles, covariance_cycles, integer_opts) do
-      meta = Map.put(meta, :ambiguity_offsets_m, offsets)
-
-      if meta.integer_status == :fixed or not integer_opts.partial_ambiguity_resolution? do
-        {:ok, fixed_cycles, Map.merge(meta, partial_meta(false, false, fixed_cycles, []))}
-      else
-        search_partial_baseline_ambiguities(
+    if search_sats == [] do
+      {:ok, %{},
+       Map.merge(empty_integer_search_meta(offsets), partial_meta(false, false, %{}, []))}
+    else
+      covariance_cycles =
+        covariance_m_to_cycles(
+          float_sol.metadata.ambiguity_float.covariance_m,
           float_sol.used_sats,
-          float_cycles,
-          covariance_cycles,
-          offsets,
-          integer_opts,
-          fixed_cycles,
-          meta
+          wavelengths
         )
+
+      # Float-only systems' ambiguities never enter the integer search set
+      # (full-set or partial). With none configured this is the identity
+      # selection, leaving the historical arithmetic untouched.
+      search_covariance =
+        if search_sats == float_sol.used_sats,
+          do: covariance_cycles,
+          else: covariance_submatrix(float_sol.used_sats, covariance_cycles, search_sats)
+
+      float_cycles =
+        Map.new(search_sats, fn sat ->
+          ambiguity_m = Map.fetch!(float_sol.ambiguities_m, sat)
+          offset_m = Map.fetch!(offsets, sat)
+          {sat, (ambiguity_m - offset_m) / Map.fetch!(wavelengths, sat)}
+        end)
+
+      with {:ok, fixed_cycles, meta} <-
+             IntegerLeastSquares.search(float_cycles, search_covariance, integer_opts) do
+        meta = Map.put(meta, :ambiguity_offsets_m, offsets)
+
+        if meta.integer_status == :fixed or not integer_opts.partial_ambiguity_resolution? do
+          {:ok, fixed_cycles, Map.merge(meta, partial_meta(false, false, fixed_cycles, []))}
+        else
+          search_partial_baseline_ambiguities(
+            search_sats,
+            float_cycles,
+            search_covariance,
+            offsets,
+            integer_opts,
+            fixed_cycles,
+            meta
+          )
+        end
       end
     end
+  end
+
+  defp empty_integer_search_meta(offsets) do
+    %{
+      integer_status: :not_fixed,
+      integer_method: :lambda,
+      integer_ratio: nil,
+      integer_best_score: nil,
+      integer_second_best_score: nil,
+      integer_candidates: 0,
+      ambiguity_search: %{
+        order: [],
+        float_cycles: %{},
+        covariance_cycles: [],
+        covariance_inverse_cycles: []
+      },
+      ambiguity_offsets_m: offsets
+    }
   end
 
   defp partial_meta(enabled?, fixed?, fixed_cycles, free_ambiguities, extra \\ %{}) do
@@ -3551,13 +3806,14 @@ defmodule Orbis.GNSS.RTK do
   defp run_sequential_baseline_filter(
          base,
          epochs,
-         reference_sat,
+         refs,
          physical_sats,
          sd_ambiguity_ids,
          sd_ambiguity_satellites,
          dd_ambiguity_ids,
          dd_ambiguity_satellites,
          dd_ambiguity_pairs,
+         float_only_systems,
          wavelengths,
          offsets,
          weights,
@@ -3570,8 +3826,15 @@ defmodule Orbis.GNSS.RTK do
        ) do
     n = baseline_unknown_count(sd_ambiguity_ids)
 
+    float_only_dd_ids =
+      float_only_ambiguity_ids(dd_ambiguity_satellites, float_only_systems)
+
     {initial_ambiguities, initial_ambiguity_count} =
-      initial_sequential_ambiguities(epochs, [reference_sat | physical_sats], sd_ambiguity_ids)
+      initial_sequential_ambiguities(
+        epochs,
+        Map.values(refs) ++ physical_sats,
+        sd_ambiguity_ids
+      )
 
     initial = %{
       state: %{
@@ -3586,16 +3849,7 @@ defmodule Orbis.GNSS.RTK do
         ),
       fixed_cycles: %{},
       fixed_m: %{},
-      rust_state:
-        rust_initial_filter_state(
-          epochs,
-          reference_sat,
-          initial_baseline,
-          sd_ambiguity_ids,
-          initial_ambiguities,
-          filter_opts.baseline_prior_sigma_m,
-          filter_opts.ambiguity_prior_sigma_m
-        ),
+      rust_state: nil,
       epochs: []
     }
 
@@ -3606,12 +3860,12 @@ defmodule Orbis.GNSS.RTK do
           case sequential_filter_epoch(
                  base,
                  epoch,
-                 reference_sat,
+                 refs,
                  physical_sats,
                  sd_ambiguity_ids,
                  dd_ambiguity_ids,
                  dd_ambiguity_pairs,
-                 dd_ambiguity_satellites,
+                 float_only_dd_ids,
                  wavelengths,
                  offsets,
                  weights,
@@ -3626,9 +3880,28 @@ defmodule Orbis.GNSS.RTK do
         end)
 
       :rust ->
+        # Single-system by construction: validate_filter_kernel_systems rejected
+        # multi-GNSS and float-only configurations before this point.
+        [reference_sat] = Map.values(refs)
+
+        initial = %{
+          initial
+          | rust_state:
+              rust_initial_filter_state(
+                epochs,
+                reference_sat,
+                initial_baseline,
+                sd_ambiguity_ids,
+                initial_ambiguities,
+                filter_opts.baseline_prior_sigma_m,
+                filter_opts.ambiguity_prior_sigma_m
+              )
+        }
+
         sequential_filter_epochs_rust(
           base,
           epochs,
+          refs,
           reference_sat,
           physical_sats,
           dd_ambiguity_pairs,
@@ -3654,7 +3927,7 @@ defmodule Orbis.GNSS.RTK do
          %FilterBaselineSolution{
            baseline_m: ecef_map(baseline),
            rover_position_m: ecef_map(rover),
-           reference_satellite_id: reference_sat,
+           reference_satellite_id: reference_satellite_report(refs),
            fixed_ambiguities_cycles: acc.fixed_cycles,
            epochs: epoch_results,
            metadata: %{
@@ -3665,6 +3938,8 @@ defmodule Orbis.GNSS.RTK do
              fixed_epoch_count: fixed_epochs,
              n_epochs: length(epochs),
              physical_sats: physical_sats,
+             reference_satellites: refs,
+             float_only_systems: float_only_systems,
              ambiguity_satellites: dd_ambiguity_satellites,
              single_difference_ambiguity_satellites: sd_ambiguity_satellites,
              single_difference_ambiguity_count: length(sd_ambiguity_ids),
@@ -3735,12 +4010,12 @@ defmodule Orbis.GNSS.RTK do
   defp sequential_filter_epoch(
          base,
          epoch,
-         reference_sat,
+         refs,
          physical_sats,
          sd_ambiguity_ids,
          dd_ambiguity_ids,
          dd_ambiguity_pairs,
-         _dd_ambiguity_satellites,
+         float_only_dd_ids,
          wavelengths,
          offsets,
          weights,
@@ -3755,7 +4030,7 @@ defmodule Orbis.GNSS.RTK do
            iterate_sequential_filter_epoch(
              base,
              epoch,
-             reference_sat,
+             refs,
              physical_sats,
              sd_ambiguity_ids,
              dd_ambiguity_pairs,
@@ -3777,6 +4052,7 @@ defmodule Orbis.GNSS.RTK do
              sd_ambiguity_ids,
              dd_ambiguity_ids,
              dd_ambiguity_pairs,
+             float_only_dd_ids,
              acc.fixed_cycles,
              wavelengths,
              offsets,
@@ -3790,7 +4066,7 @@ defmodule Orbis.GNSS.RTK do
              newly_fixed,
              base,
              epoch,
-             reference_sat,
+             refs,
              physical_sats,
              sd_ambiguity_ids,
              dd_ambiguity_pairs,
@@ -3804,14 +4080,14 @@ defmodule Orbis.GNSS.RTK do
            build_epoch_sequential_baseline_rows(
              base,
              epoch,
-             reference_sat,
+             refs,
              physical_sats,
              sd_ambiguity_ids,
              dd_ambiguity_pairs,
              report_state,
              weights
            ),
-         {:ok, residuals} <- baseline_residuals(residual_rows, reference_sat) do
+         {:ok, residuals} <- baseline_residuals(residual_rows) do
       all_fixed = fixed_cycles |> Map.keys() |> Enum.sort()
       fixed? = all_fixed != []
 
@@ -3845,6 +4121,7 @@ defmodule Orbis.GNSS.RTK do
   defp sequential_filter_epochs_rust(
          base,
          epochs,
+         refs,
          reference_sat,
          physical_sats,
          dd_ambiguity_pairs,
@@ -3859,7 +4136,7 @@ defmodule Orbis.GNSS.RTK do
        ) do
     rust_wavelengths = rust_sd_keyed_values(dd_ambiguity_pairs, wavelengths)
     rust_offsets = rust_sd_keyed_values(dd_ambiguity_pairs, offsets)
-    rust_epochs = Enum.map(epochs, &rust_epoch_term(&1, reference_sat, physical_sats))
+    rust_epochs = Enum.map(epochs, &rust_epoch_term(&1, refs, reference_sat, physical_sats))
 
     case NIF.rtk_filter_update_epochs(
            acc.rust_state,
@@ -3878,6 +4155,7 @@ defmodule Orbis.GNSS.RTK do
                  update,
                  base,
                  epoch,
+                 refs,
                  reference_sat,
                  physical_sats,
                  dd_ambiguity_pairs,
@@ -3904,6 +4182,7 @@ defmodule Orbis.GNSS.RTK do
          {rust_state, reported_baseline, ratio, fixed?, newly_fixed_sd, fixed_sd_ids},
          base,
          epoch,
+         refs,
          reference_sat,
          physical_sats,
          dd_ambiguity_pairs,
@@ -3953,14 +4232,14 @@ defmodule Orbis.GNSS.RTK do
            build_epoch_sequential_baseline_rows(
              base,
              epoch,
-             reference_sat,
+             refs,
              physical_sats,
              sd_ambiguity_ids,
              dd_ambiguity_pairs,
              report_state,
              weights
            ),
-         {:ok, residuals} <- baseline_residuals(residual_rows, reference_sat) do
+         {:ok, residuals} <- baseline_residuals(residual_rows) do
       epoch_result = %{
         epoch: epoch.epoch,
         index: epoch.idx,
@@ -4023,12 +4302,12 @@ defmodule Orbis.GNSS.RTK do
     }
   end
 
-  defp rust_epoch_term(epoch, reference_sat, physical_sats) do
+  defp rust_epoch_term(epoch, refs, reference_sat, physical_sats) do
     reference = rust_sat_term(epoch, reference_sat)
 
     nonref =
       epoch
-      |> epoch_available_nonrefs(reference_sat, physical_sats)
+      |> epoch_available_nonrefs(refs, physical_sats)
       |> Enum.map(&rust_sat_term(epoch, &1))
 
     {reference, nonref}
@@ -4184,7 +4463,7 @@ defmodule Orbis.GNSS.RTK do
   defp iterate_sequential_filter_epoch(
          base,
          epoch,
-         reference_sat,
+         refs,
          physical_sats,
          sd_ambiguity_ids,
          dd_ambiguity_pairs,
@@ -4201,7 +4480,7 @@ defmodule Orbis.GNSS.RTK do
            build_epoch_sequential_baseline_rows(
              base,
              epoch,
-             reference_sat,
+             refs,
              physical_sats,
              sd_ambiguity_ids,
              dd_ambiguity_pairs,
@@ -4225,6 +4504,17 @@ defmodule Orbis.GNSS.RTK do
            |> matrix_add(measurement_information)
            |> matrix_add(hold_information),
          rhs = measurement_rhs |> vector_add(hold_rhs) |> vector_add(prior_rhs),
+         {information, rhs} =
+           apply_reference_sd_gauge(
+             information,
+             rhs,
+             epoch,
+             refs,
+             sd_ambiguity_ids,
+             prior_center,
+             prior_state,
+             filter_opts.hold_sigma_m
+           ),
          {:ok, dx} <- solve_linear(information, rhs),
          next_state = apply_baseline_delta(prior_state, sd_ambiguity_ids, dx),
          {baseline_step, ambiguity_step} <- baseline_step_norms(dx) do
@@ -4240,7 +4530,7 @@ defmodule Orbis.GNSS.RTK do
           iterate_sequential_filter_epoch(
             base,
             epoch,
-            reference_sat,
+            refs,
             physical_sats,
             sd_ambiguity_ids,
             dd_ambiguity_pairs,
@@ -4386,7 +4676,7 @@ defmodule Orbis.GNSS.RTK do
          _newly_fixed,
          base,
          epoch,
-         reference_sat,
+         refs,
          physical_sats,
          sd_ambiguity_ids,
          dd_ambiguity_pairs,
@@ -4399,7 +4689,7 @@ defmodule Orbis.GNSS.RTK do
     case iterate_sequential_filter_epoch(
            base,
            epoch,
-           reference_sat,
+           refs,
            physical_sats,
            sd_ambiguity_ids,
            dd_ambiguity_pairs,
@@ -4428,6 +4718,67 @@ defmodule Orbis.GNSS.RTK do
       end
     end
   end
+
+  # Multi-system gauge fixing. Every measurement row, hold, and reported
+  # quantity depends only on within-system single-difference DIFFERENCES, so
+  # the common-mode level of each system's SD ambiguity block is unobservable.
+  # In the single-system filter that gauge direction is carried by the initial
+  # ambiguity prior alone; once per-epoch measurement information accumulates,
+  # the prior's contribution falls below float precision, and with a
+  # two-satellite system the gauge pivot cancels exactly to zero — the filter
+  # dies with `:singular_geometry`. Multi-system runs therefore pin each
+  # per-system reference SD ambiguity at its prior value with the hold weight
+  # (a pure gauge constraint: double differences and the baseline are invariant
+  # to it). The single-system path is left untouched — same objects, no
+  # arithmetic — to stay bit-identical to the deployed reference and its Rust
+  # kernel.
+  defp apply_reference_sd_gauge(
+         information,
+         rhs,
+         epoch,
+         refs,
+         sd_ambiguity_ids,
+         prior_center,
+         prior_state,
+         hold_sigma_m
+       )
+       when map_size(refs) > 1 do
+    weight = 1.0 / (hold_sigma_m * hold_sigma_m)
+    available = epoch_sats(epoch)
+
+    refs
+    |> Enum.sort()
+    |> Enum.reduce({information, rhs}, fn {_system, ref}, {information, rhs} ->
+      if MapSet.member?(available, ref) do
+        sd_id = single_difference(epoch, ref).ambiguity_id
+        col = 3 + Enum.find_index(sd_ambiguity_ids, &(&1 == sd_id))
+
+        residual =
+          Map.fetch!(prior_center.ambiguities, sd_id) -
+            Map.fetch!(prior_state.ambiguities, sd_id)
+
+        information =
+          List.update_at(information, col, fn row ->
+            List.update_at(row, col, &(&1 + weight))
+          end)
+
+        {information, List.update_at(rhs, col, &(&1 + weight * residual))}
+      else
+        {information, rhs}
+      end
+    end)
+  end
+
+  defp apply_reference_sd_gauge(
+         information,
+         rhs,
+         _epoch,
+         _refs,
+         _sd_ambiguity_ids,
+         _prior_center,
+         _prior_state,
+         _hold_sigma_m
+       ), do: {information, rhs}
 
   defp sequential_prior_rhs(ambiguity_ids, prior_information, prior_center, current_state) do
     prior_center
@@ -4489,6 +4840,7 @@ defmodule Orbis.GNSS.RTK do
          sd_ambiguity_ids,
          dd_ambiguity_ids,
          dd_ambiguity_pairs,
+         float_only_dd_ids,
          fixed_cycles,
          wavelengths,
          offsets,
@@ -4501,7 +4853,14 @@ defmodule Orbis.GNSS.RTK do
       |> Enum.sort()
 
     fixed_set = fixed_cycles |> Map.keys() |> MapSet.new()
-    search_ids = Enum.reject(observed_ids, &MapSet.member?(fixed_set, &1))
+
+    # Float-only systems' ambiguities contribute measurement rows but are never
+    # entered into the LAMBDA search set; they stay float.
+    search_ids =
+      Enum.reject(
+        observed_ids,
+        &(MapSet.member?(fixed_set, &1) or MapSet.member?(float_only_dd_ids, &1))
+      )
 
     if search_ids == [] do
       {:ok, fixed_cycles, fixed_ambiguities_m(fixed_cycles, wavelengths, offsets), %{}}
@@ -4550,7 +4909,7 @@ defmodule Orbis.GNSS.RTK do
   defp iterate_fixed_baseline(
          base,
          epochs,
-         reference_sat,
+         refs,
          physical_sats,
          ambiguity_ids,
          free_ambiguity_ids,
@@ -4567,7 +4926,7 @@ defmodule Orbis.GNSS.RTK do
            build_fixed_baseline_rows(
              base,
              epochs,
-             reference_sat,
+             refs,
              physical_sats,
              ambiguity_ids,
              free_ambiguity_ids,
@@ -4586,7 +4945,7 @@ defmodule Orbis.GNSS.RTK do
           finalize_fixed_baseline(
             base,
             epochs,
-            reference_sat,
+            refs,
             physical_sats,
             ambiguity_ids,
             free_ambiguity_ids,
@@ -4605,7 +4964,7 @@ defmodule Orbis.GNSS.RTK do
           finalize_fixed_baseline(
             base,
             epochs,
-            reference_sat,
+            refs,
             physical_sats,
             ambiguity_ids,
             free_ambiguity_ids,
@@ -4624,7 +4983,7 @@ defmodule Orbis.GNSS.RTK do
           iterate_fixed_baseline(
             base,
             epochs,
-            reference_sat,
+            refs,
             physical_sats,
             ambiguity_ids,
             free_ambiguity_ids,
@@ -4644,7 +5003,7 @@ defmodule Orbis.GNSS.RTK do
   defp build_fixed_baseline_rows(
          base,
          epochs,
-         reference_sat,
+         refs,
          physical_sats,
          ambiguity_ids,
          free_ambiguity_ids,
@@ -4657,7 +5016,7 @@ defmodule Orbis.GNSS.RTK do
       case build_fixed_epoch_baseline_rows(
              base,
              epoch,
-             reference_sat,
+             refs,
              physical_sats,
              ambiguity_ids,
              free_ambiguity_ids,
@@ -4678,7 +5037,7 @@ defmodule Orbis.GNSS.RTK do
   defp build_fixed_epoch_baseline_rows(
          base,
          epoch,
-         reference_sat,
+         refs,
          physical_sats,
          _ambiguity_ids,
          free_ambiguity_ids,
@@ -4686,14 +5045,14 @@ defmodule Orbis.GNSS.RTK do
          state,
          weights
        ) do
-    ref_dd = single_difference(epoch, reference_sat)
-    ref_pos = Map.fetch!(epoch.positions, reference_sat)
-    ref_base_pos = Map.fetch!(epoch.base_positions, reference_sat)
-    ref_rover_pos = Map.fetch!(epoch.rover_positions, reference_sat)
+    ref_data = epoch_reference_data(epoch, refs)
 
     epoch
-    |> epoch_available_nonrefs(reference_sat, physical_sats)
+    |> epoch_available_nonrefs(refs, physical_sats)
     |> Enum.reduce({:ok, []}, fn sat, {:ok, acc} ->
+      %{sd: ref_dd, pos: ref_pos, base_pos: ref_base_pos, rover_pos: ref_rover_pos} =
+        Map.fetch!(ref_data, satellite_system(sat))
+
       obs_dd = double_difference_measurement(epoch, sat, ref_dd)
       sat_pos = Map.fetch!(epoch.positions, sat)
       sat_base_pos = Map.fetch!(epoch.base_positions, sat)
@@ -4731,6 +5090,7 @@ defmodule Orbis.GNSS.RTK do
         epoch_idx: epoch.idx,
         epoch: epoch.epoch,
         sat: sat,
+        ref_sat: ref_dd.satellite_id,
         ambiguity_id: ambiguity_id,
         h: code_h,
         y: obs_dd.code_m - geom_dd,
@@ -4744,6 +5104,7 @@ defmodule Orbis.GNSS.RTK do
         epoch_idx: epoch.idx,
         epoch: epoch.epoch,
         sat: sat,
+        ref_sat: ref_dd.satellite_id,
         ambiguity_id: ambiguity_id,
         h: phase_h,
         y: obs_dd.phase_m - (geom_dd + phase_ambiguity),
@@ -4790,7 +5151,7 @@ defmodule Orbis.GNSS.RTK do
   defp finalize_fixed_baseline(
          base,
          epochs,
-         reference_sat,
+         refs,
          physical_sats,
          ambiguity_ids,
          free_ambiguity_ids,
@@ -4808,7 +5169,7 @@ defmodule Orbis.GNSS.RTK do
            build_fixed_baseline_rows(
              base,
              epochs,
-             reference_sat,
+             refs,
              physical_sats,
              ambiguity_ids,
              free_ambiguity_ids,
@@ -4816,7 +5177,7 @@ defmodule Orbis.GNSS.RTK do
              state,
              weights
            ),
-         {:ok, residuals} <- baseline_residuals(rows, reference_sat) do
+         {:ok, residuals} <- baseline_residuals(rows) do
       code_residuals = Enum.map(residuals, & &1.code_m)
       phase_residuals = Enum.map(residuals, & &1.phase_m)
       rover = add3(base, state.baseline)
@@ -4825,7 +5186,7 @@ defmodule Orbis.GNSS.RTK do
        %FixedBaselineSolution{
          baseline_m: ecef_map(state.baseline),
          rover_position_m: ecef_map(rover),
-         reference_satellite_id: reference_sat,
+         reference_satellite_id: reference_satellite_report(refs),
          used_sats: ambiguity_ids,
          fixed_ambiguities_cycles: fixed_cycles,
          fixed_ambiguities_m: fixed_m,
@@ -4843,6 +5204,7 @@ defmodule Orbis.GNSS.RTK do
              n_epochs: length(epochs),
              n_observations: length(rows),
              physical_sats: physical_sats,
+             reference_satellites: refs,
              ambiguity_satellites: Map.fetch!(float_sol.metadata, :ambiguity_satellites),
              dropped_cycle_slip_sats: Map.get(float_sol.metadata, :dropped_cycle_slip_sats, []),
              elevation_mask_deg: Map.get(float_sol.metadata, :elevation_mask_deg),
@@ -4862,7 +5224,7 @@ defmodule Orbis.GNSS.RTK do
     end
   end
 
-  defp baseline_residuals(rows, reference_sat) do
+  defp baseline_residuals(rows) do
     rows
     |> Enum.group_by(&{&1.epoch, &1.sat, &1.ambiguity_id})
     |> Enum.reduce_while({:ok, []}, fn {{epoch, sat, ambiguity_id}, grouped}, {:ok, acc} ->
@@ -4874,7 +5236,7 @@ defmodule Orbis.GNSS.RTK do
           residual = %{
             epoch: epoch,
             satellite_id: sat,
-            reference_satellite_id: reference_sat,
+            reference_satellite_id: code.ref_sat,
             ambiguity_id: ambiguity_id,
             code_m: code_y,
             phase_m: phase_y,
@@ -4918,9 +5280,14 @@ defmodule Orbis.GNSS.RTK do
   end
 
   defp baseline_covariance_blocks(rows) do
+    # Rows correlate only through their shared reference single difference, so
+    # the covariance is block-diagonal per {epoch, kind, reference}: each
+    # system's double differences form their own block and there is no
+    # cross-system correlation. With one system this reduces to the historical
+    # {epoch, kind} blocking (the reference key is constant).
     rows
-    |> Enum.group_by(&{&1.epoch_idx, &1.kind})
-    |> Enum.sort_by(fn {{epoch_idx, kind}, _rows} -> {epoch_idx, kind} end)
+    |> Enum.group_by(&{&1.epoch_idx, &1.kind, &1.ref_sat})
+    |> Enum.sort_by(fn {{epoch_idx, kind, ref_sat}, _rows} -> {epoch_idx, kind, ref_sat} end)
     |> Enum.map(fn {_key, block_rows} ->
       rows = Enum.sort_by(block_rows, & &1.sat)
 
@@ -5124,17 +5491,50 @@ defmodule Orbis.GNSS.RTK do
     end
   end
 
-  defp reference_satellite(common, opts) do
+  # Per-system reference selection for the two-receiver double-difference
+  # primitive. The default keeps the historical deterministic choice — the
+  # lexicographically first common satellite — applied per system.
+  defp reference_satellites(common, opts) do
+    systems = satellite_systems(common)
+    common_by_system = Enum.group_by(common, &satellite_system/1)
+
     case Keyword.get(opts, :reference_satellite_id) do
       nil ->
-        {:ok, hd(common)}
+        {:ok,
+         Map.new(systems, fn system ->
+           {system, common_by_system |> Map.fetch!(system) |> hd()}
+         end)}
 
       sat when is_binary(sat) ->
-        if sat in common do
-          {:ok, sat}
-        else
-          {:error, {:reference_satellite_missing, sat}}
+        case systems do
+          [system] ->
+            if sat in Map.fetch!(common_by_system, system) do
+              {:ok, %{system => sat}}
+            else
+              {:error, {:reference_satellite_missing, sat}}
+            end
+
+          _multiple ->
+            {:error, {:reference_satellite_single_system, sat}}
         end
+
+      refs when is_map(refs) ->
+        Enum.reduce_while(systems, {:ok, %{}}, fn system, {:ok, acc} ->
+          case Map.fetch(refs, system) do
+            :error ->
+              {:halt, {:error, {:reference_satellite_missing_system, system}}}
+
+            {:ok, sat} when is_binary(sat) ->
+              if sat in Map.fetch!(common_by_system, system) do
+                {:cont, {:ok, Map.put(acc, system, sat)}}
+              else
+                {:halt, {:error, {:reference_satellite_missing, sat}}}
+              end
+
+            {:ok, _other} ->
+              {:halt, {:error, {:invalid_option, :reference_satellite_id}}}
+          end
+        end)
 
       _other ->
         {:error, {:invalid_option, :reference_satellite_id}}

@@ -26,10 +26,29 @@ defmodule Orbis.GNSS.RTKRealArcTest do
                                   __DIR__,
                                   "fixtures/rtk/wtzr_wtzz_kinematic_gps_rtklib_oracle.json"
                                 )
+  @rtklib_multignss_oracle_path Path.join(
+                                  __DIR__,
+                                  "fixtures/rtk/wtzr_wtzz_multignss_static_rtklib_oracle.json"
+                                )
   @c_m_s 299_792_458.0
   @gps_l1_hz 1_575_420_000.0
   @gps_l2_hz 1_227_600_000.0
   @gps_l1_wavelength_m @c_m_s / @gps_l1_hz
+  # BeiDou B1I; Galileo E1 shares the GPS L1 carrier frequency.
+  @bds_b1i_hz 1_561_098_000.0
+  # GLONASS G1 FDMA: f = 1602 MHz + k * 562.5 kHz, slot k from the RINEX header.
+  @glonass_g1_hz 1_602_000_000.0
+  @glonass_g1_step_hz 562_500.0
+
+  # L1-band code/phase observation pairs per system, in preference order. WTZR
+  # tracks Galileo E1 as 1C while WTZZ tracks it as 1X; both are the same E1
+  # carrier, so the builder takes the first complete pair per receiver.
+  @multignss_l1_codes %{
+    "G" => [{"C1C", "L1C"}],
+    "R" => [{"C1C", "L1C"}],
+    "E" => [{"C1C", "L1C"}, {"C1X", "L1X"}],
+    "C" => [{"C2I", "L2I"}]
+  }
 
   @wtzr_marker {4_075_580.3111, 931_854.0543, 4_801_568.2808}
   @wtzz_marker {4_075_579.1913, 931_853.3696, 4_801_569.1897}
@@ -443,7 +462,88 @@ defmodule Orbis.GNSS.RTKRealArcTest do
     end
   end
 
-  defp real_gps_l1_rtk_epochs(sp3, base_obs, rover_obs, count) do
+  @tag timeout: 600_000
+  test "multi-GNSS static RTK filter reproduces the RTKLIB Track B oracle with GLONASS float-only" do
+    oracle = @rtklib_multignss_oracle_path |> File.read!() |> Jason.decode!()
+
+    sp3 = SP3.load!(@cod_sp3_path)
+    base_obs = Observations.load!(@wtzr_obs_path)
+    rover_obs = Observations.load!(@wtzz_obs_path)
+    base_arp = arp_position(@wtzr_marker, antenna_height_m(base_obs))
+    rover_arp = arp_position(@wtzz_marker, antenna_height_m(rover_obs))
+    antenna_baseline = sub3(rover_arp, base_arp)
+    glonass_slots = Observations.glonass_slots(base_obs)
+
+    epochs =
+      real_multignss_l1_rtk_epochs(
+        sp3,
+        base_obs,
+        rover_obs,
+        oracle["reference"]["epochs"],
+        ["G", "R", "E", "C"]
+      )
+
+    assert length(epochs) == oracle["reference"]["epochs"]
+
+    assert {:ok, sol} =
+             RTK.solve_filter_baseline_epochs(base_arp, epochs,
+               initial_baseline_m: {0.0, 0.0, 0.0},
+               max_iterations: 10,
+               on_cycle_slip: :split_arc,
+               elevation_mask_deg: 10.0,
+               stochastic_model: :rtklib,
+               code_sigma_m: 0.3,
+               phase_sigma_m: 0.003,
+               ambiguity_wavelength_m: multignss_wavelength_map(epochs, glonass_slots),
+               integer_candidate_limit: 200_000,
+               float_only_systems: ["R"]
+             )
+
+    # Each observed system carries its own double-difference reference.
+    assert %{"G" => "G" <> _, "R" => "R" <> _, "E" => "E" <> _, "C" => "C" <> _} =
+             sol.metadata.reference_satellites
+
+    assert sol.metadata.float_only_systems == ["R"]
+
+    # GLONASS ambiguities never enter a fixed set (FDMA inter-channel biases
+    # break the clean DD integer assumption, the oracle ran gloarmode=off).
+    for epoch <- sol.epochs do
+      refute Enum.any?(epoch.fixed_ambiguities, &String.starts_with?(&1, "R"))
+    end
+
+    refute Enum.any?(Map.keys(sol.fixed_ambiguities_cycles), &String.starts_with?(&1, "R"))
+
+    fixed_epochs = Enum.count(sol.epochs, &(&1.integer_status == :fixed))
+    assert fixed_epochs >= oracle["reference"]["fixed_epochs"] - 2
+
+    assert position_error(sol.baseline_m, antenna_baseline) < 0.01
+
+    # Per-epoch satellite usage is gated against the oracle's lower bound only.
+    # The oracle's upper bound does not transfer: its broadcast nav fixture
+    # (ESBC00DNK) carries ZERO GLONASS ephemerides, so RTKLIB solved G+E+C only
+    # despite navsys=45, and it ran at elmask 15 on broadcast ephemerides while
+    # this gate runs the proven mask-10 SP3 harness including GLONASS — both
+    # differences add satellites. Same convention as the kinematic-oracle test:
+    # satellite-set comparisons across mask/ephemeris differences are not exact.
+    {oracle_min_sats, _oracle_max_sats} =
+      oracle["per_epoch"] |> Enum.map(& &1["satellites"]) |> Enum.min_max()
+
+    sat_counts =
+      Enum.map(sol.epochs, fn epoch ->
+        epoch.residuals_m
+        |> Enum.flat_map(&[&1.satellite_id, &1.reference_satellite_id])
+        |> Enum.uniq()
+        |> length()
+      end)
+
+    assert Enum.min(sat_counts) >= oracle_min_sats
+  end
+
+  defp real_gps_l1_rtk_epochs(sp3, base_obs, rover_obs, count),
+    do: real_multignss_l1_rtk_epochs(sp3, base_obs, rover_obs, count, ["G"])
+
+  defp real_multignss_l1_rtk_epochs(sp3, base_obs, rover_obs, count, systems) do
+    glonass_slots = Observations.glonass_slots(base_obs)
     rover_by_epoch = Map.new(Observations.epochs(rover_obs), &{&1.epoch, &1})
 
     base_obs
@@ -452,8 +552,10 @@ defmodule Orbis.GNSS.RTKRealArcTest do
     |> Enum.flat_map(fn base_entry ->
       case Map.fetch(rover_by_epoch, base_entry.epoch) do
         {:ok, rover_entry} ->
-          base_values = gps_l1_values(base_obs, base_entry.index)
-          rover_values = gps_l1_values(rover_obs, rover_entry.index)
+          base_values = multignss_l1_values(base_obs, base_entry.index, systems, glonass_slots)
+
+          rover_values =
+            multignss_l1_values(rover_obs, rover_entry.index, systems, glonass_slots)
 
           common =
             base_values
@@ -500,21 +602,29 @@ defmodule Orbis.GNSS.RTKRealArcTest do
     |> assert_receiver_position_maps()
   end
 
-  defp gps_l1_values(obs, index) do
-    {:ok, by_sat} = Observations.values(obs, index, codes: %{"G" => ["C1C", "L1C"]})
+  defp multignss_l1_values(obs, index, systems, glonass_slots) do
+    codes =
+      @multignss_l1_codes
+      |> Map.take(systems)
+      |> Map.new(fn {system, pairs} ->
+        {system, Enum.flat_map(pairs, fn {code, phase} -> [code, phase] end)}
+      end)
+
+    {:ok, by_sat} = Observations.values(obs, index, codes: codes)
 
     by_sat
     |> Enum.flat_map(fn {sat, values} ->
       values_by_code = Map.new(values, &{&1.code, &1})
+      pairs = Map.get(@multignss_l1_codes, String.first(sat), [])
 
-      with %{value: c1} when is_number(c1) <- values_by_code["C1C"],
-           %{value: l1} = phase when is_number(l1) <- values_by_code["L1C"] do
+      with {:ok, wavelength_m} <- multignss_wavelength_m(sat, glonass_slots),
+           {:ok, {code_m, phase}} <- first_complete_code_phase_pair(values_by_code, pairs) do
         [
           {sat,
            %{
              satellite_id: sat,
-             code_m: c1,
-             phase_m: l1 * @gps_l1_wavelength_m,
+             code_m: code_m,
+             phase_m: phase.value * wavelength_m,
              lli: phase.lli
            }}
         ]
@@ -523,6 +633,40 @@ defmodule Orbis.GNSS.RTKRealArcTest do
       end
     end)
     |> Map.new()
+  end
+
+  defp first_complete_code_phase_pair(_values_by_code, []), do: :error
+
+  defp first_complete_code_phase_pair(values_by_code, [{code, phase} | rest]) do
+    with %{value: code_m} when is_number(code_m) <- values_by_code[code],
+         %{value: phase_cycles} = phase_obs when is_number(phase_cycles) <-
+           values_by_code[phase] do
+      {:ok, {code_m, phase_obs}}
+    else
+      _ -> first_complete_code_phase_pair(values_by_code, rest)
+    end
+  end
+
+  defp multignss_wavelength_m("G" <> _, _slots), do: {:ok, @gps_l1_wavelength_m}
+  defp multignss_wavelength_m("E" <> _, _slots), do: {:ok, @gps_l1_wavelength_m}
+  defp multignss_wavelength_m("C" <> _, _slots), do: {:ok, @c_m_s / @bds_b1i_hz}
+
+  defp multignss_wavelength_m("R" <> _ = sat, glonass_slots) do
+    # A GLONASS satellite without a slot record has no known FDMA channel, so
+    # its carrier wavelength is unknown; the builder drops it.
+    with {:ok, k} <- Map.fetch(glonass_slots, sat) do
+      {:ok, @c_m_s / (@glonass_g1_hz + k * @glonass_g1_step_hz)}
+    end
+  end
+
+  defp multignss_wavelength_map(epochs, glonass_slots) do
+    epochs
+    |> Enum.flat_map(&Map.keys(&1.satellite_positions_m))
+    |> Enum.uniq()
+    |> Map.new(fn sat ->
+      {:ok, wavelength_m} = multignss_wavelength_m(sat, glonass_slots)
+      {sat, wavelength_m}
+    end)
   end
 
   defp real_gps_l1_l2_rtk_epochs(sp3, base_obs, rover_obs, count) do

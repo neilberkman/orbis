@@ -39,6 +39,40 @@ defmodule Orbis.GNSS.RTKTest do
   @fixed_cycles %{"G01" => 0, "G02" => 5, "G03" => -7, "G04" => 12, "G05" => -4}
   @wide_lane_cycles %{"G01" => 0, "G02" => 3, "G03" => -5, "G04" => 8, "G05" => -2}
 
+  # Multi-GNSS fixtures: Galileo on a deliberately non-L1 wavelength to prove
+  # per-satellite wavelengths flow through the integer search, and GLONASS on
+  # per-slot FDMA wavelengths used float-only.
+  @e_wavelength_m 0.25
+  @e_cycles %{"E02" => 7, "E11" => -5, "E19" => 3}
+  @r_slots %{"R05" => -1, "R12" => 4, "R21" => -7}
+  @r_ambiguities_m %{"R05" => 0.31, "R12" => -0.27, "R21" => 0.55}
+  @extra_sat_positions [
+    %{
+      "E02" => {20_500_000.0, 6_000_000.0, 21_500_000.0},
+      "E11" => {-16_000_000.0, -18_500_000.0, 19_500_000.0},
+      "E19" => {12_500_000.0, 20_500_000.0, 18_200_000.0},
+      "R05" => {23_000_000.0, 2_000_000.0, 17_500_000.0},
+      "R12" => {-21_000_000.0, 10_000_000.0, 19_800_000.0},
+      "R21" => {16_500_000.0, -19_000_000.0, 18_800_000.0}
+    },
+    %{
+      "E02" => {20_530_000.0, 5_950_000.0, 21_520_000.0},
+      "E11" => {-16_040_000.0, -18_470_000.0, 19_530_000.0},
+      "E19" => {12_540_000.0, 20_470_000.0, 18_230_000.0},
+      "R05" => {22_960_000.0, 2_040_000.0, 17_540_000.0},
+      "R12" => {-20_970_000.0, 9_960_000.0, 19_830_000.0},
+      "R21" => {16_540_000.0, -18_960_000.0, 18_830_000.0}
+    },
+    %{
+      "E02" => {20_560_000.0, 5_900_000.0, 21_550_000.0},
+      "E11" => {-16_080_000.0, -18_440_000.0, 19_560_000.0},
+      "E19" => {12_580_000.0, 20_440_000.0, 18_260_000.0},
+      "R05" => {22_920_000.0, 2_080_000.0, 17_580_000.0},
+      "R12" => {-20_940_000.0, 9_920_000.0, 19_860_000.0},
+      "R21" => {16_580_000.0, -18_920_000.0, 18_860_000.0}
+    }
+  ]
+
   describe "double_differences/3" do
     test "receiver clocks and common satellite errors cancel" do
       sats = ["G01", "G02", "G03", "G04"]
@@ -1298,12 +1332,202 @@ defmodule Orbis.GNSS.RTKTest do
     end
   end
 
+  describe "multi-GNSS per-system references" do
+    test "fixed solve recovers per-system references and exact DD integers across G+E" do
+      epochs = multignss_epochs(["G", "E"])
+
+      assert {:ok, sol} =
+               RTK.solve_fixed_baseline_epochs(@base, epochs,
+                 ambiguity_wavelength_m: multignss_wavelengths(),
+                 initial_baseline_m: {-40.0, 35.0, 12.0}
+               )
+
+      assert %{"G" => g_ref, "E" => e_ref} = sol.metadata.reference_satellites
+      assert String.starts_with?(g_ref, "G")
+      assert String.starts_with?(e_ref, "E")
+      assert sol.reference_satellite_id == sol.metadata.reference_satellites
+
+      assert sol.metadata.integer_status == :fixed
+      assert position_error(sol.baseline_m, @truth_baseline) < 1.0e-5
+
+      cycles = Map.merge(@fixed_cycles, @e_cycles)
+      refs = sol.metadata.reference_satellites
+
+      assert Enum.sort(sol.used_sats) ==
+               Enum.sort(Map.keys(cycles) -- Map.values(refs))
+
+      for sat <- sol.used_sats do
+        ref = Map.fetch!(refs, String.first(sat))
+        expected = Map.fetch!(cycles, sat) - Map.fetch!(cycles, ref)
+        assert Map.fetch!(sol.fixed_ambiguities_cycles, sat) == expected
+      end
+
+      # Every residual is differenced against its OWN system's reference.
+      for residual <- sol.residuals_m do
+        assert residual.reference_satellite_id ==
+                 Map.fetch!(refs, String.first(residual.satellite_id))
+      end
+    end
+
+    test "float-only systems stay out of the fixed set but contribute float rows" do
+      epochs = multignss_epochs(["G", "E", "R"])
+
+      assert {:ok, sol} =
+               RTK.solve_fixed_baseline_epochs(@base, epochs,
+                 ambiguity_wavelength_m: multignss_wavelengths(),
+                 float_only_systems: ["R"],
+                 initial_baseline_m: {-40.0, 35.0, 12.0}
+               )
+
+      assert %{"G" => _, "E" => _, "R" => r_ref} = sol.metadata.reference_satellites
+      assert sol.metadata.integer_status == :fixed
+      assert position_error(sol.baseline_m, @truth_baseline) < 1.0e-5
+
+      r_used = Enum.filter(sol.used_sats, &String.starts_with?(&1, "R"))
+      assert length(r_used) == 2
+
+      # GLONASS ambiguities are never entered into the integer search.
+      refute Enum.any?(Map.keys(sol.fixed_ambiguities_cycles), &String.starts_with?(&1, "R"))
+      refute Enum.any?(sol.metadata.ambiguity_search.order, &String.starts_with?(&1, "R"))
+
+      # They still resolve as float DD ambiguities in the re-solve.
+      for sat <- r_used do
+        expected = Map.fetch!(@r_ambiguities_m, sat) - Map.fetch!(@r_ambiguities_m, r_ref)
+        assert abs(Map.fetch!(sol.float_solution.ambiguities_m, sat) - expected) < 1.0e-5
+      end
+
+      # The fixable systems still fix exactly.
+      cycles = Map.merge(@fixed_cycles, @e_cycles)
+
+      for sat <- sol.used_sats -- r_used do
+        ref = Map.fetch!(sol.metadata.reference_satellites, String.first(sat))
+        expected = Map.fetch!(cycles, sat) - Map.fetch!(cycles, ref)
+        assert Map.fetch!(sol.fixed_ambiguities_cycles, sat) == expected
+      end
+    end
+
+    test "multi-GNSS option validation is tagged" do
+      epochs = multignss_epochs(["G", "E"])
+
+      assert RTK.solve_float_baseline_epochs(@base, epochs, reference_satellite_id: "G01") ==
+               {:error, {:reference_satellite_single_system, "G01"}}
+
+      assert RTK.solve_float_baseline_epochs(@base, epochs,
+               reference_satellite_id: %{"G" => "G01"}
+             ) == {:error, {:reference_satellite_missing_system, "E"}}
+
+      assert {:ok, _sol} =
+               RTK.solve_float_baseline_epochs(@base, epochs,
+                 reference_satellite_id: %{"G" => "G01", "E" => "E02"}
+               )
+
+      assert RTK.solve_fixed_baseline_epochs(@base, epochs,
+               ambiguity_wavelength_m: multignss_wavelengths(),
+               float_only_systems: "R"
+             ) == {:error, {:invalid_option, :float_only_systems}}
+
+      assert RTK.solve_fixed_baseline_epochs(@base, epochs,
+               ambiguity_wavelength_m: multignss_wavelengths(),
+               float_only_systems: ["GR"]
+             ) == {:error, {:invalid_option, :float_only_systems}}
+
+      assert RTK.solve_filter_baseline_epochs(@base, epochs,
+               ambiguity_wavelength_m: multignss_wavelengths(),
+               float_only_systems: [:r]
+             ) == {:error, {:invalid_option, :float_only_systems}}
+    end
+
+    test "sequential filter fixes G+E per epoch and keeps GLONASS float" do
+      epochs = multignss_epochs(["G", "E", "R"])
+
+      assert {:ok, sol} =
+               RTK.solve_filter_baseline_epochs(@base, epochs,
+                 ambiguity_wavelength_m: multignss_wavelengths(),
+                 float_only_systems: ["R"],
+                 initial_baseline_m: {-40.0, 35.0, 12.0}
+               )
+
+      assert %{"G" => _, "E" => _, "R" => _} = sol.metadata.reference_satellites
+      assert sol.metadata.float_only_systems == ["R"]
+      assert sol.metadata.fixed_epoch_count > 0
+      assert Enum.all?(sol.epochs, &(&1.integer_status in [:fixed, :not_fixed]))
+      assert Enum.any?(sol.epochs, &(&1.integer_status == :fixed))
+
+      for epoch <- sol.epochs do
+        refute Enum.any?(epoch.fixed_ambiguities, &String.starts_with?(&1, "R"))
+      end
+
+      refute Enum.any?(Map.keys(sol.fixed_ambiguities_cycles), &String.starts_with?(&1, "R"))
+
+      # The fixed integers are the per-system DD truth.
+      cycles = Map.merge(@fixed_cycles, @e_cycles)
+
+      for {sat, fixed} <- sol.fixed_ambiguities_cycles do
+        ref = Map.fetch!(sol.metadata.reference_satellites, String.first(sat))
+        assert fixed == Map.fetch!(cycles, sat) - Map.fetch!(cycles, ref)
+      end
+
+      assert position_error(sol.baseline_m, @truth_baseline) < 1.0e-3
+    end
+
+    test "the Rust filter kernel rejects multi-system epochs" do
+      epochs = multignss_epochs(["G", "E"])
+
+      assert RTK.solve_filter_baseline_epochs(@base, epochs,
+               ambiguity_wavelength_m: multignss_wavelengths(),
+               filter_kernel: :rust
+             ) == {:error, {:unsupported_filter_kernel, :multi_gnss}}
+    end
+  end
+
   defp synth_observations(sats, ranges, clock_m, errors, phase_ambiguities) do
     Enum.map(sats, fn sat ->
       code = Map.fetch!(ranges, sat) + clock_m + Map.fetch!(errors, sat)
       phase = code + Map.fetch!(phase_ambiguities, sat)
       %{satellite_id: sat, code_m: code, phase_m: phase}
     end)
+  end
+
+  defp multignss_epochs(systems) do
+    g_ambiguities_m = Map.new(@fixed_cycles, fn {sat, cyc} -> {sat, cyc * @l1_wavelength_m} end)
+    e_ambiguities_m = Map.new(@e_cycles, fn {sat, cyc} -> {sat, cyc * @e_wavelength_m} end)
+
+    ambiguities_m =
+      %{}
+      |> merge_if(g_ambiguities_m, "G" in systems)
+      |> merge_if(e_ambiguities_m, "E" in systems)
+      |> merge_if(@r_ambiguities_m, "R" in systems)
+
+    @sat_positions
+    |> Enum.zip(@extra_sat_positions)
+    |> Enum.with_index()
+    |> Enum.map(fn {{g_positions, extra_positions}, idx} ->
+      positions =
+        extra_positions
+        |> Enum.filter(fn {sat, _pos} -> String.first(sat) in systems end)
+        |> Map.new()
+        |> merge_if(g_positions, "G" in systems)
+
+      synthetic_baseline_epoch(@base, @truth_baseline, positions,
+        epoch: idx,
+        base_clock_m: 12.0 + idx,
+        rover_clock_m: -6.0 + 2.0 * idx,
+        ambiguities_m: ambiguities_m
+      )
+    end)
+  end
+
+  defp merge_if(map, extra, true), do: Map.merge(map, extra)
+  defp merge_if(map, _extra, false), do: map
+
+  defp r_wavelength_m(sat), do: @c / (1_602_000_000.0 + Map.fetch!(@r_slots, sat) * 562_500.0)
+
+  defp multignss_wavelengths do
+    @fixed_cycles
+    |> Map.keys()
+    |> Map.new(&{&1, @l1_wavelength_m})
+    |> Map.merge(Map.new(Map.keys(@e_cycles), &{&1, @e_wavelength_m}))
+    |> Map.merge(Map.new(Map.keys(@r_slots), &{&1, r_wavelength_m(&1)}))
   end
 
   defp position_error(%{x_m: x, y_m: y, z_m: z}, {tx, ty, tz}) do
