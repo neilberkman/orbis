@@ -307,3 +307,309 @@ SP3 as `cod.sp3` and the GRG clock as `grg.clk`, then enabling
 `pos1-sateph = precise`. With that staging, RTKLIB fixes the same 119/120 epochs
 as the broadcast run; the maximum per-epoch baseline delta between the two
 references is about 1.6 mm.
+
+## C+D Phase 1 static EPN oracle
+
+`pasa_scoa_2026_120_l1_static_fixhold_rtklib_oracle.json` and
+`pasa_scoa_2026_120_l1l2_static_rtklib_oracle.json` record RTKLIB 2.4.2-p13
+output for a C+D Phase 1 static EPN short baseline on 2026-04-30 (day 120),
+10:00:00 through 11:59:30 GPST.
+
+- **Pair:** PASA00ESP rover (Pasaia, Spain) against SCOA00FRA base (Ciboure,
+  France), 21.836327792 km.
+- **Reason selected:** both public BKG EPN observation files are RINEX 3.05,
+  30 s, mixed GNSS for 2026 day 120; both active antennas are listed in IGS20
+  ANTEX; both station logs report zero marker-to-ARP eccentricity for the active
+  antenna installation; the antennas differ (`LEIAR20         LEIM` versus
+  `TRM55971.00     NONE`).
+- **Source observations:** BKG EUREF daily CRINEX:
+  `https://igs.bkg.bund.de/root_ftp/EUREF/obs/2026/120/PASA00ESP_R_20261200000_01D_30S_MO.crx.gz`
+  and
+  `https://igs.bkg.bund.de/root_ftp/EUREF/obs/2026/120/SCOA00FRA_R_20261200000_01D_30S_MO.crx.gz`.
+- **Navigation/products:** BKG IGS BRDC mixed navigation, BKG IGS final
+  `IGS0OPSFIN` SP3 and CLK for GPS week 2416, IGS20 ANTEX, EPN C2385 SSC, and
+  EPN station logs.
+- **RTKLIB:** tag `v2.4.2-p13`, commit
+  `71db0ffa0d9735697c6adfd06fdf766d0e5ce807`, built locally with:
+
+  ```sh
+  make -C /tmp/cd-phase1-tools/RTKLIB/app/rnx2rtkp/gcc clean
+  make -C /tmp/cd-phase1-tools/RTKLIB/app/rnx2rtkp/gcc \
+    CFLAGS='-Wall -O3 -std=gnu89 -pedantic -Wno-unused-but-set-variable -D_DARWIN_C_SOURCE -I../../../src -DTRACE -DENAGLO -DENAQZS -DENAGAL -DNFREQ=3 -g' \
+    LDLIBS='-lm'
+  ```
+
+### Candidate audit
+
+Candidate pairs came from EPN station metadata plus BKG EUREF availability for a
+common day with IGS final products. PASA/SCOA was chosen because it satisfies
+the 15-40 km baseline, same-day public data, known EPN coordinates, ANTEX-listed
+active antennas, and different receiver antenna models.
+
+| Pair | Baseline | Active antennas | Note |
+| --- | ---: | --- | --- |
+| PASA00ESP-SCOA00FRA | 21.84 km | `LEIAR20         LEIM` / `TRM55971.00     NONE` | selected |
+| ROVE00ITA-TREU00ITA | 20.88 km | different | eligible backup |
+| CEU100ESP-TAR000ESP | 29.70 km | different | eligible backup |
+| SART00ITA-UCAG00ITA | 31.35 km | different | eligible backup |
+| CAG100ITA-SART00ITA | 31.35 km | different | eligible backup |
+| EIJS00NLD-WARE00BEL | 31.87 km | different | eligible backup |
+| AAER00FRA-DOUR00BEL | 34.92 km | different | eligible backup |
+| PAD100ITA-VEN100ITA | 36.17 km | different | eligible backup |
+| LLIV00ESP-PCAR00AND | 39.35 km | different | eligible backup |
+| ORTE00ITA-VTRB00ITA | 23.46 km | same antenna | lower priority |
+
+### Checksums
+
+Raw public inputs:
+
+- `PASA00ESP_R_20261200000_01D_30S_MO.crx.gz`:
+  `f749babda4d522609314ccb36a4725960f652bc8525f4c172a82eccd155ebc48`
+- `SCOA00FRA_R_20261200000_01D_30S_MO.crx.gz`:
+  `ef01c8f42b966450a2f6d472ceb5a2b864585036543d3dba95393d1438b5f9ca`
+- `BRDC00WRD_R_20261200000_01D_MN.rnx.gz`:
+  `1325a2735d16dddc07b82b3a1257c59d8d6ebd4a3233d4f7569b9bb44925b7f7`
+- `IGS0OPSFIN_20261200000_01D_15M_ORB.SP3.gz`:
+  `c06164f34b3e8fbbebe63d0619475c32fce4ce42e40254a9dbc531afb922a802`
+- `IGS0OPSFIN_20261200000_01D_30S_CLK.CLK.gz`:
+  `8483e969d69546ea2b6bbce7e6aaaece65ab6868b71a7a0398696b5b26ccdbe6`
+- `igs20.atx`:
+  `70e963f66ca46c801a9fc8b37b0a0023c8e5213a724d7f26972ae81a80ce9699`
+- `EUR0OPSSNX_1996001_2025270_00U_SOL.SSC`:
+  `8101d31ebb047a7e25ce69495a82b4728b53798dc21c09aa9e2e030b0334b3f8`
+- `pasa00esp_20251003.log`:
+  `8aa1bc31a67a1a6830104143d05191bc09df650405db4c6c17840435be3fe88c`
+- `scoa00fra_20251209.log`:
+  `882e035a6a0b95b9f299772580f9e79e95c939466bad122bc29c7bd32bfd4320`
+
+Committed generated inputs:
+
+- `test/fixtures/obs/PASA00ESP_R_20261201000_02H_30S_MO.rnx`:
+  `3410f0ef73c7704353ae5efda0d86e30611a281a56acf77e5511ca4ff1486d2b`
+- `test/fixtures/obs/SCOA00FRA_R_20261201000_02H_30S_MO.rnx`:
+  `684902dec4e06d3c0478c4fc421dc717dcb8d5426b33674e322b3ccef502f492`
+- `test/fixtures/nav/BRDC00WRD_R_20261200800_06H_MN.rnx`:
+  `b3671a232a10cbc814372afd15387102e9bac68a62d5d41de966b58d0b024b31`
+- `test/fixtures/sp3/IGS0OPSFIN_20261200945_02H30M_15M_ORB.SP3`:
+  `8d3896583b8d2662d3012485c5c92f52a72124ccf199eb24760464411f968d6b`
+- `test/fixtures/clk/IGS0OPSFIN_2026120095930_02H01M_30S_CLK.CLK`:
+  `711d2791dfe2d20ecc21b99af9d37088aebf6d3382d25d1ecd540441e7ccc989`
+- `test/fixtures/antex/igs20_pasa_scoa_gps.atx`:
+  `e9b611472cee755f162245e9ba06351f43f4fbf1dee8108e07c4f834e0c17fbd`
+- `test/fixtures/rtk/generators/cd_pasa_scoa_2026_120_truth.json`:
+  `e84658bca429500fac6259d501b254861291ef4cee84805ee49a811d4a42b4bb`
+- `test/fixtures/rtk/pasa_scoa_2026_120_l1_static_fixhold_rtklib_oracle.json`:
+  `773c0df000d4ee0738152e5cf912ed840350ed2e56aa9a7e145be882078eef7f`
+- `test/fixtures/rtk/pasa_scoa_2026_120_l1l2_static_rtklib_oracle.json`:
+  `06b4a62c40c62add32edbb4ed52c6a1dbb869f923eaceaab705734683bbc89cb`
+
+### Truth and frame handling
+
+Truth uses the EPN C2385 multi-year ITRF2020 position/velocity solution. The
+latest C2385 rows valid for 2026-04-30 were propagated from coordinate epoch
+2020-01-01T00:00:00 to the observation midpoint, 2026-04-30T11:00:00 GPST,
+using the published X/Y/Z velocities and a 365.25-day Julian year. No plate
+model beyond the published velocities was applied. Both station logs and RINEX
+headers report zero active antenna marker-to-ARP eccentricity, so marker and ARP
+coordinates are identical for this pair.
+
+- SCOA00FRA propagated base ARP ECEF:
+  `4639940.429559 -136224.811560 4359552.502780` m.
+- PASA00ESP propagated rover ARP ECEF:
+  `4644908.987020 -156644.937061 4353623.158575` m.
+- Truth baseline ENU at SCOA00FRA ARP:
+  east `-20265.52060276001` m, north `-8132.221127240546` m,
+  up `-29.422321279917` m.
+
+### Configs
+
+The public BKG `IGS0OPSFIN` final SP3/CLK products available for GPS week 2416,
+day 4 are GPS-only. The observations and BRDC navigation are multi-GNSS, but
+the precise RTKLIB solves intentionally set `pos1-navsys = 1` so the orbit/clock
+product and enabled constellations match. RTKLIB's precise path on this build
+loads staged lowercase `igs_fin.sp3` and `igs_fin.clk` files during the
+byte-for-byte regeneration test.
+
+L1 static fix-and-hold config:
+
+```conf
+pos1-posmode       =static
+pos1-frequency     =l1
+pos1-soltype       =forward
+pos1-elmask        =15
+pos1-snrmask_r     =off
+pos1-snrmask_b     =off
+pos1-dynamics      =off
+pos1-tidecorr      =on
+pos1-ionoopt       =brdc
+pos1-tropopt       =saas
+pos1-sateph        =precise
+pos1-posopt1       =on
+pos1-posopt2       =on
+pos1-posopt3       =off
+pos1-posopt4       =off
+pos1-posopt5       =off
+pos1-navsys        =1
+pos2-armode        =fix-and-hold
+pos2-gloarmode     =off
+pos2-bdsarmode     =off
+pos2-arthres       =3.0
+pos2-arlockcnt     =0
+pos2-arelmask      =0
+pos2-elmaskhold    =0
+pos2-aroutcnt      =5
+pos2-arminfix      =10
+pos2-slipthres     =0.05
+pos2-maxage        =30
+pos2-syncsol       =off
+pos2-rejionno      =30
+pos2-rejgdop       =30
+pos2-niter         =1
+out-solformat      =enu
+out-outhead        =on
+out-outopt         =on
+out-timesys        =gpst
+out-timeform       =hms
+out-timendec       =3
+out-height         =ellipsoidal
+out-solstatic      =all
+ant1-postype       =single
+ant1-anttype       =LEIAR20         LEIM
+ant1-antdele       =0
+ant1-antdeln       =0
+ant1-antdelu       =0
+ant2-postype       =xyz
+ant2-pos1          =4639940.429559
+ant2-pos2          =-136224.811560
+ant2-pos3          =4359552.502780
+ant2-anttype       =TRM55971.00     NONE
+ant2-antdele       =0
+ant2-antdeln       =0
+ant2-antdelu       =0
+file-satantfile    =../../antex/igs20_pasa_scoa_gps.atx
+file-rcvantfile    =../../antex/igs20_pasa_scoa_gps.atx
+```
+
+Dual-frequency static config:
+
+```conf
+pos1-posmode       =static
+pos1-frequency     =l1+l2
+pos1-soltype       =forward
+pos1-elmask        =15
+pos1-snrmask_r     =off
+pos1-snrmask_b     =off
+pos1-dynamics      =off
+pos1-tidecorr      =on
+pos1-ionoopt       =dual-freq
+pos1-tropopt       =saas
+pos1-sateph        =precise
+pos1-posopt1       =on
+pos1-posopt2       =on
+pos1-posopt3       =off
+pos1-posopt4       =off
+pos1-posopt5       =off
+pos1-navsys        =1
+pos2-armode        =continuous
+pos2-gloarmode     =off
+pos2-bdsarmode     =off
+pos2-arthres       =3.0
+pos2-arlockcnt     =0
+pos2-arelmask      =0
+pos2-elmaskhold    =0
+pos2-aroutcnt      =5
+pos2-arminfix      =10
+pos2-slipthres     =0.05
+pos2-maxage        =30
+pos2-syncsol       =off
+pos2-rejionno      =30
+pos2-rejgdop       =30
+pos2-niter         =1
+out-solformat      =enu
+out-outhead        =on
+out-outopt         =on
+out-timesys        =gpst
+out-timeform       =hms
+out-timendec       =3
+out-height         =ellipsoidal
+out-solstatic      =all
+ant1-postype       =single
+ant1-anttype       =LEIAR20         LEIM
+ant1-antdele       =0
+ant1-antdeln       =0
+ant1-antdelu       =0
+ant2-postype       =xyz
+ant2-pos1          =4639940.429559
+ant2-pos2          =-136224.811560
+ant2-pos3          =4359552.502780
+ant2-anttype       =TRM55971.00     NONE
+ant2-antdele       =0
+ant2-antdeln       =0
+ant2-antdelu       =0
+file-satantfile    =../../antex/igs20_pasa_scoa_gps.atx
+file-rcvantfile    =../../antex/igs20_pasa_scoa_gps.atx
+```
+
+### Generation commands
+
+Trim public inputs:
+
+```sh
+PYTHONPATH=/tmp/cd-phase1-tools/py \
+  python3 test/fixtures/rtk/generators/cd_phase1_pasa_scoa_2026_120.py \
+  --work /tmp/cd-phase1-data/rebuild
+```
+
+Run RTKLIB from `test/fixtures/rtk/generators` with the precise products staged
+under lowercase names:
+
+```sh
+RNX=/tmp/cd-phase1-tools/RTKLIB/app/rnx2rtkp/gcc/rnx2rtkp
+cp ../../sp3/IGS0OPSFIN_20261200945_02H30M_15M_ORB.SP3 /tmp/cd-phase1-data/igs_fin.sp3
+cp ../../clk/IGS0OPSFIN_2026120095930_02H01M_30S_CLK.CLK /tmp/cd-phase1-data/igs_fin.clk
+
+$RNX -k cd_pasa_scoa_l1_static_fixhold.conf \
+  -o cd_pasa_scoa_l1_static_fixhold.pos \
+  ../../obs/PASA00ESP_R_20261201000_02H_30S_MO.rnx \
+  ../../obs/SCOA00FRA_R_20261201000_02H_30S_MO.rnx \
+  ../../nav/BRDC00WRD_R_20261200800_06H_MN.rnx \
+  /tmp/cd-phase1-data/igs_fin.sp3 /tmp/cd-phase1-data/igs_fin.clk
+
+$RNX -k cd_pasa_scoa_l1l2_static.conf \
+  -o cd_pasa_scoa_l1l2_static.pos \
+  ../../obs/PASA00ESP_R_20261201000_02H_30S_MO.rnx \
+  ../../obs/SCOA00FRA_R_20261201000_02H_30S_MO.rnx \
+  ../../nav/BRDC00WRD_R_20261200800_06H_MN.rnx \
+  /tmp/cd-phase1-data/igs_fin.sp3 /tmp/cd-phase1-data/igs_fin.clk
+```
+
+Convert `.pos` files to oracle JSON:
+
+```sh
+python3 pos_to_oracle.py cd_pasa_scoa_l1_static_fixhold.pos \
+  cd_pasa_scoa_l1_static_fixhold.conf \
+  cd_pasa_scoa_2026_120_l1_static_fixhold \
+  "RTKLIB 2.4.2-p13 C+D Phase 1 precise-GPS oracle for PASA00ESP rover against SCOA00FRA base on 2026-04-30 10:00-12:00 GPST (L1 static, fix-and-hold, AR ratio gate 3.0, ANTEX receiver PCV and solid earth tides enabled)." \
+  ../pasa_scoa_2026_120_l1_static_fixhold_rtklib_oracle.json \
+  --static-truth-json cd_pasa_scoa_2026_120_truth.json \
+  --rover-source test/fixtures/obs/PASA00ESP_R_20261201000_02H_30S_MO.rnx \
+  --base-source test/fixtures/obs/SCOA00FRA_R_20261201000_02H_30S_MO.rnx \
+  --nav-source test/fixtures/nav/BRDC00WRD_R_20261200800_06H_MN.rnx \
+  --sp3-source test/fixtures/sp3/IGS0OPSFIN_20261200945_02H30M_15M_ORB.SP3 \
+  --clk-source test/fixtures/clk/IGS0OPSFIN_2026120095930_02H01M_30S_CLK.CLK \
+  --antex-source test/fixtures/antex/igs20_pasa_scoa_gps.atx \
+  --rtklib-version v2.4.2-p13 --rtklib-commit 71db0ff
+```
+
+Use the same converter command for the dual-frequency `.pos`, changing the
+config, label, description, and output file.
+
+### Results
+
+| Oracle | Epochs | Fixed | First fix | Final status | Final ratio | Mean error | Max error |
+| --- | ---: | ---: | --- | --- | ---: | ---: | ---: |
+| L1 static fix-and-hold | 240 | 171 | `2026-04-30T10:01:00` | fixed | 999.9 | 0.107036863232 m | 0.375208123609 m |
+| L1/L2 static continuous | 240 | 80 | `2026-04-30T10:01:00` | float | 1.5 | 0.208126085588 m | 0.980812363794 m |
+
+The L1 final truth error is 0.052353514434 m. The L1/L2 final truth error is
+0.058098081566 m. Satellite counts are 4-5 in both runs.

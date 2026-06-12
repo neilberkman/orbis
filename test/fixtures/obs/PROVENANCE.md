@@ -129,3 +129,31 @@ the network by default.
 The crate carries identical copies under
 `crates/astrodynamics-gnss/tests/fixtures/obs/` for the crate's own
 CRINEX round-trip and RINEX observation parser tests.
+
+## PASA00ESP / SCOA00FRA 2026 DOY120 2-hour RTK pair
+
+- **Stations / day:** PASA00ESP (Pasaia, Spain) and SCOA00FRA (Ciboure,
+  France), 2026 day-of-year 120 (2026-04-30), 30 s sampling, RINEX 3.05 mixed
+  GNSS observations.
+- **Purpose:** C+D Phase 1 static RTKLIB oracle pair. The 21.836327792 km
+  baseline is long enough to leave short-baseline comfort while staying inside
+  the 15-40 km campaign gate.
+- **Upstream source:** BKG EUREF daily CRINEX products:
+  - `https://igs.bkg.bund.de/root_ftp/EUREF/obs/2026/120/PASA00ESP_R_20261200000_01D_30S_MO.crx.gz`
+  - `https://igs.bkg.bund.de/root_ftp/EUREF/obs/2026/120/SCOA00FRA_R_20261200000_01D_30S_MO.crx.gz`
+- **Decode / trim:** decoded with the Python `hatanaka` package, kept the
+  verbatim header with `TIME OF FIRST OBS` / `TIME OF LAST OBS` updated, then
+  retained epochs from 2026-04-30T10:00:00 through 11:59:30 GPST (240 epochs).
+  The committed fixtures are plain `.rnx` files.
+- **Raw sha256:**
+  - PASA `.crx.gz`:
+    `f749babda4d522609314ccb36a4725960f652bc8525f4c172a82eccd155ebc48`
+  - SCOA `.crx.gz`:
+    `ef01c8f42b966450a2f6d472ceb5a2b864585036543d3dba95393d1438b5f9ca`
+- **Committed sha256:**
+  - `PASA00ESP_R_20261201000_02H_30S_MO.rnx`:
+    `3410f0ef73c7704353ae5efda0d86e30611a281a56acf77e5511ca4ff1486d2b`
+  - `SCOA00FRA_R_20261201000_02H_30S_MO.rnx`:
+    `684902dec4e06d3c0478c4fc421dc717dcb8d5426b33674e322b3ccef502f492`
+- **Rebuild recipe:**
+  `test/fixtures/rtk/generators/cd_phase1_pasa_scoa_2026_120.py`.

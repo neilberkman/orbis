@@ -36,6 +36,8 @@ solver settings pinned across arcs.
 | `gsdc_2021_08_04_sjc1_pixel5_p222_demo5_rtklib_oracle.json` | `track_a_gsdc_2021_08_04_sjc1_p222_grec_l1.conf` | pre-registered GSDC mixed/arterial Pixel5 arc, demo5, G/R/E/C L1, P222 base | 10/1554 fixed with AR ratio gate 3.0; median 4.52m 3D / 2.63m horizontal, p95 12.30m 3D |
 | `gsdc_2021_12_15_mtv1_pixel5_p222_demo5_rtklib_oracle.json` | `track_a_gsdc_2021_12_15_mtv1_p222_grec_l1.conf` | pre-registered GSDC highway Pixel5 arc, demo5, G/R/E/C L1, P222 base | 1/1465 fixed with AR ratio gate 3.0; median 3.65m 3D / 2.82m horizontal, p95 7.91m 3D |
 | `gsdc_2021_12_28_mtv1_pixel5_p222_demo5_rtklib_oracle.json` | `track_a_gsdc_2021_12_28_mtv1_p222_grec_l1.conf` | pre-registered GSDC repeat MTV1 Pixel5 arc, demo5, G/R/E/C L1, P222 base | 10/1610 fixed with AR ratio gate 3.0; median 3.97m 3D / 2.91m horizontal, p95 9.03m 3D |
+| `pasa_scoa_2026_120_l1_static_fixhold_rtklib_oracle.json` | `cd_pasa_scoa_l1_static_fixhold.conf` | C+D Phase 1 EPN PASA00ESP/SCOA00FRA static 21.836 km baseline, GPS precise SP3/CLK, L1, fix-and-hold, ANTEX/tides | 171/240 fixed with AR ratio gate 3.0; mean 0.107 m / max 0.375 m truth error |
+| `pasa_scoa_2026_120_l1l2_static_rtklib_oracle.json` | `cd_pasa_scoa_l1l2_static.conf` | C+D Phase 1 EPN PASA00ESP/SCOA00FRA static 21.836 km baseline, GPS precise SP3/CLK, L1/L2, continuous AR, ANTEX/tides | 80/240 fixed with AR ratio gate 3.0; mean 0.208 m / max 0.981 m truth error |
 
 **GLONASS is float-only** (`pos2-gloarmode=off`): FDMA inter-channel biases break
 the clean double-difference integer assumption, so GLONASS contributes to the
@@ -116,3 +118,31 @@ matching tolerance for RTKLIB's rounded millisecond output:
 
 The local byte-for-byte regeneration check is tagged `:local_data`, covers all
 four GSDC fixtures, and is excluded by default.
+
+## C+D Phase 1 EPN static baseline
+
+The PASA/SCOA oracle uses vanilla RTKLIB **v2.4.2-p13** at commit `71db0ff`.
+The raw public data download and trimming recipe is
+`cd_phase1_pasa_scoa_2026_120.py`; it downloads the BKG EUREF observations, BKG
+BRDC, BKG IGS final SP3/CLK, IGS20 ANTEX, EPN C2385 SSC, and EPN station logs,
+then writes the committed 2 h observation arc and product margins.
+
+```sh
+PYTHONPATH=/tmp/cd-phase1-tools/py \
+  python3 cd_phase1_pasa_scoa_2026_120.py \
+  --work /tmp/cd-phase1-data/rebuild
+```
+
+Run the local byte-identical regeneration check with:
+
+```sh
+RTKLIB_RNX2RTKP=/tmp/cd-phase1-tools/RTKLIB/app/rnx2rtkp/gcc/rnx2rtkp \
+  ORBIS_BUILD=1 mix test --include local_data test/gnss_rtk_rtklib_oracle_test.exs
+```
+
+The committed RTKLIB configs enable solid earth tides
+(`pos1-tidecorr = on`), satellite antenna corrections (`pos1-posopt1 = on`),
+receiver antenna corrections (`pos1-posopt2 = on`), and the trimmed ANTEX file
+for both `file-satantfile` and `file-rcvantfile`. `pos1-navsys = 1` is
+intentional because the public BKG IGS final SP3/CLK product for 2026 day 120 is
+GPS-only, even though the observations and BRDC navigation are multi-GNSS.

@@ -62,3 +62,20 @@ the graceful-degeneracy path; not a redistributed product.
   check in `gnss_ephemeris_test.exs`.
 - **sha256 (committed `.SP3`):**
   `54b70fa009a840ecf8cec25fbd4d749c9aaef7c95bdf463484e115f74d802215`
+
+## `IGS0OPSFIN_20261200945_02H30M_15M_ORB.SP3`
+
+- **Source:** BKG IGS final products for GPS week 2416,
+  `https://igs.bkg.bund.de/root_ftp/IGS/products/2416/IGS0OPSFIN_20261200000_01D_15M_ORB.SP3.gz`.
+- **Product:** IGS final GPS precise orbit product for 2026 day-of-year 120,
+  15-minute grid, GPS time. Used by the C+D Phase 1 PASA/SCOA RTKLIB oracle.
+- **Raw sha256** (`.gz`, as fetched):
+  `c06164f34b3e8fbbebe63d0619475c32fce4ce42e40254a9dbc531afb922a802`.
+- **Trim:** decompressed the daily SP3, preserved the header, retained epochs
+  from 09:45:00 through 12:15:00 GPST (11 SP3 epochs), then appended `EOF`.
+  This gives the 10:00-12:00 observation arc one 15-minute interpolation margin
+  at each side.
+- **sha256** (committed `.SP3`, 29319 bytes):
+  `8d3896583b8d2662d3012485c5c92f52a72124ccf199eb24760464411f968d6b`.
+- **Rebuild recipe:**
+  `test/fixtures/rtk/generators/cd_phase1_pasa_scoa_2026_120.py`.

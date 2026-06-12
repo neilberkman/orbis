@@ -152,3 +152,22 @@ parser test and the `Orbis.GNSS.Broadcast` wrapper test.
   BeiDou (C) 1056. `grep -c '^R[0-9][0-9] '` returns 1152.
 - **sha256** (committed `.rnx`, 4292655 bytes):
   `0f5810c95e7fcb4ad740d8138bbce7d0db776b12d611c9d6c70745bcfa524ae3`.
+
+## `BRDC00WRD_R_20261200800_06H_MN.rnx`
+
+- **Source:** BKG IGS BRDC archive,
+  `https://igs.bkg.bund.de/root_ftp/IGS/BRDC/2026/120/BRDC00WRD_R_20261200000_01D_MN.rnx.gz`.
+- **Product:** IGS combined daily mixed broadcast navigation file for 2026
+  day-of-year 120, RINEX 3.05 NAV mixed. Used by the C+D Phase 1 PASA/SCOA
+  RTKLIB oracle as the broadcast companion to the GPS final SP3/CLK products.
+- **Raw sha256** (`.gz`, as fetched):
+  `1325a2735d16dddc07b82b3a1257c59d8d6ebd4a3233d4f7569b9bb44925b7f7`.
+- **Trim:** decompressed the full daily product and retained ephemeris records
+  from 08:00:00 through 14:00:00 GPST, covering the 10:00-12:00 observation arc
+  with a 2 h margin on each side. The header is preserved verbatim.
+- **Committed record counts:** 4799 navigation blocks: GPS 66, GLONASS 204,
+  Galileo 747, BeiDou 246, QZSS 35, NavIC 32, SBAS 3469.
+- **sha256** (committed `.rnx`, 1925363 bytes):
+  `b3671a232a10cbc814372afd15387102e9bac68a62d5d41de966b58d0b024b31`.
+- **Rebuild recipe:**
+  `test/fixtures/rtk/generators/cd_phase1_pasa_scoa_2026_120.py`.

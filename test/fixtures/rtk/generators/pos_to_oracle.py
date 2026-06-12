@@ -16,6 +16,7 @@ import math
 import sys
 from collections import Counter
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 # Physical truth for the co-located WTZR(base)/WTZZ(rover) pair, identical to
 # test/fixtures/rtk/wtzr_wtzz_rtklib_oracle.json ("truth").
@@ -48,9 +49,11 @@ def parse_pos(path):
     epochs = []
     with open(path) as fh:
         for line in fh:
-            if not line.startswith("2020"):
+            if not line or line.startswith("%") or "/" not in line[:12]:
                 continue
             f = line.split()
+            if len(f) < 15:
+                continue
             # date time e n u Q ns sde sdn sdu sden sdnu sdue age ratio
             d, t = f[0], f[1]
             iso = datetime.strptime(d + " " + t, "%Y/%m/%d %H:%M:%S.%f").isoformat()
@@ -69,9 +72,18 @@ def parse_pos(path):
     return epochs
 
 
-def truth_err(ep):
+def static_truth_enu(truth):
+    return truth["antenna_baseline_enu_m"]
+
+
+def truth_err(ep, truth=TRUTH):
+    expected = static_truth_enu(truth)
     b = ep["baseline_enu_m"]
-    return ((b["east"] - TE) ** 2 + (b["north"] - TN) ** 2 + (b["up"] - TU) ** 2) ** 0.5
+    return (
+        (b["east"] - expected["east"]) ** 2
+        + (b["north"] - expected["north"]) ** 2
+        + (b["up"] - expected["up"]) ** 2
+    ) ** 0.5
 
 
 def lla_to_ecef(lat_deg, lon_deg, height_m):
@@ -228,6 +240,23 @@ def parse_xyz_arg(value):
     return tuple(parts)
 
 
+def static_inputs(args):
+    inputs = {}
+
+    for key, value in [
+        ("rover_obs", args.rover_source),
+        ("base_obs", args.base_source),
+        ("nav", args.nav_source),
+        ("sp3", args.sp3_source),
+        ("clk", args.clk_source),
+        ("antex", args.antex_source),
+    ]:
+        if value:
+            inputs[key] = value
+
+    return inputs or None
+
+
 def moving_oracle(args):
     truth = parse_gsdc_truth_csv(args.moving_truth_csv)
     truth_by_ms = indexed_truth(truth)
@@ -368,33 +397,55 @@ def moving_oracle(args):
 
 def static_oracle(args):
     pos, conf, label, desc, out = args.pos, args.conf, args.label, args.description, args.out
+    truth = json.loads(Path(args.static_truth_json).read_text()) if args.static_truth_json else TRUTH
     epochs = parse_pos(pos)
+    if not epochs:
+        raise SystemExit("no RTKLIB epochs parsed from static .pos")
+
     fixed = [i for i, e in enumerate(epochs) if e["q"] == 1]
+    q_counts = Counter(e["q"] for e in epochs)
     first_fix = fixed[0] if fixed else None
     last = epochs[-1]
+    errors = [truth_err(e, truth) for e in epochs]
     ref = {
         "label": label,
         "config": conf,
         "source_pos": pos.split("/")[-1],
         "epochs": len(epochs),
         "fixed_epochs": len(fixed),
+        "fix_rate": round(len(fixed) / len(epochs), 12),
         "first_fixed_index": first_fix,
         "first_fixed_time": epochs[first_fix]["time"] if first_fix is not None else None,
         "final_status": last["fix_status"],
         "final_ratio": last["ratio"],
         "final_baseline_enu_m": last["baseline_enu_m"],
-        "final_truth_error_m": round(truth_err(last), 12),
-        "mean_truth_error_m": round(sum(truth_err(e) for e in epochs) / len(epochs), 12),
-        "max_truth_error_m": round(max(truth_err(e) for e in epochs), 12),
+        "final_truth_error_m": round(truth_err(last, truth), 12),
+        "mean_truth_error_m": round(sum(errors) / len(errors), 12),
+        "max_truth_error_m": round(max(errors), 12),
+        "q_counts": {str(q): q_counts[q] for q in sorted(q_counts)},
+        "satellites_min": min(e["satellites"] for e in epochs),
+        "satellites_max": max(e["satellites"] for e in epochs),
     }
     doc = {
         "version": "1",
         "description": desc,
-        "generator": {"rtklib": RTKLIB, "config": conf},
-        "truth": TRUTH,
+        "generator": {
+            "rtklib": {
+                "program": "rnx2rtkp",
+                "version": args.rtklib_version,
+                "commit": args.rtklib_commit,
+            },
+            "config": conf,
+            "script": "pos_to_oracle.py",
+        },
+        "truth": truth,
         "reference": ref,
         "per_epoch": epochs,
     }
+    inputs = static_inputs(args)
+    if inputs:
+        doc["inputs"] = inputs
+
     with open(out, "w") as fh:
         json.dump(doc, fh, indent=1)
         fh.write("\n")
@@ -417,9 +468,13 @@ def parse_args(argv):
     parser.add_argument("--rover-source")
     parser.add_argument("--base-source")
     parser.add_argument("--nav-source")
+    parser.add_argument("--sp3-source")
+    parser.add_argument("--clk-source")
+    parser.add_argument("--antex-source")
     parser.add_argument("--base-station")
     parser.add_argument("--base-ecef-m", type=parse_xyz_arg)
     parser.add_argument("--base-distance-km", type=float)
+    parser.add_argument("--static-truth-json")
     parser.add_argument("--gps-utc-offset-s", type=int, default=18)
     parser.add_argument("--truth-time-tolerance-ms", type=int, default=0)
     parser.add_argument("--rtklib-version", default=RTKLIB["version"])
