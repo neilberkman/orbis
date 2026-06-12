@@ -48,6 +48,104 @@ fixes at `2020-06-25T00:00:00`, ends with 1.834629036 mm truth error, and has
 the generation showed GPS 5-6, GLONASS 5-6, Galileo 3-5, and BeiDou 0 used
 satellites per epoch for this RTKLIB 2.4.2 L1 arc.
 
+## GSDC Track A moving-rover oracle
+
+`gsdc_2021_08_24_svl1_pixel5_p222_demo5_rtklib_oracle.json` records RTKLIB
+Explorer demo5 output for the GSDC 2022 moving-phone drive
+`train/2021-08-24-US-SVL-1/GooglePixel5`.
+
+- **Reference implementation:** `rnx2rtkp RTKLIB EX 2.5.0`, RTKLIB Explorer
+  commit `57d39e7`, built locally at
+  `/tmp/RTKLIB-demo5/app/consapp/rnx2rtkp/gcc/rnx2rtkp` with `LDLIBS="-lm"`.
+- **Drive:** Sunnyvale suburban GSDC training drive
+  `train/2021-08-24-US-SVL-1/GooglePixel5`. The drive was confirmed in the
+  Kaggle zip and extracted selectively to `/tmp/gsdc-work`.
+- **Rover observation:** `supplemental/gnss_rinex.21o`, RINEX 3.03 mixed GNSS,
+  1 Hz phone observations, GPST `2021-08-24T20:33:00.437` to
+  `2021-08-24T21:25:16.437`.
+- **Truth:** `ground_truth.csv`, UTC `2021-08-24T20:32:42.437` to
+  `2021-08-24T21:24:58.437`; converted to WGS84 ECEF per epoch by
+  `pos_to_oracle.py` and aligned to RTKLIB GPST with GPS-UTC offset 18 s.
+- **Base station:** NOAA CORS `P222`, 18.936 km from the drive start, selected as
+  the nearest operational NOAA station with GPS+Galileo+GLONASS data for this
+  day. `SLAC` (14.706 km) and `P176` (29.505 km) were also tested; neither
+  improved the solve. The P222 ARP ECEF from the RINEX header is
+  `-2689639.5060, -4290438.6360, 3865050.9560` m.
+- **Base observation:** NOAA CORS
+  `https://geodesy.noaa.gov/corsdata/rinex/2021/236/p222/p2222360.21d.gz`,
+  decoded locally to `/tmp/gsdc-work/cors/p2222360.21o` with Python package
+  `hatanaka`. The decoded file is recipe-only and is not vendored.
+- **Navigation:** BKG IGS combined broadcast navigation
+  `https://igs.bkg.bund.de/root_ftp/IGS/BRDC/2021/236/BRDC00WRD_R_20212360000_01D_MN.rnx.gz`.
+  NOAA `brdc2360.21n.gz` and `brdc2360.21g.gz` were downloaded as requested, but
+  the final solve uses BKG BRDC so the phone's Galileo and BeiDou observations
+  are usable. The NOAA GPS/GLONASS-only runs fixed 0-1 epochs and were kept out
+  of the committed oracle.
+
+Checksums:
+
+- `smartphone-decimeter-2022.zip`:
+  `eee3bc1c5d7414e97dca5929e0960b6be2f93d0702dac53fe2602b55ae4e4ca3`
+- extracted GSDC rover `gnss_rinex.21o`:
+  `fec1eb4944514d21f64772e702e458e9f74f3f32e3820b675a27cad4e0606317`
+- extracted GSDC `ground_truth.csv`:
+  `10edb68f18ca407b69e2c6bd31f4c9c8cb9aa9b8b4f000abf220cc1f065537be`
+- NOAA `p2222360.21d.gz`:
+  `ce9c8ff42c6de996db795df69492bf1a867e85993cfdd43608bc4d8c4369339e`
+- BKG `BRDC00WRD_R_20212360000_01D_MN.rnx.gz`:
+  `c7779f6a1b506c3c8fa392df808655721e840633af43c04becb2f5c17139729b`
+- decompressed BKG `BRDC00WRD_R_20212360000_01D_MN.rnx`:
+  `fc1738aa87ca2ba01a7ee1485e1302b83b5ca367de70798564fa2a93bac28087`
+- committed oracle JSON:
+  `c0112f7cfb3b557dcd17341b00af2939d18e59d8aeb2430670ec8e9cc61a726e`
+- committed config:
+  `86759e7723d8ce2d42ddc36f02c65bf19d964f98f71ef14e0e25ad21bda8e53f`
+
+Config decisions:
+
+- `pos1-posmode = kinematic`, `pos1-soltype = combined`, `pos1-frequency = l1`,
+  `pos1-navsys = 45` (GPS+GLONASS+Galileo+BeiDou), `misc-timeinterp = on` for
+  the 30 s CORS base against the 1 Hz phone rover.
+- `ant1-postype = single` because the phone RINEX approximate position is all
+  zeros; `ant2-postype = rinexhead` uses the P222 header ARP.
+- GLONASS ambiguity resolution remains off (`pos2-gloarmode = off`), matching
+  the existing Track B policy for FDMA biases.
+- The Pixel5 phone carrier ratios stayed low with stricter AR settings. Runs
+  with GPS+GLONASS NOAA nav fixed 0-1 epochs; G/R/E/C forward processing with
+  `arthres = 3` fixed 5/3134 epochs; combined processing with `arthres = 3`
+  fixed 10/3136 epochs. A prior artifact with `pos2-arthres* = 1.0` was
+  rejected because it effectively disabled the ratio validation and relabeled
+  mostly-float epochs as fixed: it reported 731/3135 fixed epochs, but fixed
+  median 3D error was still 2.87 m versus 4.03 m for float, and even epochs with
+  ratio >= 3.0 had 3.34 m median 3D error. The committed config uses the RTKLIB
+  default `pos2-arthres* = 3.0` ratio gate. This is a low-cost phone oracle, not
+  a cm-grade reference.
+
+Result summary for the committed oracle:
+
+- epochs: 3136; fixed: 10; float: 3104; DGPS: 22.
+- 3D error vs ground truth: mean 4.405659 m, median 3.976957 m, p95 8.775371 m,
+  max 30.989117 m.
+- Horizontal error: mean 3.140371 m, median 3.068943 m, p95 6.034325 m.
+- Vertical absolute error: mean 2.559860 m, median 1.644042 m, p95 5.923577 m.
+
+Status split against GSDC ground truth:
+
+| Status | Epochs | 3D median | 3D p95 | Horizontal median | Horizontal p95 | Vertical abs median | Vertical abs p95 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| fixed | 10 | 3.476352 m | 4.562249 m | 2.267743 m | 3.701910 m | 1.863578 m | 4.521757 m |
+| float | 3104 | 3.964981 m | 8.579962 m | 3.047136 m | 5.814906 m | 1.632267 m | 5.907016 m |
+| DGPS | 22 | 8.466893 m | 14.738928 m | 6.175948 m | 14.700658 m | 5.333959 m | 10.303365 m |
+
+The validated fixed epochs are slightly better than float in 3D on this arc,
+but they remain meter-class. The fixture's value is the honest phone trajectory
+accuracy reference, not its fix rate.
+
+Redistribution note: the GSDC Kaggle competition data is not redistributable.
+Only the derived oracle JSON, config, generator update, and this provenance are
+vendored. Raw GSDC files, decoded CORS files, and full navigation products remain
+recipe-only under `/tmp/gsdc-work`.
+
 Important: passing an SP3 file to `rnx2rtkp` does not by itself select precise
 ephemeris; RTKLIB defaults to broadcast (`pos1-sateph = brdc`). The similarly
 named `_planning/rtklib_wettzell/modes/l1_sp3.pos` and `l12_sp3.pos` outputs are

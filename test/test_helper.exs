@@ -4,7 +4,8 @@
 #   Generated reference-fixture (golden) tests are bucket (b): they load a
 #     committed parity/generator *_golden.json and run by default (hermetic, fast).
 #   Known-truth round-trip tests are bucket (c): self-synthesized truth, no tag.
-ExUnit.start(exclude: [:skyfield_parity, :spk_file, :celestrak, :network])
+#   :local_data == large/licensed local corpora and toolchains, excluded by default.
+ExUnit.start(exclude: [:skyfield_parity, :spk_file, :celestrak, :network, :local_data])
 
 defmodule Orbis.TestHelpers do
   @moduledoc false
