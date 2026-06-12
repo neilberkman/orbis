@@ -16,5 +16,5 @@ chrono = "0.4"
 # Tracks the astrodynamics bit-exact kernel lane until the next coordinated
 # crate release. The lane code requires reported_baseline_m + epoch_count,
 # which are NOT in published 0.10.0.
-astrodynamics = { git = "https://github.com/neilberkman/astrodynamics", rev = "2fd27ed" }
-astrodynamics-gnss = { git = "https://github.com/neilberkman/astrodynamics", rev = "2fd27ed" }
+astrodynamics = { git = "https://github.com/neilberkman/astrodynamics", rev = "3bf0186" }
+astrodynamics-gnss = { git = "https://github.com/neilberkman/astrodynamics", rev = "3bf0186" }
