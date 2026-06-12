@@ -110,3 +110,72 @@ House verdict per rover-campaign rule: `filter_behavior`
 (reference remains selected and present before failure; no segmentation-id
 missing-reference event). This is a filter-domain geometry/singularity drop,
 not a harness artifact.
+
+## Gap diagnosis addendum Q3: epoch-124 singular mechanism
+
+Stage isolation:
+- The shipped Rust continuous run still fails at index `124`
+  (`2026-04-30T11:02:00`) with `{:singular_geometry, [epoch_index: 124]}`.
+- A parity replay through the Elixir filter path, instrumented only for epochs
+  `120..124`, isolates the hard error to the epoch-update measurement solve:
+  `measurement_solve`, normal update context, iteration `2`, index `124`.
+- The posterior covariance inversion for ambiguity search succeeds at indexes
+  `120..123` and is not reached at `124`.
+- Integer search is not the failing stage at the boundary. All observed DD
+  ambiguities are already held in the traced window, so no search candidates are
+  present.
+- The conditioned fixed re-solve is not the failing stage. No new fix is accepted
+  in the traced window, and the reporting-only conditioned solve is bypassed at
+  the boundary.
+
+The "epoch 123 newly fixed, then first held at 124" hypothesis is false for the
+full continuous replay. With the full-run reference (`G27`) forced for prefix
+checks, the first fix is index `18`; by index `119` the held DD set is already
+`G02,G07,G08,G10,G16,G18,G23,G26`, and index `123` has `newly=[]`. The satellite
+set is unchanged from indexes `120..124`:
+`G02,G07,G08,G10,G16,G18,G23,G26,G27`.
+
+The failing matrix is the `13 x 13` information matrix for the second
+Gauss-Newton measurement update at index `124`: baseline `x/y/z` plus ten
+single-difference ambiguity columns. The collapse is not in the baseline block.
+The baseline pivots at the failing solve are `1.5845516506366227e6`,
+`3.7917865018943720e6`, and `9.4304679077286500e5`. The ambiguity block is
+dominated by tight hold information: `hold_sigma_m = 1.0e-4`, so each held DD row
+uses weight `1.0e8`; after 100+ fixed epochs the largest ambiguity pivots are
+about `1.06e10`, while the single-system DD common-mode level is still only
+prior-pinned.
+
+Pivot trace using the same partial-pivot Gaussian guard (`<= 1.0e-12`):
+
+| Matrix | Status | Largest pivot | Stale prior pivot | Final/gauge pivot | 2-norm condition estimate |
+|---|---|---:|---:|---:|---:|
+| index `123`, iter `2` | ok | `sd:G16 = 1.0501596791786512e10` | `sd:G01 = 1.0e-6` | `sd:G27 = 1.71661376953125e-5` | `6.813293e16` |
+| index `124`, iter `1` | ok | `sd:G16 = 1.0601610449926369e10` | `sd:G01 = 1.0e-6` | `sd:G27 = 1.9073486328125e-6` | `6.233218e17` |
+| index `124`, iter `2` | singular | `sd:G16 = 1.0601610449926369e10` | `sd:G01 = 1.0e-6` | `sd:G27 = 0.0` | `1.163714e17` |
+
+The final pivot label is `sd:G27` because `G27` is the full-arc reference
+single-difference ambiguity. This is the single-system DD gauge/common-mode
+direction after the held relative ambiguities have been eliminated; it is not a
+G27-specific measurement support loss. The last successful pivots before the
+zero are held ambiguity columns: `sd:G16`, split `sd:G18`, `sd:G23`, `sd:G26`.
+At index `124`, iteration `2`, subtractive elimination cancels the remaining
+reference/gauge pivot exactly to `0.0`, crossing the solver's `1.0e-12`
+singular guard.
+
+Control probes:
+- `float_only_systems: ["G"]` (same data, no AR/holds) solves all `240` epochs
+  with `0` fixed epochs.
+- Loosening only the hold weight to `hold_sigma_m = 1.0e-3` solves all `240`
+  epochs while still fixing `222` epochs. At index `124`, iteration `2`, the
+  same final pivot remains `sd:G27 = 9.08970832824707e-6`, the largest ambiguity
+  pivot is `1.0760733940076958e8`, and the condition estimate drops to
+  `8.708934e14`.
+- `hold_sigma_m = 1.0e-2` and `1.0e-1` also solve the full arc.
+
+Mechanism verdict: independent conditioning issue needing its own capability,
+not a consequence of wrong held integer values. Wrong-fix poisoning explains the
+large fixed-position error, but the singular matrix depends on the held set and
+hold weight, not on the held integer RHS values. Phase 3 should reduce wrong
+fixes, but correct tight holds can still drive this single-system DD gauge
+cancellation unless the filter gains an explicit gauge constraint, scaling, or a
+more numerically stable solve/update form.

@@ -6,6 +6,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `Orbis.GNSS.RTK.solve_filter_baseline_epochs/3` accepts an opt-in
+  `dynamics_model: :velocity_propagated` prediction branch plus optional epoch
+  `:velocity_mps` ECEF velocity input. The default `:constant_position` branch
+  preserves the current carried-state behavior, and the filter still receives
+  caller-derived velocity rather than raw Doppler observations. The D1 campaign
+  report records a 7.345 m pooled median at sigma 0.500 m, improving the
+  9.533 m memoryless bar by about 23% while still missing the 4.007 m RTKLIB
+  demo5 bar.
+- The Rust RTK filter kernel exposes optional `:innovation_screen_sigma` and
+  `:innovation_screen_min_rows` controls, returning per-epoch screen diagnostics
+  and `:coasted` status when too few predicted-residual rows survive.
+
 ### Changed
 
 - GNSS data downloads no longer use the deprecated Erlang `:ftp` transport,
@@ -29,6 +43,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `{:grg, :sp3}`, `{:grg, :clk}`, `{:wum, :sp3}`, `{:wum, :clk}`,
   `{:grg_ult, :sp3}`, `{:grg_ult, :clk}`, and `{:igs, :ionex}` now return
   `{:error, {:no_open_mirror, {center, content}}}`.
+
+## [0.20.0] - 2026-06-13
+
+### Added
+
+- `dynamics_model: :velocity_propagated` — the filter's prediction mean
+  advances by a caller-supplied per-epoch ECEF velocity (`:velocity_mps` on
+  epochs); default remains constant-position. Bit-equality gated across both
+  kernels.
+- Optional per-epoch innovation screen (`:innovation_screen_sigma`,
+  `:innovation_screen_min_rows`): rows with excessive normalized predicted
+  residuals are excluded from the measurement update; epochs coast below the
+  survivor floor. Implemented in both kernels with firing bit-equality gates
+  and per-epoch screen metadata.
+- `Orbis.GNSS.Antex`: ANTEX 1.4 receiver-antenna parser (PCO/PCV with zenith
+  and azimuth interpolation), gated against vendored reference values.
+  Measurement-model application lands in a later release.
+
+### Notes
+
+- The default ambiguity-hold sigma is unchanged (1.0e-4): a softer default
+  (1.0e-3) cures a documented long-arc conditioning failure but measurably
+  degrades clean kinematic accuracy (the sigma-sweep gate caught it), so the
+  softer value remains an explicit per-arc option pending a proper
+  constraint-conditioning capability. See the C+D measurement report.
 
 ## [0.19.0] - 2026-06-12
 
