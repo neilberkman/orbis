@@ -6,6 +6,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-06-13
+
+### Fixed
+
+- `Orbis.GNSS.Positioning.solve/4` no longer returns a fix that did not converge
+  to a physical receiver position. A fix whose geocentric radius is outside the
+  plausible band (for example a degenerate first step from the earth-center
+  default seed, previously returned as a ~6.4e6 m "converged" position, or a
+  wrong-root least-squares fix whose residuals are forced to zero by an exactly
+  determined geometry) is refused with `{:error, {:implausible_position, radius_m}}`,
+  and a converged-flagged fix with physically implausible post-fit residual RMS
+  with `{:error, {:no_convergence, rms_m}}`. A rank-deficient geometry (no DOP
+  cofactor inverse, which is also what lets a wrong-root mirror land on the
+  plausible shell) is refused with `{:error, {:degenerate_geometry, :rank_deficient}}`.
+  These are behavior changes: inputs that previously returned a bogus
+  `{:ok, solution}` now return a tagged error.
+
+### Added
+
+- `solve/4` solution metadata now carries the geometry redundancy:
+  `used_count`, distinct `systems`, `redundancy` (degrees of freedom,
+  `used_count - (3 + systems)`), and `raim_checkable?`. An exactly determined
+  fix (`redundancy < 1`) is now visibly unverifiable rather than appearing
+  perfect at zero residual.
+- `solve/4` accepts an optional `:max_pdop` ceiling: a rank-deficient or
+  high-PDOP geometry is refused with `{:error, {:degenerate_geometry, pdop}}`,
+  and a non-positive ceiling is `{:error, {:invalid_option, :max_pdop}}`.
+- A real-arc Doppler-velocity regression gate for `Orbis.GNSS.Velocity` on a
+  cheap single-frequency phone arc (GSDC Pixel-5), checking receiver velocity
+  against a finite-differenced truth track.
+
 ## [0.23.0] - 2026-06-13
 
 ### Added

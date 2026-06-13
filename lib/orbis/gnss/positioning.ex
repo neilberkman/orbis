@@ -72,8 +72,12 @@ defmodule Orbis.GNSS.Positioning do
     pseudorange residuals in meters, in `used_sats` order. `used_sats` are the
     contributing satellite id strings (e.g. `"G01"`); `rejected_sats` pairs each
     excluded satellite id with its reason atom (`:no_ephemeris` or
-    `:low_elevation`). `metadata` reports solver iterations, convergence, and
-    which corrections were applied.
+    `:low_elevation`). `metadata` reports solver iterations, convergence, the
+    corrections applied, and the geometry redundancy: `used_count`, the distinct
+    `systems`, the `redundancy` (degrees of freedom, `used_count - (3 + systems)`),
+    and `raim_checkable?` (`redundancy >= 1`). An exactly determined fix has
+    `redundancy < 1`, forcing the residuals near zero and leaving the fix
+    unverifiable by RAIM.
     """
     @enforce_keys [
       :position,
@@ -112,7 +116,11 @@ defmodule Orbis.GNSS.Positioning do
             converged: boolean(),
             status: atom(),
             ionosphere_applied: boolean(),
-            troposphere_applied: boolean()
+            troposphere_applied: boolean(),
+            used_count: non_neg_integer(),
+            systems: [String.t()],
+            redundancy: integer(),
+            raim_checkable?: boolean()
           }
 
     @type t :: %__MODULE__{
@@ -135,6 +143,21 @@ defmodule Orbis.GNSS.Positioning do
   @type epoch :: NaiveDateTime.t() | tuple()
 
   @default_initial_guess {0.0, 0.0, 0.0, 0.0}
+  # A genuinely converged single-point fix has post-fit residuals at the
+  # measurement-noise scale (metres to tens of metres). A converged-flagged
+  # solution whose post-fit residual RMS exceeds this sanity bound did not
+  # actually converge (for example a degenerate first step from the earth-centre
+  # default seed that trips the step-tolerance test without moving), so it is
+  # refused rather than returned as a plausible position.
+  @max_converged_residual_rms_m 1.0e4
+  # Position plausibility band, as geocentric radius. A real receiver fix sits
+  # between roughly the polar surface (minus a margin for deep points) and a
+  # generous low-Earth-orbit ceiling. A fix outside this band did not converge to
+  # a physical receiver position (the earth-center default seed lands near radius
+  # zero; a wrong-root least-squares fix lands far out), and is caught even when
+  # the residuals are forced to zero by an exactly determined geometry.
+  @min_plausible_radius_m 6_344_752.0
+  @max_plausible_radius_m 8_378_137.0
   @default_alpha {0.0, 0.0, 0.0, 0.0}
   @default_beta {0.0, 0.0, 0.0, 0.0}
   # Standard-atmosphere surface meteorology, used when the troposphere term is
@@ -166,6 +189,17 @@ defmodule Orbis.GNSS.Positioning do
     * `:relative_humidity` - relative humidity fraction `[0, 1]` (default `0.5`)
     * `:initial_guess` - `{x_m, y_m, z_m, b_m}` start point (default all zeros)
     * `:with_geodetic` - also return the geodetic position (default `true`)
+    * `:max_pdop` - optional positive PDOP ceiling. When set, a fix whose
+      geometry is rank-deficient or whose PDOP exceeds the ceiling is refused
+      with `{:error, {:degenerate_geometry, pdop}}` (a non-positive value is
+      `{:error, {:invalid_option, :max_pdop}}`); default unset.
+
+  Regardless of options, a fix that did not converge to a physical receiver
+  position is refused rather than returned: one whose geocentric radius is
+  outside the plausible band (for example from the earth-center default seed, or
+  a wrong-root least-squares fix) gives `{:error, {:implausible_position, radius_m}}`,
+  and a converged-flagged fix whose post-fit residual RMS is physically
+  implausible gives `{:error, {:no_convergence, rms_m}}`.
 
   A mixed GPS+Galileo+BeiDou+GLONASS observation set is solved together with one
   receiver clock per GNSS (an inter-system bias is the difference between a
@@ -175,8 +209,14 @@ defmodule Orbis.GNSS.Positioning do
   Returns `{:ok, %Orbis.GNSS.Positioning.Solution{}}` or `{:error, reason}`,
   where `reason` is one of `{:too_few_satellites, used, required}` (`required` is
   `3 + n_systems`), `:singular_geometry`, `{:duplicate_observation, sat}`,
-  `{:ephemeris_lost, sat}`, or `{:ionosphere_unsupported, sat}` (the ionosphere
-  correction was requested for a system with no modeled single-frequency carrier).
+  `{:ephemeris_lost, sat}`, `{:ionosphere_unsupported, sat}` (the ionosphere
+  correction was requested for a system with no modeled single-frequency
+  carrier), `{:degenerate_geometry, reason}` (the geometry is rank-deficient, so
+  `reason` is `:rank_deficient`, or exceeds the optional `:max_pdop` ceiling, so
+  `reason` is the PDOP), `{:implausible_position, radius_m}` (the fix is outside
+  the plausible geocentric-radius band), `{:no_convergence, rms_m}` (a
+  converged-flagged fix with physically implausible post-fit residual RMS), or
+  `{:invalid_option, :max_pdop}`.
   """
   @spec solve(SP3.t() | Broadcast.t(), [observation()], epoch(), keyword()) ::
           {:ok, Solution.t()} | {:error, term()}
@@ -191,7 +231,8 @@ defmodule Orbis.GNSS.Positioning do
   end
 
   defp run_solve(source, handle, observations, epoch, opts) do
-    with {:ok, t_rx_j2000_s} <- j2000_seconds(epoch) do
+    with :ok <- validate_max_pdop(Keyword.get(opts, :max_pdop)),
+         {:ok, t_rx_j2000_s} <- j2000_seconds(epoch) do
       sod = Time.second_of_day(epoch)
       doy = Time.day_of_year(epoch)
 
@@ -230,10 +271,105 @@ defmodule Orbis.GNSS.Positioning do
           :broadcast -> apply(NIF, :spp_solve_broadcast, args)
         end
 
-      decode(result)
+      result |> decode() |> post_process(opts)
     end
   rescue
     e in ErlangError -> {:error, e.original}
+  end
+
+  defp validate_max_pdop(nil), do: :ok
+  defp validate_max_pdop(value) when is_number(value) and value > 0.0, do: :ok
+  defp validate_max_pdop(_value), do: {:error, {:invalid_option, :max_pdop}}
+
+  # Enrich every solution with redundancy metadata, then apply the convergence
+  # sanity gate and the optional `:max_pdop` geometry gate. A solution that fails
+  # either gate is returned as a tagged error rather than a plausible-looking fix.
+  defp post_process({:error, _reason} = error, _opts), do: error
+
+  defp post_process({:ok, solution}, opts) do
+    solution = %{
+      solution
+      | metadata: Map.merge(solution.metadata, redundancy_meta(solution.used_sats))
+    }
+
+    # Rank-deficient geometry first (no trustworthy fix exists, and it is what
+    # lets a wrong-root mirror land on the plausible shell with zero residuals),
+    # then the optional :max_pdop ceiling, then position plausibility (earth-center
+    # seed and far-out wrong roots), then the residual-RMS convergence sanity gate.
+    with :ok <- check_rank(solution),
+         :ok <- check_max_pdop(solution, Keyword.get(opts, :max_pdop)),
+         :ok <- check_plausible_position(solution),
+         :ok <- check_converged(solution) do
+      {:ok, solution}
+    end
+  end
+
+  # Degrees of freedom for the least-squares fix: one position triple plus one
+  # receiver clock per distinct constellation. With `redundancy < 1` the geometry
+  # is exactly determined (or under-determined), so the residuals are forced near
+  # zero and RAIM cannot test the fix; `raim_checkable?` surfaces that.
+  defp redundancy_meta(used_sats) do
+    systems = used_sats |> Enum.map(&String.first/1) |> Enum.uniq() |> Enum.sort()
+    used_count = length(used_sats)
+    redundancy = used_count - (3 + length(systems))
+
+    %{
+      used_count: used_count,
+      systems: systems,
+      redundancy: redundancy,
+      raim_checkable?: redundancy >= 1
+    }
+  end
+
+  defp check_plausible_position(%Solution{position: %{x_m: x, y_m: y, z_m: z}}) do
+    radius = :math.sqrt(x * x + y * y + z * z)
+
+    if radius >= @min_plausible_radius_m and radius <= @max_plausible_radius_m do
+      :ok
+    else
+      {:error, {:implausible_position, radius}}
+    end
+  end
+
+  # The residual-RMS sanity gate only judges fixes the kernel flagged converged;
+  # a fix reported as not converged is passed through unchanged so the caller can
+  # inspect `metadata.converged` itself, exactly as before this gate existed.
+  defp check_converged(%Solution{metadata: %{converged: true}, residuals_m: residuals}) do
+    rms = residual_rms(residuals)
+
+    if rms > @max_converged_residual_rms_m do
+      {:error, {:no_convergence, rms}}
+    else
+      :ok
+    end
+  end
+
+  defp check_converged(%Solution{}), do: :ok
+
+  # A rank-deficient geometry (the crate could not form the DOP cofactor inverse)
+  # has no unique trustworthy fix; refuse it by default, regardless of :max_pdop.
+  defp check_rank(%Solution{dop: nil}), do: {:error, {:degenerate_geometry, :rank_deficient}}
+  defp check_rank(%Solution{}), do: :ok
+
+  defp check_max_pdop(_solution, nil), do: :ok
+
+  defp check_max_pdop(%Solution{dop: %{pdop: pdop}}, max_pdop) when pdop > max_pdop,
+    do: {:error, {:degenerate_geometry, pdop}}
+
+  defp check_max_pdop(_solution, _max_pdop), do: :ok
+
+  defp residual_rms([]), do: 0.0
+
+  defp residual_rms(residuals) do
+    # `residuals_m` is a list of post-fit residual floats (Solution typespec).
+    # Do not swallow unexpected shapes: a non-number would crash here rather than
+    # be coerced to 0.0 and silently lower the RMS past the sanity gate.
+    {sum_sq, count} =
+      Enum.reduce(residuals, {0.0, 0}, fn r, {acc, n} when is_number(r) ->
+        {acc + r * r, n + 1}
+      end)
+
+    if count == 0, do: 0.0, else: :math.sqrt(sum_sq / count)
   end
 
   # --- decoding ------------------------------------------------------------

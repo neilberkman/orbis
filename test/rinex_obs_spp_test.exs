@@ -184,4 +184,63 @@ defmodule Orbis.GNSS.RINEX.ObservationsSppTest do
       assert_in_delta l2.value_m, l2.value_cycles * l2.wavelength_m, 1.0e-8
     end
   end
+
+  describe "solve/4 default-path integrity" do
+    setup do
+      obs = Observations.load!(@obs_path)
+      eph = Broadcast.load!(@nav_path)
+      [%{index: index, epoch: epoch} | _] = Observations.epochs(obs)
+      {:ok, prs} = Observations.pseudoranges(obs, index, codes: %{"G" => ["C1C"]})
+      {:ok, eph: eph, prs: prs, epoch: epoch}
+    end
+
+    test "refuses an implausible converged fix instead of returning garbage", ctx do
+      # From the earth-center default seed with iono/troposphere on, the kernel
+      # step-tolerance test can fire at iteration 0 and flag a ~6.36e6 m fix as
+      # converged. It must be refused: the position-plausibility gate catches it
+      # (the fix is near radius zero), or failing that the residual-RMS gate does.
+      assert {:error, reason} =
+               Positioning.solve(ctx.eph, ctx.prs, ctx.epoch,
+                 ionosphere: true,
+                 troposphere: true,
+                 klobuchar_alpha: @gps_alpha,
+                 klobuchar_beta: @gps_beta
+               )
+
+      assert match?({:implausible_position, _}, reason) or match?({:no_convergence, _}, reason)
+    end
+
+    test "surfaces redundancy and RAIM checkability in metadata", ctx do
+      coarse = {3_582_135.0, 532_569.0, 5_232_779.0, 0.0}
+      assert {:ok, sol} = Positioning.solve(ctx.eph, ctx.prs, ctx.epoch, initial_guess: coarse)
+
+      assert sol.metadata.used_count == length(sol.used_sats)
+      assert sol.metadata.systems == ["G"]
+      assert sol.metadata.redundancy == sol.metadata.used_count - 4
+      assert sol.metadata.raim_checkable? == sol.metadata.redundancy >= 1
+    end
+
+    test "max_pdop rejects weak geometry and validates the threshold", ctx do
+      coarse = {3_582_135.0, 532_569.0, 5_232_779.0, 0.0}
+
+      assert {:error, {:degenerate_geometry, pdop}} =
+               Positioning.solve(ctx.eph, ctx.prs, ctx.epoch,
+                 initial_guess: coarse,
+                 max_pdop: 0.1
+               )
+
+      assert pdop > 0.1
+
+      assert {:ok, _sol} =
+               Positioning.solve(ctx.eph, ctx.prs, ctx.epoch,
+                 initial_guess: coarse,
+                 max_pdop: 100.0
+               )
+
+      assert Positioning.solve(ctx.eph, ctx.prs, ctx.epoch,
+               initial_guess: coarse,
+               max_pdop: 0.0
+             ) == {:error, {:invalid_option, :max_pdop}}
+    end
+  end
 end
