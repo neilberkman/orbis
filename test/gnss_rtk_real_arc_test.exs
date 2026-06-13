@@ -768,6 +768,26 @@ defmodule Orbis.GNSS.RTKRealArcTest do
 
     assert position_error(sol.baseline_m, antenna_baseline) < 0.01
 
+    # Amendment 1 fixed-population verdict on the Elixir reference solution
+    # (multignss-seq-spec.md / multignss-seq-measurement-2026-06.md): the
+    # integer-fixed epochs must clear the refusal invariant, fixed n >= 20 AND
+    # fixed-population median 3D error <= 2x the oracle median on this arc
+    # (2 x mean_truth_error_m). Asserted on the Elixir solution only so it stays
+    # independent of the Rust===Elixir parity gate below. The 3D ECEF baseline
+    # magnitude is frame-invariant, so it is compared directly to the ECEF
+    # ARP-difference truth even though the oracle reports ENU.
+    fixed_errors =
+      sol.epochs
+      |> Enum.filter(&(&1.integer_status == :fixed))
+      |> Enum.map(&position_error(&1.baseline_m, antenna_baseline))
+      |> Enum.sort()
+
+    assert length(fixed_errors) >= 20
+
+    amendment1_floor_m = 2.0 * oracle["reference"]["mean_truth_error_m"]
+    fixed_median_m = Enum.at(fixed_errors, div(length(fixed_errors), 2))
+    assert fixed_median_m <= amendment1_floor_m
+
     # Per-epoch satellite usage is gated against the oracle's lower bound only.
     # The new BRDC GREC oracle includes GLONASS and spans 14-17 satellites per
     # epoch, while this gate's mask-10 SP3 harness currently uses 21-23. The
