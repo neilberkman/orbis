@@ -153,25 +153,22 @@ defmodule Orbis.GNSS.PositioningTest do
   describe "solve/4 degenerate geometry" do
     @degenerate_sp3 Path.join(__DIR__, "fixtures/sp3/degenerate_coincident_5sat.sp3")
 
-    test "a rank-deficient geometry returns a solution with no DOP, not a crash" do
+    test "a rank-deficient geometry is refused, not returned as a fix" do
       sp3 = SP3.load!(@degenerate_sp3)
 
       # All five satellites share one ECEF position, so every line of sight is
-      # identical and the geometry is rank-deficient. An identical pseudorange
-      # keeps the rows coincident.
+      # identical and the geometry is rank-deficient (no DOP cofactor inverse).
+      # Such a geometry has no unique trustworthy fix and is also what lets a
+      # wrong-root mirror land on the plausible shell with zero residuals, so it
+      # is refused with a tagged error rather than returned as a plausible fix.
       observations = for prn <- 1..5, do: {"G0#{prn}", 20_181_863.0}
 
       # A receive epoch inside the product's [00:00, 00:15] window.
       epoch = ~N[2020-06-24 00:03:20]
 
-      assert {:ok, %Solution{} = sol} =
-               Positioning.solve(sp3, observations, epoch,
-                 initial_guess: {6_378_137.0, 0.0, 0.0, 0.0}
-               )
-
-      # The solver still returns a position, but a rank-deficient geometry must
-      # not report a dilution of precision.
-      assert sol.dop == nil
+      assert Positioning.solve(sp3, observations, epoch,
+               initial_guess: {6_378_137.0, 0.0, 0.0, 0.0}
+             ) == {:error, {:degenerate_geometry, :rank_deficient}}
     end
   end
 
