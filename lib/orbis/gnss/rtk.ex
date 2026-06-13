@@ -699,6 +699,23 @@ defmodule Orbis.GNSS.RTK do
       baseline mean fixed between epochs. `:velocity_propagated` advances the
       prediction mean by each epoch's optional `:velocity_mps` times elapsed
       seconds; process-noise meaning is unchanged.
+    * `:ar_arming_sigma_m` - optional convergence arming gate. When set, the
+      per-epoch integer search is attempted only after the baseline-block
+      posterior standard deviation (`sqrt` of the trace of the 3x3 position
+      covariance) has converged to at most this value; below it the epoch
+      stays float for the unfixed arcs. This stops premature commitment on
+      poor-early-geometry arcs (for example PASA/SCOA L1, where it converts a
+      confident-wrong fixed population to the oracle class). The gate is
+      OPT-IN by design and defaults to `nil` (always armed). It is deliberately
+      not default-on: the proxy keys on formal covariance convergence, not on
+      truth accuracy, so a wavelength-tied default suppresses dozens of correct
+      early fixes on clean, fast-converging arcs whose baseline is already
+      truth-accurate from epoch 0. Measured on the Wettzell static and
+      kinematic GPS L1 arcs (arming-default-measurement-2026-06.md), a quarter
+      to half L1 wavelength default pushes first-fix from epoch 0 to 42 and
+      drops fixed epochs from 120/120 to 78/120 (static) with no accuracy gain,
+      so a single global default cannot serve both arc classes. Set this
+      explicitly on arcs that need the protection.
     * `:innovation_screen_sigma` - optional predicted-residual screen in the
       Rust kernel. When set, epoch rows with `abs(innovation * weight)` above
       this value are rejected before the measurement update.

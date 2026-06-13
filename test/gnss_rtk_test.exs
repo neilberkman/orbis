@@ -1065,6 +1065,30 @@ defmodule Orbis.GNSS.RTKTest do
 
       assert armed_loose.metadata.first_fixed_index == armed_off.metadata.first_fixed_index
       assert armed_loose.fixed_ambiguities_cycles == armed_off.fixed_ambiguities_cycles
+
+      # Default-flip decision record (arming-default-spec.md /
+      # arming-default-measurement-2026-06.md): a wavelength-tied default was
+      # measured against the clean Wettzell static and kinematic arcs and
+      # regresses them (first-fix 0 -> 42, fixed 120/120 -> 78/120 static), so
+      # the default is NOT flipped and stays opt-in. This arc demonstrates the
+      # hazard the decision turns on: a quarter-L1-wavelength threshold delays
+      # the first fix on this clean, fast-converging arc relative to the unset
+      # default, which is exactly why one global default cannot serve both arc
+      # classes.
+      quarter_l1_wl = @l1_wavelength_m / 4.0
+
+      assert {:ok, armed_quarter_wl} =
+               RTK.solve_filter_baseline_epochs(
+                 @base,
+                 epochs,
+                 opts ++ [ar_arming_sigma_m: quarter_l1_wl]
+               )
+
+      assert is_integer(armed_off.metadata.first_fixed_index)
+
+      assert armed_quarter_wl.metadata.first_fixed_index == nil or
+               armed_quarter_wl.metadata.first_fixed_index >
+                 armed_off.metadata.first_fixed_index
     end
 
     test "AR arming gate rejects bad values and is accepted by both kernels" do
