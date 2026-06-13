@@ -59,6 +59,7 @@ defmodule Orbis.GNSS.RTK do
       zero_vector: 1
     ]
 
+  alias Orbis.GNSS.Antex
   alias Orbis.GNSS.{CarrierPhase, IonosphereFree}
   alias Orbis.GNSS.Core.{Constants, Types}
   alias Orbis.GNSS.Core.IntegerLeastSquares
@@ -96,6 +97,7 @@ defmodule Orbis.GNSS.RTK do
     :on_cycle_slip,
     :elevation_weighting,
     :sagnac,
+    :receiver_antenna_corrections,
     :elevation_mask_deg,
     :code_smoothing,
     :hatch_window_cap,
@@ -535,6 +537,13 @@ defmodule Orbis.GNSS.RTK do
       differences. Default `false`.
     * `:hatch_window_cap` - maximum Hatch smoothing window when
       `:code_smoothing` is enabled (default `#{@default_hatch_window_cap}`).
+    * `:receiver_antenna_corrections` - optional receiver antenna PCO/PCV
+      corrections by station. Expected format:
+      `%{base: corr, rover: corr}` where `corr` is
+      `%{antenna: %Antex.Antenna{}, frequency: "G01"}` or
+      `%{antenna: {antex, "TYPE"}, frequency: "G01"}`. Missing or malformed
+      values return `{:error, {:invalid_option, :receiver_antenna_corrections}}`.
+      Omitted correction leaves behavior unchanged.
     * `:max_iterations`, `:position_tolerance_m`,
       `:ambiguity_tolerance_m`.
 
@@ -546,6 +555,7 @@ defmodule Orbis.GNSS.RTK do
 
   def solve_float_baseline_epochs(base_position, epochs, opts) when is_list(epochs) do
     with :ok <- validate_options(opts, @float_baseline_options),
+         {:ok, receiver_antenna_corrections} <- receiver_antenna_corrections(opts),
          {:ok, base} <- Types.normalize_ecef(base_position, :invalid_base_position),
          {:ok, normalized_epochs, prep_meta} <- prepare_baseline_epochs(base, epochs, opts),
          {:ok, all_sats} <- all_epoch_sats(normalized_epochs),
@@ -567,7 +577,8 @@ defmodule Orbis.GNSS.RTK do
       else
         state = %{
           baseline: initial_baseline,
-          ambiguities: Map.new(ambiguity_ids, &{&1, 0.0})
+          ambiguities: Map.new(ambiguity_ids, &{&1, 0.0}),
+          receiver_antenna_corrections: receiver_antenna_corrections
         }
 
         iterate_baseline(
@@ -582,6 +593,7 @@ defmodule Orbis.GNSS.RTK do
           solve_opts,
           [],
           prep_meta,
+          receiver_antenna_corrections,
           1
         )
       end
@@ -645,14 +657,16 @@ defmodule Orbis.GNSS.RTK do
 
     with :ok <- validate_options(opts, @fixed_baseline_options),
          {:ok, _float_only_systems} <- float_only_systems(opts),
-         {:ok, residual_opts} <- residual_validation_options(opts) do
+         {:ok, residual_opts} <- residual_validation_options(opts),
+         {:ok, receiver_antenna_corrections} <- receiver_antenna_corrections(opts) do
       solve_fixed_baseline_epochs_attempt(
         base_position,
         epochs,
         opts,
         float_opts,
         residual_opts,
-        []
+        [],
+        receiver_antenna_corrections
       )
     end
   end
@@ -708,6 +722,12 @@ defmodule Orbis.GNSS.RTK do
          {:ok, base} <- Types.normalize_ecef(base_position, :invalid_base_position),
          {:ok, filter_opts} <- sequential_filter_options(opts),
          {:ok, filter_kernel} <- filter_kernel(opts),
+         {:ok, receiver_antenna_corrections} <- receiver_antenna_corrections(opts),
+         :ok <-
+           validate_filter_kernel_receiver_corrections(
+             filter_kernel,
+             receiver_antenna_corrections
+           ),
          {:ok, float_only_systems} <- float_only_systems(opts),
          {:ok, normalized_epochs, prep_meta} <- prepare_baseline_epochs(base, epochs, float_opts),
          {:ok, all_sats} <- all_epoch_sats(normalized_epochs),
@@ -747,7 +767,8 @@ defmodule Orbis.GNSS.RTK do
         filter_opts,
         initial_baseline,
         prep_meta,
-        filter_kernel
+        filter_kernel,
+        receiver_antenna_corrections
       )
     end
   end
@@ -758,6 +779,70 @@ defmodule Orbis.GNSS.RTK do
     do: {:error, {:unsupported_option, :partial_ambiguity_resolution}}
 
   defp validate_filter_integer_options(_integer_opts), do: :ok
+
+  defp validate_filter_kernel_receiver_corrections(:elixir, _receiver_antenna_corrections),
+    do: :ok
+
+  defp validate_filter_kernel_receiver_corrections(:rust, _receiver_antenna_corrections), do: :ok
+
+  defp receiver_antenna_corrections(opts) do
+    case Keyword.get(opts, :receiver_antenna_corrections) do
+      nil -> {:ok, nil}
+      candidate -> parse_receiver_antenna_corrections(candidate)
+    end
+  end
+
+  defp parse_receiver_antenna_corrections(%{base: base, rover: rover}) do
+    with {:ok, parsed_base} <- parse_receiver_antenna_correction(base),
+         {:ok, parsed_rover} <- parse_receiver_antenna_correction(rover) do
+      {:ok, %{base: parsed_base, rover: parsed_rover}}
+    else
+      _ -> {:error, {:invalid_option, :receiver_antenna_corrections}}
+    end
+  end
+
+  defp parse_receiver_antenna_corrections(_),
+    do: {:error, {:invalid_option, :receiver_antenna_corrections}}
+
+  defp parse_receiver_antenna_correction(%{antenna: antenna, frequency: frequency})
+       when is_binary(frequency) do
+    with {:ok, resolved_antenna} <- resolve_receiver_antenna(antenna),
+         :ok <- validate_receiver_frequency(resolved_antenna, frequency) do
+      {:ok, %{antenna: resolved_antenna, frequency: frequency}}
+    else
+      _ -> {:error, {:invalid_option, :receiver_antenna_corrections}}
+    end
+  end
+
+  defp parse_receiver_antenna_correction(_),
+    do: {:error, {:invalid_option, :receiver_antenna_corrections}}
+
+  defp resolve_receiver_antenna(%Antex.Antenna{} = antenna), do: {:ok, antenna}
+
+  defp resolve_receiver_antenna({%Antex{antennas: _} = antex, antenna_type})
+       when is_binary(antenna_type) do
+    case Antex.antenna(antex, antenna_type) do
+      nil -> {:error, {:invalid_option, :receiver_antenna_corrections}}
+      antenna -> {:ok, antenna}
+    end
+  end
+
+  defp resolve_receiver_antenna(_), do: {:error, {:invalid_option, :receiver_antenna_corrections}}
+
+  defp validate_receiver_frequency(antenna, frequency) do
+    pco = Antex.pco(antenna, frequency)
+
+    case pco do
+      {north, east, up}
+      when is_number(north) and is_number(east) and is_number(up) ->
+        :ok
+
+      _ ->
+        {:error, {:invalid_option, :receiver_antenna_corrections}}
+    end
+  rescue
+    _ -> {:error, {:invalid_option, :receiver_antenna_corrections}}
+  end
 
   # The satellite system is the constellation letter, the first grapheme of the
   # RINEX satellite id ("G01" -> "G", "R12" -> "R").
@@ -932,7 +1017,8 @@ defmodule Orbis.GNSS.RTK do
          opts,
          float_opts,
          residual_opts,
-         exclusions
+         exclusions,
+         receiver_antenna_corrections
        ) do
     with {:ok, float_sol} <- solve_float_baseline_epochs(base_position, epochs, float_opts) do
       case residual_validation_outlier(float_sol, residual_opts) do
@@ -943,7 +1029,8 @@ defmodule Orbis.GNSS.RTK do
             opts,
             float_opts,
             float_sol,
-            residual_validation_meta(residual_opts, exclusions)
+            residual_validation_meta(residual_opts, exclusions),
+            receiver_antenna_corrections
           )
 
         outlier ->
@@ -956,7 +1043,8 @@ defmodule Orbis.GNSS.RTK do
               opts,
               float_opts,
               residual_opts,
-              [outlier | exclusions]
+              [outlier | exclusions],
+              receiver_antenna_corrections
             )
           else
             {:error, {:residual_validation_failed, outlier, Enum.reverse(exclusions)}}
@@ -971,7 +1059,8 @@ defmodule Orbis.GNSS.RTK do
          opts,
          float_opts,
          float_sol,
-         residual_validation_meta
+         residual_validation_meta,
+         receiver_antenna_corrections
        ) do
     with {:ok, wavelengths} <-
            ambiguity_wavelengths(
@@ -1020,6 +1109,7 @@ defmodule Orbis.GNSS.RTK do
              float_sol,
              fixed_cycles,
              fixed_meta,
+             receiver_antenna_corrections,
              1
            ) do
         {:ok, sol} -> {:ok, attach_residual_validation_metadata(sol, residual_validation_meta)}
@@ -3011,6 +3101,7 @@ defmodule Orbis.GNSS.RTK do
          opts,
          dropped_sats,
          slip_meta,
+         receiver_antenna_corrections,
          iter
        ) do
     with {:ok, rows} <-
@@ -3021,7 +3112,8 @@ defmodule Orbis.GNSS.RTK do
              physical_sats,
              ambiguity_ids,
              state,
-             weights
+             weights,
+             receiver_antenna_corrections
            ),
          {:ok, dx} <-
            solve_baseline_normal_equations(rows, baseline_unknown_count(ambiguity_ids)) do
@@ -3042,6 +3134,7 @@ defmodule Orbis.GNSS.RTK do
             weights,
             dropped_sats,
             slip_meta,
+            receiver_antenna_corrections,
             iter,
             true,
             :state_tolerance
@@ -3059,6 +3152,7 @@ defmodule Orbis.GNSS.RTK do
             weights,
             dropped_sats,
             slip_meta,
+            receiver_antenna_corrections,
             iter,
             false,
             :max_iterations
@@ -3077,13 +3171,23 @@ defmodule Orbis.GNSS.RTK do
             opts,
             dropped_sats,
             slip_meta,
+            receiver_antenna_corrections,
             iter + 1
           )
       end
     end
   end
 
-  defp build_baseline_rows(base, epochs, refs, physical_sats, ambiguity_ids, state, weights) do
+  defp build_baseline_rows(
+         base,
+         epochs,
+         refs,
+         physical_sats,
+         ambiguity_ids,
+         state,
+         weights,
+         receiver_antenna_corrections
+       ) do
     epochs
     |> Enum.reduce_while({:ok, []}, fn epoch, {:ok, acc} ->
       case build_epoch_baseline_rows(
@@ -3093,7 +3197,8 @@ defmodule Orbis.GNSS.RTK do
              physical_sats,
              ambiguity_ids,
              state,
-             weights
+             weights,
+             receiver_antenna_corrections
            ) do
         {:ok, rows} -> {:cont, {:ok, rows ++ acc}}
         {:error, _reason} = err -> {:halt, err}
@@ -3105,8 +3210,18 @@ defmodule Orbis.GNSS.RTK do
     end
   end
 
-  defp build_epoch_baseline_rows(base, epoch, refs, physical_sats, ambiguity_ids, state, weights) do
+  defp build_epoch_baseline_rows(
+         base,
+         epoch,
+         refs,
+         physical_sats,
+         ambiguity_ids,
+         state,
+         weights,
+         receiver_antenna_corrections
+       ) do
     ref_data = epoch_reference_data(epoch, refs)
+    rover = add3(base, state.baseline)
 
     epoch
     |> epoch_available_nonrefs(refs, physical_sats)
@@ -3130,6 +3245,19 @@ defmodule Orbis.GNSS.RTK do
           weights
         )
 
+      dd_receiver_correction =
+        double_difference_receiver_antenna_correction(
+          sat_pos,
+          base,
+          rover,
+          ref_pos,
+          base,
+          rover,
+          receiver_antenna_corrections
+        )
+
+      modeled_geom_dd = geom_dd - dd_receiver_correction
+
       ambiguity_id = obs_dd.ambiguity_id
       ambiguity = Map.fetch!(state.ambiguities, ambiguity_id)
       h_base = design_baseline_row(deriv, nil, ambiguity_ids)
@@ -3145,7 +3273,7 @@ defmodule Orbis.GNSS.RTK do
         ref_sat: ref_dd.satellite_id,
         ambiguity_id: ambiguity_id,
         h: h_base,
-        y: obs_dd.code_m - geom_dd,
+        y: obs_dd.code_m - modeled_geom_dd,
         sd_variance_m2: code_variance.sd_variance_m2,
         ref_sd_variance_m2: code_variance.ref_sd_variance_m2,
         weight: code_variance.weight
@@ -3159,7 +3287,7 @@ defmodule Orbis.GNSS.RTK do
         ref_sat: ref_dd.satellite_id,
         ambiguity_id: ambiguity_id,
         h: h_phase,
-        y: obs_dd.phase_m - (geom_dd + ambiguity),
+        y: obs_dd.phase_m - (modeled_geom_dd + ambiguity),
         sd_variance_m2: phase_variance.sd_variance_m2,
         ref_sd_variance_m2: phase_variance.ref_sd_variance_m2,
         weight: phase_variance.weight
@@ -3181,9 +3309,11 @@ defmodule Orbis.GNSS.RTK do
          sd_ambiguity_ids,
          dd_ambiguity_pairs,
          state,
-         weights
+         weights,
+         receiver_antenna_corrections
        ) do
     ref_data = epoch_reference_data(epoch, refs)
+    rover = add3(base, state.baseline)
 
     epoch
     |> epoch_available_nonrefs(refs, physical_sats)
@@ -3207,6 +3337,19 @@ defmodule Orbis.GNSS.RTK do
           weights
         )
 
+      dd_receiver_correction =
+        double_difference_receiver_antenna_correction(
+          sat_pos,
+          base,
+          rover,
+          ref_pos,
+          base,
+          rover,
+          receiver_antenna_corrections
+        )
+
+      modeled_geom_dd = geom_dd - dd_receiver_correction
+
       %{sat_sd_id: sat_sd_id, ref_sd_id: ref_sd_id} =
         Map.fetch!(dd_ambiguity_pairs, obs_dd.ambiguity_id)
 
@@ -3227,7 +3370,7 @@ defmodule Orbis.GNSS.RTK do
         ref_sat: ref_dd.satellite_id,
         ambiguity_id: obs_dd.ambiguity_id,
         h: h_base,
-        y: obs_dd.code_m - geom_dd,
+        y: obs_dd.code_m - modeled_geom_dd,
         sd_variance_m2: code_variance.sd_variance_m2,
         ref_sd_variance_m2: code_variance.ref_sd_variance_m2,
         weight: code_variance.weight
@@ -3241,7 +3384,7 @@ defmodule Orbis.GNSS.RTK do
         ref_sat: ref_dd.satellite_id,
         ambiguity_id: obs_dd.ambiguity_id,
         h: h_phase,
-        y: obs_dd.phase_m - (geom_dd + ambiguity),
+        y: obs_dd.phase_m - (modeled_geom_dd + ambiguity),
         sd_variance_m2: phase_variance.sd_variance_m2,
         ref_sd_variance_m2: phase_variance.ref_sd_variance_m2,
         weight: phase_variance.weight
@@ -3253,6 +3396,117 @@ defmodule Orbis.GNSS.RTK do
       {:ok, rows} -> {:ok, Enum.reverse(rows)}
       {:error, _reason} = err -> err
     end
+  end
+
+  defp double_difference_receiver_antenna_correction(
+         _sat_pos,
+         _sat_base_pos,
+         _sat_rover_pos,
+         _ref_pos,
+         _ref_base_pos,
+         _ref_rover_pos,
+         nil
+       ), do: 0.0
+
+  defp double_difference_receiver_antenna_correction(
+         sat_pos,
+         sat_base_pos,
+         sat_rover_pos,
+         ref_pos,
+         ref_base_pos,
+         ref_rover_pos,
+         %{base: base_corr, rover: rover_corr}
+       ) do
+    rover_sat_corr = receiver_antenna_correction(sat_pos, sat_rover_pos, rover_corr)
+    base_sat_corr = receiver_antenna_correction(sat_pos, sat_base_pos, base_corr)
+    rover_ref_corr = receiver_antenna_correction(ref_pos, ref_rover_pos, rover_corr)
+    base_ref_corr = receiver_antenna_correction(ref_pos, ref_base_pos, base_corr)
+
+    rover_sat_corr - base_sat_corr - rover_ref_corr + base_ref_corr
+  end
+
+  # ANTEX phase-center offsets move the effective signal path from antenna marker to
+  # true phase center.
+  #
+  # A range from marker to satellite is:
+  #   ρ(r) = |sat - r|
+  # moving the marker position by +δr changes the range by -δr · u, with
+  # u = (sat - r) / |sat - r| (receiver to satellite LOS). To match measured
+  # ranges, the modeled path is corrected by subtracting this projection.
+  defp receiver_antenna_correction(sat_pos, receiver_pos, %{
+         antenna: antenna,
+         frequency: frequency
+       })
+       when is_number(receiver_pos |> elem(0)) do
+    pco = Antex.pco(antenna, frequency)
+    los = unit3(sub3(sat_pos, receiver_pos))
+
+    with {:ok, los} <- los,
+         {:ok, north, east, up} <- local_neu_basis(receiver_pos),
+         {north, east, up} <- {north, east, up} do
+      pco_projection = los_projection(pco, north, east, up, los)
+      {up_deg, az_deg} = los_zenith_azimuth_deg(los, up, north, east)
+
+      # PCV uses zenith and azimuth in the ANTEX convention.
+      pcv =
+        try do
+          Antex.pcv(antenna, frequency, up_deg, az_deg)
+        rescue
+          _ -> 0.0
+        end
+
+      pco_projection + pcv
+    else
+      :zero -> 0.0
+    end
+  end
+
+  defp receiver_antenna_correction(_sat_pos, _receiver_pos, _), do: 0.0
+
+  defp local_neu_basis(receiver_pos) do
+    {:ok, up} = local_up(receiver_pos)
+    east = east_unit_from_up(up)
+    {:ok, north} = north_unit_from_east_and_up(east, up)
+    {:ok, north, east, up}
+  end
+
+  defp east_unit_from_up(up) do
+    z_axis = {0.0, 0.0, 1.0}
+    cross = cross3(z_axis, up)
+
+    if cross == {0.0, 0.0, 0.0} do
+      {1.0, 0.0, 0.0}
+    else
+      case norm(cross) do
+        n when n > 0.0 -> scale3(cross, 1.0 / n)
+        _ -> {1.0, 0.0, 0.0}
+      end
+    end
+  end
+
+  defp north_unit_from_east_and_up(east, up) do
+    case unit3(cross3(east, up)) do
+      :zero -> {:ok, {0.0, 0.0, 1.0}}
+      {:ok, north} -> {:ok, north}
+    end
+  end
+
+  defp los_projection({north_offset, east_offset, up_offset}, north_unit, east_unit, up_unit, los) do
+    pco_ecef = add3(scale3(north_unit, north_offset), scale3(east_unit, east_offset))
+    pco_ecef = add3(pco_ecef, scale3(up_unit, up_offset))
+    dot3(pco_ecef, los)
+  end
+
+  defp los_zenith_azimuth_deg(los, up, north, east) do
+    elevation_sin = dot3(los, up)
+    elevation_sin = max(-1.0, min(1.0, elevation_sin))
+    zenith_deg = :math.acos(elevation_sin) * 180.0 / :math.pi()
+
+    azimuth_rad = :math.atan2(dot3(los, east), dot3(los, north))
+    azimuth_deg = azimuth_rad * 180.0 / :math.pi()
+    azimuth_deg = if azimuth_deg < 0.0, do: azimuth_deg + 360.0, else: azimuth_deg
+
+    {zenith_deg, azimuth_deg}
   end
 
   # Per-epoch reference-satellite data, one entry per system whose reference is
@@ -3455,6 +3709,7 @@ defmodule Orbis.GNSS.RTK do
          weights,
          dropped_sats,
          slip_meta,
+         receiver_antenna_corrections,
          iterations,
          converged?,
          status
@@ -3467,7 +3722,8 @@ defmodule Orbis.GNSS.RTK do
              physical_sats,
              ambiguity_ids,
              state,
-             weights
+             weights,
+             receiver_antenna_corrections
            ),
          {:ok, covariance_m} <-
            baseline_ambiguity_covariance(
@@ -3940,7 +4196,8 @@ defmodule Orbis.GNSS.RTK do
          filter_opts,
          initial_baseline,
          prep_meta,
-         filter_kernel
+         filter_kernel,
+         receiver_antenna_corrections
        ) do
     n = baseline_unknown_count(sd_ambiguity_ids)
 
@@ -3990,6 +4247,7 @@ defmodule Orbis.GNSS.RTK do
                  solve_opts,
                  integer_opts,
                  filter_opts,
+                 receiver_antenna_corrections,
                  acc
                ) do
             {:ok, next} -> {:cont, {:ok, next}}
@@ -4027,6 +4285,7 @@ defmodule Orbis.GNSS.RTK do
           solve_opts,
           integer_opts,
           filter_opts,
+          receiver_antenna_corrections,
           initial
         )
     end
@@ -4138,6 +4397,7 @@ defmodule Orbis.GNSS.RTK do
          solve_opts,
          integer_opts,
          filter_opts,
+         receiver_antenna_corrections,
          acc
        ) do
     {predicted_acc, fallback_acc} = time_update_information(acc, epoch, filter_opts)
@@ -4157,6 +4417,7 @@ defmodule Orbis.GNSS.RTK do
            solve_opts,
            integer_opts,
            filter_opts,
+           receiver_antenna_corrections,
            predicted_acc
          ) do
       {:error, :singular_geometry} = err ->
@@ -4176,6 +4437,7 @@ defmodule Orbis.GNSS.RTK do
             solve_opts,
             integer_opts,
             filter_opts,
+            receiver_antenna_corrections,
             fallback_acc
           )
         else
@@ -4202,6 +4464,7 @@ defmodule Orbis.GNSS.RTK do
          solve_opts,
          integer_opts,
          filter_opts,
+         receiver_antenna_corrections,
          acc
        ) do
     with {:ok, screen_meta, row_mask} <-
@@ -4214,6 +4477,7 @@ defmodule Orbis.GNSS.RTK do
              dd_ambiguity_pairs,
              acc.state,
              weights,
+             receiver_antenna_corrections,
              filter_opts.innovation_screen
            ) do
       if screen_meta && screen_meta.coasted? do
@@ -4226,6 +4490,7 @@ defmodule Orbis.GNSS.RTK do
           dd_ambiguity_pairs,
           float_only_dd_ids,
           weights,
+          receiver_antenna_corrections,
           screen_meta,
           acc
         )
@@ -4245,6 +4510,7 @@ defmodule Orbis.GNSS.RTK do
           solve_opts,
           integer_opts,
           filter_opts,
+          receiver_antenna_corrections,
           screen_meta,
           row_mask,
           acc
@@ -4268,6 +4534,7 @@ defmodule Orbis.GNSS.RTK do
          dd_ambiguity_pairs,
          float_only_dd_ids,
          weights,
+         receiver_antenna_corrections,
          screen_meta,
          acc
        ) do
@@ -4280,7 +4547,8 @@ defmodule Orbis.GNSS.RTK do
              sd_ambiguity_ids,
              dd_ambiguity_pairs,
              acc.state,
-             weights
+             weights,
+             receiver_antenna_corrections
            ),
          {:ok, residuals} <- baseline_residuals(residual_rows) do
       all_fixed = acc.fixed_cycles |> Map.keys() |> Enum.sort()
@@ -4320,6 +4588,7 @@ defmodule Orbis.GNSS.RTK do
          solve_opts,
          integer_opts,
          filter_opts,
+         receiver_antenna_corrections,
          screen_meta,
          row_mask,
          acc
@@ -4339,6 +4608,7 @@ defmodule Orbis.GNSS.RTK do
              weights,
              solve_opts,
              filter_opts,
+             receiver_antenna_corrections,
              row_mask,
              1
            ),
@@ -4374,6 +4644,7 @@ defmodule Orbis.GNSS.RTK do
              weights,
              solve_opts,
              filter_opts,
+             receiver_antenna_corrections,
              row_mask
            ),
          {:ok, residual_rows} <-
@@ -4385,7 +4656,8 @@ defmodule Orbis.GNSS.RTK do
              sd_ambiguity_ids,
              dd_ambiguity_pairs,
              report_state,
-             weights
+             weights,
+             receiver_antenna_corrections
            ),
          {:ok, residuals} <- baseline_residuals(residual_rows) do
       all_fixed = fixed_cycles |> Map.keys() |> Enum.sort()
@@ -4434,6 +4706,7 @@ defmodule Orbis.GNSS.RTK do
          solve_opts,
          integer_opts,
          filter_opts,
+         receiver_antenna_corrections,
          acc
        ) do
     rust_wavelengths = rust_sd_keyed_values(dd_ambiguity_pairs, wavelengths)
@@ -4447,7 +4720,8 @@ defmodule Orbis.GNSS.RTK do
            rust_model_term(weights),
            rust_wavelengths,
            rust_offsets,
-           rust_update_opts_term(filter_opts, solve_opts, integer_opts, float_only_systems)
+           rust_update_opts_term(filter_opts, solve_opts, integer_opts, float_only_systems),
+           rust_receiver_antenna_corrections_term(receiver_antenna_corrections)
          ) do
       {:ok, updates} ->
         epochs
@@ -4463,6 +4737,7 @@ defmodule Orbis.GNSS.RTK do
                  dd_ambiguity_satellites,
                  float_only_dd_ids,
                  weights,
+                 receiver_antenna_corrections,
                  acc
                ) do
             {:ok, next} -> {:cont, {:ok, next}}
@@ -4481,8 +4756,8 @@ defmodule Orbis.GNSS.RTK do
   end
 
   defp apply_rust_filter_update(
-         {rust_state, reported_baseline, ratio, fixed?, newly_fixed_sd, fixed_sd_ids,
-          innovation_screen},
+         {rust_state, reported_baseline, reported_sd_ambiguities, ratio, fixed?, newly_fixed_sd,
+          fixed_sd_ids, innovation_screen},
          base,
          epoch,
          refs,
@@ -4491,13 +4766,22 @@ defmodule Orbis.GNSS.RTK do
          dd_ambiguity_satellites,
          float_only_dd_ids,
          weights,
+         receiver_antenna_corrections,
          acc
        ) do
     with {:ok, state, information, header_refs, sd_fixed_cycles, sd_fixed_m, sd_ambiguity_ids} <-
            rust_filter_state_to_elixir(rust_state),
          # The carried state keeps the float baseline; the reported solution is
          # the kernel's ambiguity-conditioned baseline (matches the Elixir path).
-         report_state = %{state | baseline: reported_baseline},
+         reported_sd_ambiguities =
+           reported_sd_ambiguities ||
+             Enum.map(sd_ambiguity_ids, &Map.fetch!(state.ambiguities, &1)),
+         true <- length(reported_sd_ambiguities) == length(sd_ambiguity_ids),
+         report_state = %{
+           state
+           | baseline: reported_baseline,
+             ambiguities: sd_ambiguity_ids |> Enum.zip(reported_sd_ambiguities) |> Map.new()
+         },
          {:ok, fixed_cycles} <-
            rust_sd_fixed_map_to_dd_ids(
              sd_fixed_cycles,
@@ -4539,7 +4823,8 @@ defmodule Orbis.GNSS.RTK do
              sd_ambiguity_ids,
              dd_ambiguity_pairs,
              report_state,
-             weights
+             weights,
+             receiver_antenna_corrections
            ),
          integer_ratio = rust_public_integer_ratio(ratio, residual_rows, acc, float_only_dd_ids),
          {:ok, residuals} <- baseline_residuals(residual_rows) do
@@ -4575,6 +4860,9 @@ defmodule Orbis.GNSS.RTK do
            rust_state: rust_state,
            epochs: [epoch_result | acc.epochs]
        }}
+    else
+      false -> {:error, {:invalid_rust_filter_state, :reported_ambiguity_dimension}}
+      {:error, _reason} = err -> err
     end
   end
 
@@ -4695,6 +4983,31 @@ defmodule Orbis.GNSS.RTK do
 
   defp rust_innovation_screen_sigma(%{enabled?: true, threshold_sigma: threshold}), do: threshold
   defp rust_innovation_screen_sigma(_screen), do: 0.0
+
+  defp rust_receiver_antenna_corrections_term(nil), do: nil
+
+  defp rust_receiver_antenna_corrections_term(%{base: base, rover: rover}) do
+    {
+      rust_receiver_antenna_correction_term(base),
+      rust_receiver_antenna_correction_term(rover)
+    }
+  end
+
+  defp rust_receiver_antenna_correction_term(%{antenna: antenna, frequency: frequency}) do
+    frequency_block = Map.fetch!(antenna.frequencies, String.trim(frequency))
+
+    {noazi, azi} =
+      Enum.reduce(frequency_block.pcv_samples, {[], []}, fn
+        %{grid: :noazi, zenith_deg: zenith_deg, value_m: value_m}, {noazi, azi} ->
+          {[{zenith_deg, value_m} | noazi], azi}
+
+        %{grid: :azi, azimuth_deg: azimuth_deg, zenith_deg: zenith_deg, value_m: value_m},
+        {noazi, azi} ->
+          {noazi, [{azimuth_deg, zenith_deg, value_m} | azi]}
+      end)
+
+    {frequency_block.pco_m, Enum.reverse(noazi), Enum.reverse(azi)}
+  end
 
   defp rust_innovation_screen_meta(nil), do: nil
 
@@ -4843,6 +5156,7 @@ defmodule Orbis.GNSS.RTK do
          weights,
          solve_opts,
          filter_opts,
+         receiver_antenna_corrections,
          row_mask,
          iter
        ) do
@@ -4855,7 +5169,8 @@ defmodule Orbis.GNSS.RTK do
              sd_ambiguity_ids,
              dd_ambiguity_pairs,
              prior_state,
-             weights
+             weights,
+             receiver_antenna_corrections
            ),
          # Innovation-screen accept/reject decisions are made once, at the
          # epoch's predicted prior (kernel `prepare_innovation_screen`); the
@@ -4918,6 +5233,7 @@ defmodule Orbis.GNSS.RTK do
             weights,
             solve_opts,
             filter_opts,
+            receiver_antenna_corrections,
             row_mask,
             iter + 1
           )
@@ -4950,6 +5266,7 @@ defmodule Orbis.GNSS.RTK do
          _dd_ambiguity_pairs,
          _state,
          _weights,
+         _receiver_antenna_corrections,
          %{enabled?: false}
        ), do: {:ok, nil, nil}
 
@@ -4962,6 +5279,7 @@ defmodule Orbis.GNSS.RTK do
          dd_ambiguity_pairs,
          state,
          weights,
+         receiver_antenna_corrections,
          %{enabled?: true, threshold_sigma: threshold, min_rows: min_rows}
        ) do
     with {:ok, rows} <-
@@ -4973,7 +5291,8 @@ defmodule Orbis.GNSS.RTK do
              sd_ambiguity_ids,
              dd_ambiguity_pairs,
              state,
-             weights
+             weights,
+             receiver_antenna_corrections
            ) do
       {mask_reversed, accepted, rejected, rejected_code, rejected_phase, max_norm, max_rej} =
         Enum.reduce(rows, {[], 0, 0, 0, 0, nil, nil}, fn row,
@@ -5151,6 +5470,7 @@ defmodule Orbis.GNSS.RTK do
          _w,
          _so,
          _fo,
+         _receiver_antenna_corrections,
          _mask
        ), do: {:ok, float_state}
 
@@ -5168,6 +5488,7 @@ defmodule Orbis.GNSS.RTK do
          weights,
          solve_opts,
          filter_opts,
+         receiver_antenna_corrections,
          row_mask
        ) do
     case iterate_sequential_filter_epoch(
@@ -5184,6 +5505,7 @@ defmodule Orbis.GNSS.RTK do
            weights,
            solve_opts,
            filter_opts,
+           receiver_antenna_corrections,
            row_mask,
            1
          ) do
@@ -5405,6 +5727,7 @@ defmodule Orbis.GNSS.RTK do
          float_sol,
          fixed_cycles,
          fixed_meta,
+         receiver_antenna_corrections,
          iter
        ) do
     with {:ok, rows} <-
@@ -5417,7 +5740,8 @@ defmodule Orbis.GNSS.RTK do
              free_ambiguity_ids,
              fixed_m,
              state,
-             weights
+             weights,
+             receiver_antenna_corrections
            ),
          {:ok, dx} <-
            solve_baseline_normal_equations(rows, 3 + length(free_ambiguity_ids)) do
@@ -5437,6 +5761,7 @@ defmodule Orbis.GNSS.RTK do
             fixed_m,
             next,
             weights,
+            receiver_antenna_corrections,
             float_sol,
             fixed_cycles,
             fixed_meta,
@@ -5456,6 +5781,7 @@ defmodule Orbis.GNSS.RTK do
             fixed_m,
             next,
             weights,
+            receiver_antenna_corrections,
             float_sol,
             fixed_cycles,
             fixed_meta,
@@ -5479,6 +5805,7 @@ defmodule Orbis.GNSS.RTK do
             float_sol,
             fixed_cycles,
             fixed_meta,
+            receiver_antenna_corrections,
             iter + 1
           )
       end
@@ -5494,7 +5821,8 @@ defmodule Orbis.GNSS.RTK do
          free_ambiguity_ids,
          fixed_m,
          state,
-         weights
+         weights,
+         receiver_antenna_corrections
        ) do
     epochs
     |> Enum.reduce_while({:ok, []}, fn epoch, {:ok, acc} ->
@@ -5507,7 +5835,8 @@ defmodule Orbis.GNSS.RTK do
              free_ambiguity_ids,
              fixed_m,
              state,
-             weights
+             weights,
+             receiver_antenna_corrections
            ) do
         {:ok, rows} -> {:cont, {:ok, rows ++ acc}}
         {:error, _reason} = err -> {:halt, err}
@@ -5528,9 +5857,11 @@ defmodule Orbis.GNSS.RTK do
          free_ambiguity_ids,
          fixed_m,
          state,
-         weights
+         weights,
+         receiver_antenna_corrections
        ) do
     ref_data = epoch_reference_data(epoch, refs)
+    rover = add3(base, state.baseline)
 
     epoch
     |> epoch_available_nonrefs(refs, physical_sats)
@@ -5553,6 +5884,19 @@ defmodule Orbis.GNSS.RTK do
           ref_rover_pos,
           weights
         )
+
+      dd_receiver_correction =
+        double_difference_receiver_antenna_correction(
+          sat_pos,
+          base,
+          rover,
+          ref_pos,
+          base,
+          rover,
+          receiver_antenna_corrections
+        )
+
+      modeled_geom_dd = geom_dd - dd_receiver_correction
 
       ambiguity_id = obs_dd.ambiguity_id
 
@@ -5578,7 +5922,7 @@ defmodule Orbis.GNSS.RTK do
         ref_sat: ref_dd.satellite_id,
         ambiguity_id: ambiguity_id,
         h: code_h,
-        y: obs_dd.code_m - geom_dd,
+        y: obs_dd.code_m - modeled_geom_dd,
         sd_variance_m2: code_variance.sd_variance_m2,
         ref_sd_variance_m2: code_variance.ref_sd_variance_m2,
         weight: code_variance.weight
@@ -5592,7 +5936,7 @@ defmodule Orbis.GNSS.RTK do
         ref_sat: ref_dd.satellite_id,
         ambiguity_id: ambiguity_id,
         h: phase_h,
-        y: obs_dd.phase_m - (geom_dd + phase_ambiguity),
+        y: obs_dd.phase_m - (modeled_geom_dd + phase_ambiguity),
         sd_variance_m2: phase_variance.sd_variance_m2,
         ref_sd_variance_m2: phase_variance.ref_sd_variance_m2,
         weight: phase_variance.weight
@@ -5643,6 +5987,7 @@ defmodule Orbis.GNSS.RTK do
          fixed_m,
          state,
          weights,
+         receiver_antenna_corrections,
          float_sol,
          fixed_cycles,
          fixed_meta,
@@ -5660,7 +6005,8 @@ defmodule Orbis.GNSS.RTK do
              free_ambiguity_ids,
              fixed_m,
              state,
-             weights
+             weights,
+             receiver_antenna_corrections
            ),
          {:ok, residuals} <- baseline_residuals(rows) do
       code_residuals = Enum.map(residuals, & &1.code_m)
@@ -5890,6 +6236,11 @@ defmodule Orbis.GNSS.RTK do
   defp sub3({ax, ay, az}, {bx, by, bz}), do: {ax - bx, ay - by, az - bz}
   defp scale3({x, y, z}, s), do: {x * s, y * s, z * s}
   defp norm({x, y, z}), do: :math.sqrt(x * x + y * y + z * z)
+
+  defp cross3({ax, ay, az}, {bx, by, bz}) do
+    {ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx}
+  end
+
   defp ecef_map({x, y, z}), do: %{x_m: x, y_m: y, z_m: z}
 
   defp normalize_observations(observations, error_tag) do

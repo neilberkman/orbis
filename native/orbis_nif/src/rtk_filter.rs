@@ -7,8 +7,10 @@
 
 use astrodynamics_gnss::rtk_filter::{
     update_epoch, DynamicsModel, Epoch, FilterState, InnovationScreen, InnovationScreenOpts,
-    MeasModel, SatMeas, SearchOpts, StochasticModel, UpdateError, UpdateOpts,
+    MeasModel, ReceiverAntennaCalibration, ReceiverAntennaCorrections, SatMeas, SearchOpts,
+    StochasticModel, UpdateError, UpdateOpts,
 };
+use rustler::types::tuple::make_tuple;
 use rustler::{Encoder, Env, NifResult, Term};
 use std::collections::BTreeMap;
 
@@ -33,18 +35,14 @@ type StateTerm = (
 );
 type ScreenTailTerm = (usize, Option<f64>, Option<f64>, bool);
 type ScreenTerm = (f64, usize, usize, usize, usize, usize, ScreenTailTerm);
-type UpdateTerm = (
-    StateTerm,
-    Vec3,
-    f64,
-    bool,
-    Vec<String>,
-    Vec<String>,
-    Option<ScreenTerm>,
-);
 type ModelTerm = (f64, f64, String, bool, bool);
 type UpdateOptsExtraTerm = (String, Vec<String>, f64, usize);
 type UpdateOptsTerm = (f64, f64, f64, usize, f64, f64, UpdateOptsExtraTerm);
+type PcvNoaziTerm = (f64, f64);
+type PcvAziTerm = (f64, f64, f64);
+type ReceiverAntennaCorrectionTerm = (Vec3, Vec<PcvNoaziTerm>, Vec<PcvAziTerm>);
+type ReceiverAntennaCorrectionsTerm =
+    (ReceiverAntennaCorrectionTerm, ReceiverAntennaCorrectionTerm);
 
 mod atoms {
     rustler::atoms! {
@@ -78,14 +76,17 @@ pub fn rtk_filter_update_epoch<'a>(
     wavelengths: Vec<(String, f64)>,
     offsets: Vec<(String, f64)>,
     opts_term: UpdateOptsTerm,
+    receiver_antenna_corrections_term: Option<ReceiverAntennaCorrectionsTerm>,
 ) -> NifResult<Term<'a>> {
     let Some(model) = decode_model(model_term) else {
         return Ok((atoms::error(), atoms::invalid_stochastic_model()).encode(env));
     };
 
-    let Some(opts) = decode_opts(opts_term) else {
+    let Some(mut opts) = decode_opts(opts_term) else {
         return Ok((atoms::error(), atoms::invalid_dynamics_model()).encode(env));
     };
+    opts.receiver_antenna_corrections =
+        receiver_antenna_corrections_term.map(decode_receiver_antenna_corrections);
 
     let update = match update_epoch(
         decode_state(state_term),
@@ -100,7 +101,7 @@ pub fn rtk_filter_update_epoch<'a>(
         Err(err) => return Ok((atoms::error(), encode_update_error(env, err)).encode(env)),
     };
 
-    Ok((atoms::ok(), encode_update(update)).encode(env))
+    Ok((atoms::ok(), encode_update(env, update)).encode(env))
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
@@ -114,6 +115,7 @@ pub fn rtk_filter_update_epochs<'a>(
     wavelengths: Vec<(String, f64)>,
     offsets: Vec<(String, f64)>,
     opts_term: UpdateOptsTerm,
+    receiver_antenna_corrections_term: Option<ReceiverAntennaCorrectionsTerm>,
 ) -> NifResult<Term<'a>> {
     let Some(model) = decode_model(model_term) else {
         return Ok((atoms::error(), atoms::invalid_stochastic_model()).encode(env));
@@ -122,9 +124,11 @@ pub fn rtk_filter_update_epochs<'a>(
     let base = vec3(base);
     let wavelengths = wavelengths.into_iter().collect::<BTreeMap<_, _>>();
     let offsets = offsets.into_iter().collect::<BTreeMap<_, _>>();
-    let Some(opts) = decode_opts(opts_term) else {
+    let Some(mut opts) = decode_opts(opts_term) else {
         return Ok((atoms::error(), atoms::invalid_dynamics_model()).encode(env));
     };
+    opts.receiver_antenna_corrections =
+        receiver_antenna_corrections_term.map(decode_receiver_antenna_corrections);
     let mut state = decode_state(state_term);
     let mut updates = Vec::with_capacity(epoch_terms.len());
 
@@ -145,21 +149,31 @@ pub fn rtk_filter_update_epochs<'a>(
         };
 
         state = update.state.clone();
-        updates.push(encode_update(update));
+        updates.push(encode_update(env, update));
     }
 
     Ok((atoms::ok(), updates).encode(env))
 }
 
-fn encode_update(update: astrodynamics_gnss::rtk_filter::EpochUpdate) -> UpdateTerm {
-    (
-        encode_state(update.state),
-        tuple3(update.reported_baseline_m),
-        update.integer_ratio,
-        update.integer_fixed,
-        update.newly_fixed,
-        update.fixed_ids,
-        update.innovation_screen.map(encode_innovation_screen),
+fn encode_update<'a>(
+    env: Env<'a>,
+    update: astrodynamics_gnss::rtk_filter::EpochUpdate,
+) -> Term<'a> {
+    make_tuple(
+        env,
+        &[
+            encode_state(update.state).encode(env),
+            tuple3(update.reported_baseline_m).encode(env),
+            update.reported_sd_ambiguities_m.encode(env),
+            update.integer_ratio.encode(env),
+            update.integer_fixed.encode(env),
+            update.newly_fixed.encode(env),
+            update.fixed_ids.encode(env),
+            update
+                .innovation_screen
+                .map(encode_innovation_screen)
+                .encode(env),
+        ],
     )
 }
 
@@ -343,8 +357,30 @@ fn decode_opts(term: UpdateOptsTerm) -> Option<UpdateOpts> {
         } else {
             None
         },
+        receiver_antenna_corrections: None,
         search: SearchOpts { ratio_threshold },
     })
+}
+
+fn decode_receiver_antenna_corrections(
+    term: ReceiverAntennaCorrectionsTerm,
+) -> ReceiverAntennaCorrections {
+    let (base, rover) = term;
+    ReceiverAntennaCorrections {
+        base: decode_receiver_antenna_calibration(base),
+        rover: decode_receiver_antenna_calibration(rover),
+    }
+}
+
+fn decode_receiver_antenna_calibration(
+    term: ReceiverAntennaCorrectionTerm,
+) -> ReceiverAntennaCalibration {
+    let (pco_neu_m, noazi_pcv_m, azi_pcv_m) = term;
+    ReceiverAntennaCalibration {
+        pco_neu_m: vec3(pco_neu_m),
+        noazi_pcv_m,
+        azi_pcv_m,
+    }
 }
 
 fn vec3(v: Vec3) -> [f64; 3] {

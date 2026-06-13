@@ -10,6 +10,6 @@ crate-type = ["cdylib"]
 [dependencies]
 rustler = "0.37.3"
 chrono = "0.4"
-# Lane pin until the promoted D1 RTK filter kernel is published to crates.io.
-astrodynamics = "0.9.0"
-astrodynamics-gnss = "0.12.0"
+# Lane pin until the antenna-corrections kernel is published to crates.io.
+astrodynamics = { git = "https://github.com/neilberkman/astrodynamics.git", rev = "268148005167f7a24eb2c1e8b074f5846b9817da" }
+astrodynamics-gnss = { git = "https://github.com/neilberkman/astrodynamics.git", rev = "268148005167f7a24eb2c1e8b074f5846b9817da" }

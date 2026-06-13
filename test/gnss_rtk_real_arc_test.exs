@@ -3,6 +3,7 @@ defmodule Orbis.GNSS.RTKRealArcTest do
 
   use ExUnit.Case, async: false
 
+  alias Orbis.GNSS.Antex
   alias Orbis.GNSS.RINEX.Observations
   alias Orbis.GNSS.RTK
   alias Orbis.GNSS.SP3
@@ -30,6 +31,10 @@ defmodule Orbis.GNSS.RTKRealArcTest do
                                   __DIR__,
                                   "fixtures/rtk/wtzr_wtzz_multignss_static_rtklib_oracle.json"
                                 )
+  @pasa_scoa_l1_oracle_path Path.join(
+                              __DIR__,
+                              "fixtures/rtk/pasa_scoa_2026_120_l1_static_fixhold_rtklib_oracle.json"
+                            )
   @c_m_s 299_792_458.0
   @gps_l1_hz 1_575_420_000.0
   @gps_l2_hz 1_227_600_000.0
@@ -560,6 +565,52 @@ defmodule Orbis.GNSS.RTKRealArcTest do
     assert Enum.max(satellite_counts) == 17
   end
 
+  @tag timeout: 180_000
+  test "PASA/SCOA IGS20 receiver antenna corrections stay bit-exact across filter kernels" do
+    oracle = @pasa_scoa_l1_oracle_path |> File.read!() |> Jason.decode!()
+    repo = Path.expand("..", __DIR__)
+    truth = oracle["truth"]
+    inputs = oracle["inputs"]
+
+    base_ecef = ecef_json_to_tuple(truth["base_station"]["marker_ecef_m"])
+    sp3 = SP3.load!(Path.join(repo, inputs["sp3"]))
+    base_obs = Observations.load!(Path.join(repo, inputs["base_obs"]))
+    rover_obs = Observations.load!(Path.join(repo, inputs["rover_obs"]))
+    initial_baseline = sub3(Observations.approx_position(rover_obs), base_ecef)
+
+    corrections =
+      receiver_antenna_corrections(
+        Path.join(repo, inputs["antex"]),
+        truth["base_station"]["antenna"],
+        truth["rover_station"]["antenna"]
+      )
+
+    epochs = real_gps_l1_rtk_epochs(sp3, base_obs, rover_obs, oracle["reference"]["epochs"])
+    assert length(epochs) == oracle["reference"]["epochs"]
+
+    opts = [
+      initial_baseline_m: initial_baseline,
+      max_iterations: 10,
+      on_cycle_slip: :split_arc,
+      elevation_mask_deg: 10.0,
+      stochastic_model: :rtklib,
+      code_sigma_m: 0.3,
+      phase_sigma_m: 0.003,
+      ambiguity_wavelength_m: @gps_l1_wavelength_m,
+      integer_ratio_threshold: 3.0,
+      integer_candidate_limit: 200_000,
+      receiver_antenna_corrections: corrections
+    ]
+
+    assert {:ok, elixir_sol} =
+             RTK.solve_filter_baseline_epochs(base_ecef, epochs, opts ++ [filter_kernel: :elixir])
+
+    assert {:ok, rust_sol} =
+             RTK.solve_filter_baseline_epochs(base_ecef, epochs, opts ++ [filter_kernel: :rust])
+
+    assert_filter_kernel_trace_exact(rust_sol, elixir_sol)
+  end
+
   @tag timeout: 600_000
   test "multi-GNSS static RTK filter reproduces the RTKLIB Track B oracle with GLONASS float-only" do
     oracle = @rtklib_multignss_oracle_path |> File.read!() |> Jason.decode!()
@@ -951,6 +1002,19 @@ defmodule Orbis.GNSS.RTKRealArcTest do
 
   defp enu_map_to_tuple(%{"east" => east, "north" => north, "up" => up}), do: {east, north, up}
 
+  defp ecef_json_to_tuple(%{"x" => x, "y" => y, "z" => z}), do: {x, y, z}
+
+  defp receiver_antenna_corrections(antex_path, base_name, rover_name) do
+    antex = Antex.load!(antex_path)
+    base = Antex.antenna(antex, base_name) || raise "ANTEX missing #{inspect(base_name)}"
+    rover = Antex.antenna(antex, rover_name) || raise "ANTEX missing #{inspect(rover_name)}"
+
+    %{
+      base: %{antenna: base, frequency: "G01"},
+      rover: %{antenna: rover, frequency: "G01"}
+    }
+  end
+
   defp position_error(%{x_m: x, y_m: y, z_m: z}, {truth_x, truth_y, truth_z}) do
     :math.sqrt(
       (x - truth_x) * (x - truth_x) +
@@ -1003,6 +1067,27 @@ defmodule Orbis.GNSS.RTKRealArcTest do
       else
         assert rust_epoch.integer_ratio == elixir_epoch.integer_ratio
       end
+    end
+  end
+
+  defp assert_filter_kernel_trace_exact(rust_sol, elixir_sol) do
+    assert Map.delete(rust_sol.metadata, :filter_kernel) ===
+             Map.delete(elixir_sol.metadata, :filter_kernel)
+
+    assert rust_sol.fixed_ambiguities_cycles === elixir_sol.fixed_ambiguities_cycles
+    assert length(rust_sol.epochs) == length(elixir_sol.epochs)
+    assert_exact_position(rust_sol.baseline_m, elixir_sol.baseline_m)
+
+    for {rust_epoch, elixir_epoch} <- Enum.zip(rust_sol.epochs, elixir_sol.epochs) do
+      assert rust_epoch.epoch === elixir_epoch.epoch
+      assert rust_epoch.index === elixir_epoch.index
+      assert_exact_position(rust_epoch.baseline_m, elixir_epoch.baseline_m)
+      assert rust_epoch.integer_status === elixir_epoch.integer_status
+      assert rust_epoch.integer_ratio === elixir_epoch.integer_ratio
+      assert rust_epoch.residuals_m === elixir_epoch.residuals_m
+      assert rust_epoch.newly_fixed_ambiguities === elixir_epoch.newly_fixed_ambiguities
+      assert rust_epoch.fixed_ambiguities === elixir_epoch.fixed_ambiguities
+      assert rust_epoch.innovation_screen === elixir_epoch.innovation_screen
     end
   end
 end
