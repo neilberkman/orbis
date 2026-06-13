@@ -93,9 +93,13 @@ Two honest caveats:
 
 ## Promotion status
 
-Reference-first complete: the gate is in the Elixir reference with unit
-coverage (arming withholds every fix below an unreachable threshold, leaves
-always-armed behavior intact above any sigma, and rejects bad values plus the
-unsupported Rust kernel). Full battery 858 passed; sigma-sweep gate green.
-Kernel port with full per-epoch === gates is the next step before the option
-is available on the default Rust kernel.
+Complete. The gate is in the Elixir reference and ported to the Rust kernel
+(astrodynamics-gnss `search_and_hold` takes an optional arming sigma; op-order
+identical to the Elixir `ar_armed?`). Coverage: the Elixir unit tests (arming
+withholds every fix below an unreachable threshold, leaves always-armed
+behavior intact above any sigma, rejects bad values, and is accepted by both
+kernels), the Rust kernel unit assertion, and a full per-epoch === parity gate
+on the PASA/SCOA arc (both kernels bit-equal with arming and the soft hold,
+fixed median <= 0.214 m). Full battery 859 passed; sigma-sweep gate green. The
+Rust kernel change ships in a later astrodynamics-gnss release; the orbis lane
+pins the kernel rev until then.

@@ -1067,7 +1067,7 @@ defmodule Orbis.GNSS.RTKTest do
       assert armed_loose.fixed_ambiguities_cycles == armed_off.fixed_ambiguities_cycles
     end
 
-    test "AR arming gate rejects bad values and the unsupported Rust kernel" do
+    test "AR arming gate rejects bad values and is accepted by both kernels" do
       epoch = synthetic_baseline_epoch(@base, @truth_baseline, hd(@sat_positions))
 
       assert RTK.solve_filter_baseline_epochs(@base, [epoch],
@@ -1080,11 +1080,12 @@ defmodule Orbis.GNSS.RTKTest do
                ar_arming_sigma_m: -1.0
              ) == {:error, {:invalid_option, :ar_arming_sigma_m}}
 
-      assert RTK.solve_filter_baseline_epochs(@base, [epoch],
-               ambiguity_wavelength_m: @l1_wavelength_m,
-               filter_kernel: :rust,
-               ar_arming_sigma_m: 0.05
-             ) == {:error, {:unsupported_filter_kernel, :ar_arming_sigma_m}}
+      assert {:ok, _} =
+               RTK.solve_filter_baseline_epochs(@base, [epoch],
+                 ambiguity_wavelength_m: @l1_wavelength_m,
+                 filter_kernel: :rust,
+                 ar_arming_sigma_m: 0.05
+               )
     end
 
     test "Rust filter kernel matches the Elixir sequential filter" do

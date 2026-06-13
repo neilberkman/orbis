@@ -788,11 +788,7 @@ defmodule Orbis.GNSS.RTK do
 
   defp validate_filter_kernel_receiver_corrections(:rust, _receiver_antenna_corrections), do: :ok
 
-  defp validate_filter_kernel_ar_arming(_filter_kernel, nil), do: :ok
-  defp validate_filter_kernel_ar_arming(:elixir, _threshold_m), do: :ok
-
-  defp validate_filter_kernel_ar_arming(:rust, _threshold_m),
-    do: {:error, {:unsupported_filter_kernel, :ar_arming_sigma_m}}
+  defp validate_filter_kernel_ar_arming(_filter_kernel, _threshold_m), do: :ok
 
   defp receiver_antenna_corrections(opts) do
     case Keyword.get(opts, :receiver_antenna_corrections) do
@@ -4896,7 +4892,11 @@ defmodule Orbis.GNSS.RTK do
       |> Enum.sort()
       |> Enum.reject(&(MapSet.member?(fixed_set, &1) or MapSet.member?(float_only_dd_ids, &1)))
 
-    if search_ids != [], do: ratio
+    # The kernel returns ratio 0.0 as the "no search ran" sentinel (no
+    # candidates, or the arming gate withheld the search); a real LAMBDA search
+    # never yields exactly 0.0. Report nil there, matching the Elixir reference's
+    # empty search meta.
+    if search_ids != [] and ratio != 0.0, do: ratio
   end
 
   defp rust_initial_filter_state(
@@ -4996,7 +4996,8 @@ defmodule Orbis.GNSS.RTK do
         Atom.to_string(filter_opts.dynamics_model),
         float_only_systems,
         rust_innovation_screen_sigma(filter_opts.innovation_screen),
-        filter_opts.innovation_screen.min_rows
+        filter_opts.innovation_screen.min_rows,
+        filter_opts.ar_arming_sigma_m
       }
     }
   end
