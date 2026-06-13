@@ -125,6 +125,7 @@ defmodule Orbis.GNSS.RTK do
                                :hold_sigma_m,
                                :process_noise_baseline_sigma_m,
                                :dynamics_model,
+                               :ar_arming_sigma_m,
                                :innovation_screen_sigma,
                                :innovation_screen_min_rows,
                                :filter_kernel
@@ -728,6 +729,8 @@ defmodule Orbis.GNSS.RTK do
              filter_kernel,
              receiver_antenna_corrections
            ),
+         :ok <-
+           validate_filter_kernel_ar_arming(filter_kernel, filter_opts.ar_arming_sigma_m),
          {:ok, float_only_systems} <- float_only_systems(opts),
          {:ok, normalized_epochs, prep_meta} <- prepare_baseline_epochs(base, epochs, float_opts),
          {:ok, all_sats} <- all_epoch_sats(normalized_epochs),
@@ -784,6 +787,8 @@ defmodule Orbis.GNSS.RTK do
     do: :ok
 
   defp validate_filter_kernel_receiver_corrections(:rust, _receiver_antenna_corrections), do: :ok
+
+  defp validate_filter_kernel_ar_arming(_filter_kernel, _threshold_m), do: :ok
 
   defp receiver_antenna_corrections(opts) do
     case Keyword.get(opts, :receiver_antenna_corrections) do
@@ -2770,6 +2775,7 @@ defmodule Orbis.GNSS.RTK do
              @default_filter_process_noise_baseline_sigma_m
            ),
          {:ok, dynamics_model} <- dynamics_model(opts),
+         {:ok, ar_arming_sigma_m} <- optional_positive_option(opts, :ar_arming_sigma_m),
          {:ok, innovation_screen} <- innovation_screen_options(opts) do
       {:ok,
        %{
@@ -2778,8 +2784,17 @@ defmodule Orbis.GNSS.RTK do
          hold_sigma_m: hold_sigma_m,
          process_noise_baseline_sigma_m: process_noise_baseline_sigma_m,
          dynamics_model: dynamics_model,
+         ar_arming_sigma_m: ar_arming_sigma_m,
          innovation_screen: innovation_screen
        }}
+    end
+  end
+
+  defp optional_positive_option(opts, key) do
+    case Keyword.get(opts, key) do
+      nil -> {:ok, nil}
+      value when is_number(value) and value > 0.0 -> {:ok, value / 1.0}
+      _other -> {:error, {:invalid_option, key}}
     end
   end
 
@@ -4614,7 +4629,8 @@ defmodule Orbis.GNSS.RTK do
            ),
          {:ok, covariance} <- invert_matrix(information),
          {:ok, fixed_cycles, fixed_m, search_meta} <-
-           sequential_search_and_hold(
+           ar_search_and_hold(
+             ar_armed?(covariance, filter_opts.ar_arming_sigma_m),
              state,
              covariance,
              rows,
@@ -4622,7 +4638,7 @@ defmodule Orbis.GNSS.RTK do
              dd_ambiguity_ids,
              dd_ambiguity_pairs,
              float_only_dd_ids,
-             acc.fixed_cycles,
+             acc,
              wavelengths,
              offsets,
              integer_opts
@@ -4876,7 +4892,11 @@ defmodule Orbis.GNSS.RTK do
       |> Enum.sort()
       |> Enum.reject(&(MapSet.member?(fixed_set, &1) or MapSet.member?(float_only_dd_ids, &1)))
 
-    if search_ids != [], do: ratio
+    # The kernel returns ratio 0.0 as the "no search ran" sentinel (no
+    # candidates, or the arming gate withheld the search); a real LAMBDA search
+    # never yields exactly 0.0. Report nil there, matching the Elixir reference's
+    # empty search meta.
+    if search_ids != [] and ratio != 0.0, do: ratio
   end
 
   defp rust_initial_filter_state(
@@ -4976,7 +4996,8 @@ defmodule Orbis.GNSS.RTK do
         Atom.to_string(filter_opts.dynamics_model),
         float_only_systems,
         rust_innovation_screen_sigma(filter_opts.innovation_screen),
-        filter_opts.innovation_screen.min_rows
+        filter_opts.innovation_screen.min_rows,
+        filter_opts.ar_arming_sigma_m
       }
     }
   end
@@ -5549,7 +5570,7 @@ defmodule Orbis.GNSS.RTK do
          prior_state,
          hold_sigma_m
        )
-       when map_size(refs) > 1 do
+       when map_size(refs) >= 1 do
     weight = 1.0 / (hold_sigma_m * hold_sigma_m)
     available = epoch_sats(epoch)
 
@@ -5638,6 +5659,70 @@ defmodule Orbis.GNSS.RTK do
 
       {normal, rhs}
     end)
+  end
+
+  # AR commitment arming gate (ar-commitment-spec.md, mechanism 1): the
+  # ambiguity search is attempted only when the baseline-block posterior
+  # standard deviation has converged to at most `:ar_arming_sigma_m`. Below the
+  # gate, the epoch carries its existing held set and stays float for the
+  # unfixed arcs, so the filter does not commit integers while the float state
+  # is still too loose to support a half-wavelength decision. `nil` (default)
+  # disables the gate and preserves the always-armed behavior.
+  defp ar_armed?(_covariance, nil), do: true
+
+  defp ar_armed?(covariance, threshold_m) do
+    diag = fn i -> covariance |> Enum.at(i) |> Enum.at(i) end
+
+    base_sigma_m =
+      :math.sqrt(max(diag.(0), 0.0) + max(diag.(1), 0.0) + max(diag.(2), 0.0))
+
+    base_sigma_m <= threshold_m
+  end
+
+  defp ar_search_and_hold(
+         false,
+         _state,
+         _covariance,
+         _rows,
+         _sd_ambiguity_ids,
+         _dd_ambiguity_ids,
+         _dd_ambiguity_pairs,
+         _float_only_dd_ids,
+         acc,
+         _wavelengths,
+         _offsets,
+         _integer_opts
+       ) do
+    {:ok, acc.fixed_cycles, acc.fixed_m, %{}}
+  end
+
+  defp ar_search_and_hold(
+         true,
+         state,
+         covariance,
+         rows,
+         sd_ambiguity_ids,
+         dd_ambiguity_ids,
+         dd_ambiguity_pairs,
+         float_only_dd_ids,
+         acc,
+         wavelengths,
+         offsets,
+         integer_opts
+       ) do
+    sequential_search_and_hold(
+      state,
+      covariance,
+      rows,
+      sd_ambiguity_ids,
+      dd_ambiguity_ids,
+      dd_ambiguity_pairs,
+      float_only_dd_ids,
+      acc.fixed_cycles,
+      wavelengths,
+      offsets,
+      integer_opts
+    )
   end
 
   defp sequential_search_and_hold(

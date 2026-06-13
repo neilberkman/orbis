@@ -36,7 +36,7 @@ type StateTerm = (
 type ScreenTailTerm = (usize, Option<f64>, Option<f64>, bool);
 type ScreenTerm = (f64, usize, usize, usize, usize, usize, ScreenTailTerm);
 type ModelTerm = (f64, f64, String, bool, bool);
-type UpdateOptsExtraTerm = (String, Vec<String>, f64, usize);
+type UpdateOptsExtraTerm = (String, Vec<String>, f64, usize, Option<f64>);
 type UpdateOptsTerm = (f64, f64, f64, usize, f64, f64, UpdateOptsExtraTerm);
 type PcvNoaziTerm = (f64, f64);
 type PcvAziTerm = (f64, f64, f64);
@@ -333,7 +333,13 @@ fn decode_opts(term: UpdateOptsTerm) -> Option<UpdateOpts> {
         max_iterations,
         process_noise_baseline_sigma_m,
         ratio_threshold,
-        (dynamics_model, float_only_systems, innovation_screen_sigma, innovation_screen_min_rows),
+        (
+            dynamics_model,
+            float_only_systems,
+            innovation_screen_sigma,
+            innovation_screen_min_rows,
+            ar_arming_sigma_m,
+        ),
     ) = term;
     let dynamics_model = match dynamics_model.as_str() {
         "constant_position" => DynamicsModel::ConstantPosition,
@@ -358,6 +364,7 @@ fn decode_opts(term: UpdateOptsTerm) -> Option<UpdateOpts> {
             None
         },
         receiver_antenna_corrections: None,
+        ar_arming_sigma_m,
         search: SearchOpts { ratio_threshold },
     })
 }

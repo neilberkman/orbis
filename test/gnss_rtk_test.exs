@@ -1018,6 +1018,76 @@ defmodule Orbis.GNSS.RTKTest do
       end
     end
 
+    test "AR arming gate withholds fixes until the baseline posterior converges" do
+      ambiguities_m =
+        Map.new(@fixed_cycles, fn {sat, cycles} -> {sat, cycles * @l1_wavelength_m} end)
+
+      epochs =
+        @sat_positions
+        |> Enum.with_index()
+        |> Enum.map(fn {positions, idx} ->
+          synthetic_baseline_epoch(@base, @truth_baseline, positions,
+            epoch: idx,
+            base_clock_m: 15.0 + idx,
+            rover_clock_m: -8.0 + idx,
+            ambiguities_m: ambiguities_m
+          )
+        end)
+
+      opts = [
+        reference_satellite_id: "G01",
+        ambiguity_wavelength_m: @l1_wavelength_m,
+        initial_baseline_m: {-40.0, 35.0, 12.0},
+        filter_kernel: :elixir
+      ]
+
+      # Without the gate the synthetic arc fixes.
+      assert {:ok, armed_off} = RTK.solve_filter_baseline_epochs(@base, epochs, opts)
+      assert armed_off.metadata.first_fixed_index != nil
+      assert armed_off.metadata.fixed_epoch_count > 0
+
+      # A threshold below any achievable baseline posterior sigma withholds every
+      # fix, yet the filter still solves and returns the float baseline.
+      assert {:ok, armed_tight} =
+               RTK.solve_filter_baseline_epochs(
+                 @base,
+                 epochs,
+                 opts ++ [ar_arming_sigma_m: 1.0e-9]
+               )
+
+      assert armed_tight.metadata.first_fixed_index == nil
+      assert armed_tight.metadata.fixed_epoch_count == 0
+      assert Enum.all?(armed_tight.epochs, &(&1.integer_status != :fixed))
+
+      # A threshold far above any sigma leaves the always-armed behavior intact.
+      assert {:ok, armed_loose} =
+               RTK.solve_filter_baseline_epochs(@base, epochs, opts ++ [ar_arming_sigma_m: 1.0e3])
+
+      assert armed_loose.metadata.first_fixed_index == armed_off.metadata.first_fixed_index
+      assert armed_loose.fixed_ambiguities_cycles == armed_off.fixed_ambiguities_cycles
+    end
+
+    test "AR arming gate rejects bad values and is accepted by both kernels" do
+      epoch = synthetic_baseline_epoch(@base, @truth_baseline, hd(@sat_positions))
+
+      assert RTK.solve_filter_baseline_epochs(@base, [epoch],
+               ambiguity_wavelength_m: @l1_wavelength_m,
+               ar_arming_sigma_m: 0.0
+             ) == {:error, {:invalid_option, :ar_arming_sigma_m}}
+
+      assert RTK.solve_filter_baseline_epochs(@base, [epoch],
+               ambiguity_wavelength_m: @l1_wavelength_m,
+               ar_arming_sigma_m: -1.0
+             ) == {:error, {:invalid_option, :ar_arming_sigma_m}}
+
+      assert {:ok, _} =
+               RTK.solve_filter_baseline_epochs(@base, [epoch],
+                 ambiguity_wavelength_m: @l1_wavelength_m,
+                 filter_kernel: :rust,
+                 ar_arming_sigma_m: 0.05
+               )
+    end
+
     test "Rust filter kernel matches the Elixir sequential filter" do
       ambiguities_m =
         Map.new(@fixed_cycles, fn {sat, cycles} -> {sat, cycles * @l1_wavelength_m} end)
