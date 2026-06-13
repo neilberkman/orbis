@@ -1771,6 +1771,101 @@ defmodule Orbis.GNSS.RTKTest do
     end
   end
 
+  describe "solve_widelane_filter_baseline_epochs/3" do
+    test "sequentially fixes narrow-lane DDs with wide-lane fixed up front" do
+      epochs =
+        @sat_positions
+        |> Enum.with_index()
+        |> Enum.map(fn {positions, idx} ->
+          synthetic_dual_baseline_epoch(@base, @truth_baseline, positions,
+            epoch: idx,
+            base_clock_m: 70.0 - idx,
+            rover_clock_m: -31.0 + 2.0 * idx,
+            n1_cycles: @fixed_cycles,
+            wide_lane_cycles: @wide_lane_cycles
+          )
+        end)
+
+      assert {:ok, sol} =
+               RTK.solve_widelane_filter_baseline_epochs(@base, epochs,
+                 reference_satellite_id: "G01",
+                 initial_baseline_m: {-40.0, 35.0, 12.0},
+                 wide_lane_tolerance_cycles: 0.01,
+                 filter_kernel: :elixir
+               )
+
+      assert sol.metadata.integer_method == :widelane_narrowlane_sequential
+      assert sol.metadata.wide_lane_fixed
+      assert sol.metadata.wide_lane_ambiguities_cycles == Map.delete(@wide_lane_cycles, "G01")
+
+      # The whole arc is well-conditioned synthetic data; every epoch fixes and
+      # the held baseline lands on truth.
+      assert sol.metadata.fixed_epoch_count == length(epochs)
+      assert List.last(sol.epochs).integer_status == :fixed
+      assert position_error(sol.baseline_m, @truth_baseline) < 1.0e-3
+    end
+
+    test "wide-lane filter is additive: single-frequency filter is unaffected" do
+      # The new entry point shares the sequential machinery but the single
+      # frequency path keeps its scalar-wavelength contract unchanged.
+      dual_epochs =
+        @sat_positions
+        |> Enum.with_index()
+        |> Enum.map(fn {positions, idx} ->
+          synthetic_dual_baseline_epoch(@base, @truth_baseline, positions,
+            epoch: idx,
+            n1_cycles: @fixed_cycles,
+            wide_lane_cycles: @wide_lane_cycles
+          )
+        end)
+
+      assert {:ok, dual} =
+               RTK.solve_widelane_filter_baseline_epochs(@base, dual_epochs,
+                 reference_satellite_id: "G01",
+                 wide_lane_tolerance_cycles: 0.01,
+                 filter_kernel: :elixir
+               )
+
+      assert dual.metadata.integer_method == :widelane_narrowlane_sequential
+
+      # The wide-lane filter derives the ambiguity wavelength internally, so a
+      # caller may not pass it.
+      assert RTK.solve_widelane_filter_baseline_epochs(@base, dual_epochs,
+               ambiguity_wavelength_m: @l1_wavelength_m
+             ) == {:error, {:invalid_option, :ambiguity_wavelength_m}}
+    end
+
+    test "multi-GNSS dual-frequency input is rejected before wide-lane estimation" do
+      e_wide_lane_cycles = %{"E02" => 2, "E11" => -3, "E19" => 1}
+
+      epochs =
+        @sat_positions
+        |> Enum.zip(@extra_sat_positions)
+        |> Enum.with_index()
+        |> Enum.map(fn {{g_positions, extra_positions}, idx} ->
+          positions =
+            extra_positions
+            |> Map.take(Map.keys(@e_cycles))
+            |> Map.merge(g_positions)
+
+          synthetic_dual_baseline_epoch(@base, @truth_baseline, positions,
+            epoch: idx,
+            n1_cycles: Map.merge(@fixed_cycles, @e_cycles),
+            wide_lane_cycles: Map.merge(@wide_lane_cycles, e_wide_lane_cycles)
+          )
+        end)
+
+      assert RTK.solve_widelane_filter_baseline_epochs(@base, epochs,
+               reference_satellite_id: "G01"
+             ) == {:error, {:unsupported_widelane, :multi_gnss}}
+    end
+
+    test "bad inputs are tagged" do
+      assert RTK.solve_widelane_filter_baseline_epochs(@base, []) == {:error, :no_epochs}
+      assert RTK.solve_widelane_filter_baseline_epochs(@base, :nope) == {:error, :invalid_epochs}
+    end
+  end
+
   describe "multi-GNSS per-system references" do
     test "fixed solve recovers per-system references and exact DD integers across G+E" do
       epochs = multignss_epochs(["G", "E"])

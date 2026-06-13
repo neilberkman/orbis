@@ -139,6 +139,9 @@ defmodule Orbis.GNSS.RTK do
   @widelane_baseline_options (@fixed_baseline_options --
                                 [:ambiguity_wavelength_m, :ambiguity_offset_m]) ++
                                @dual_wide_lane_options
+  @widelane_filter_options (@filter_baseline_options --
+                              [:ambiguity_wavelength_m, :ambiguity_offset_m]) ++
+                             @dual_wide_lane_options
   @widelane_delegate_drop_options @dual_wide_lane_options ++
                                     [:ambiguity_wavelength_m, :ambiguity_offset_m]
 
@@ -1233,6 +1236,97 @@ defmodule Orbis.GNSS.RTK do
   end
 
   def solve_widelane_fixed_baseline_epochs(_base_position, _dual_epochs, _opts),
+    do: {:error, :invalid_epochs}
+
+  @doc """
+  Run a dual-frequency (L1/L2) sequential per-epoch fix-and-hold RTK filter.
+
+  This is the sequential sibling of `solve_widelane_fixed_baseline_epochs/3`.
+  The wide-lane double-difference integers are estimated per arc up front by
+  Melbourne-Wubbena averaging (identical to the batch path); the narrow-lane
+  single observable per satellite (wavelength `c/(f1+f2)`, offset
+  `beta*lambda2*N_wl` with the wide-lane integer baked in) is then carried
+  through the existing single-frequency sequential filter
+  (`solve_filter_baseline_epochs/3`) with the per-ambiguity narrow-lane
+  wavelength and offset maps. Removing the ionosphere via the iono-free
+  combination eliminates the residual double-difference ionosphere that biased
+  the single-frequency sequential path.
+
+  Wide-lane fixing remains an arc batch pre-step (wide-lane double-difference
+  ambiguities are arc-constant and Melbourne-Wubbena averaged, which is standard
+  practice and what the oracle config implies). Per-epoch sequential carry of
+  the wide-lane ambiguity as a separate filter state is not implemented here.
+
+  Options are the same as `solve_filter_baseline_epochs/3` (including
+  `:ar_arming_sigma_m`, `:hold_sigma_m`, `:baseline_prior_sigma_m`,
+  `:filter_kernel`, ...), except `:ambiguity_wavelength_m` and
+  `:ambiguity_offset_m` are derived internally, plus the wide-lane options of
+  `solve_widelane_fixed_baseline_epochs/3` (`:wide_lane_min_epochs`,
+  `:wide_lane_tolerance_cycles`, `:on_cycle_slip`, ...).
+
+  This path is intentionally limited to one constellation at a time; multiple
+  constellation letters return `{:error, {:unsupported_widelane, :multi_gnss}}`
+  before wide-lane estimation.
+
+  Returns `{:ok, %FilterBaselineSolution{}}` with `wide_lane_ambiguities_cycles`
+  reported in `metadata`, or a tagged error.
+  """
+  @spec solve_widelane_filter_baseline_epochs(
+          ecef_input(),
+          [dual_frequency_baseline_epoch()],
+          keyword()
+        ) :: {:ok, FilterBaselineSolution.t()} | {:error, term()}
+  def solve_widelane_filter_baseline_epochs(base_position, dual_epochs, opts \\ [])
+
+  def solve_widelane_filter_baseline_epochs(base_position, dual_epochs, opts)
+      when is_list(dual_epochs) do
+    with :ok <- validate_options(opts, @widelane_filter_options),
+         {:ok, base} <- Types.normalize_ecef(base_position, :invalid_base_position),
+         :ok <- ensure_nonempty_epochs(dual_epochs),
+         {:ok, normalized_dual_epochs} <- normalize_dual_baseline_epochs(dual_epochs),
+         :ok <- ensure_single_widelane_system(normalized_dual_epochs),
+         {:ok, prepared_dual_epochs, slip_meta} <-
+           prepare_dual_baseline_cycle_slips(normalized_dual_epochs, opts),
+         {:ok, common_sats, _dropped_sats} <- common_epoch_sats(prepared_dual_epochs),
+         :ok <- ensure_baseline_satellites(common_sats),
+         {:ok, reference_sat} <-
+           baseline_reference_satellite(common_sats, opts, base, prepared_dual_epochs),
+         {:ok, wide_lane_cycles} <-
+           estimate_dual_baseline_wide_lanes(prepared_dual_epochs, reference_sat, opts),
+         {:ok, if_epochs, wavelengths, offsets} <-
+           ionosphere_free_baseline_epochs(
+             prepared_dual_epochs,
+             reference_sat,
+             wide_lane_cycles
+           ),
+         filter_opts =
+           opts
+           |> Keyword.drop(@widelane_delegate_drop_options)
+           |> Keyword.put(:reference_satellite_id, reference_sat)
+           |> Keyword.put(:ambiguity_wavelength_m, wavelengths)
+           |> Keyword.put(:ambiguity_offset_m, offsets),
+         {:ok, %FilterBaselineSolution{} = sol} <-
+           solve_filter_baseline_epochs(base_position, if_epochs, filter_opts) do
+      used_wide_lane_cycles =
+        Map.take(wide_lane_cycles, Map.get(sol.metadata, :physical_sats, []))
+
+      {:ok,
+       %{
+         sol
+         | metadata:
+             Map.merge(sol.metadata, %{
+               integer_method: :widelane_narrowlane_sequential,
+               wide_lane_fixed: true,
+               wide_lane_ambiguities_cycles: used_wide_lane_cycles,
+               dropped_cycle_slip_sats:
+                 Enum.uniq(sol.metadata.dropped_cycle_slip_sats ++ slip_meta.dropped_sats),
+               split_cycle_slip_arcs: slip_meta.split_arcs
+             })
+       }}
+    end
+  end
+
+  def solve_widelane_filter_baseline_epochs(_base_position, _dual_epochs, _opts),
     do: {:error, :invalid_epochs}
 
   @doc """
