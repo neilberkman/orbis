@@ -135,6 +135,25 @@ defmodule Orbis.GNSS.Positioning do
   @type epoch :: NaiveDateTime.t() | tuple()
 
   @default_initial_guess {0.0, 0.0, 0.0, 0.0}
+  # Mean Earth radius, used to place coarse-search seeds on a near-surface shell.
+  @mean_earth_radius_m 6_371_000.0
+  # Default number of golden-spiral surface seeds when `:coarse_search` is on
+  # without an explicit count. Pinned by the cold-start measurement: 24 seeds
+  # cover the sphere finely enough that at least one lands in the convergence
+  # basin on the GPS-L1 ESBC00DNK epoch, with margin under the 5 m bar.
+  @default_coarse_seeds 24
+  # A coarse-search candidate must keep at least this many satellites, so an
+  # exactly determined (zero degrees of freedom) fit, whose post-fit residual RMS
+  # is near zero regardless of correctness, cannot win the min-RMS selection.
+  @coarse_search_min_used 5
+  # A coarse-search candidate whose post-fit residual RMS exceeds this is the
+  # never-iterated seed pass-through (the kernel's step-tolerance test fires on
+  # iteration 0 when the first step is tiny relative to a ~6.4e6 m wrong seed, so
+  # the seed is returned flagged converged with a multi-megametre residual RMS).
+  # Real single-frequency SPP residual RMS is a few metres, so this generous
+  # ceiling excludes only the false positive and never a true fix; the candidate
+  # is dropped from selection rather than silently returned.
+  @coarse_search_max_residual_rms_m 1_000.0
   @default_alpha {0.0, 0.0, 0.0, 0.0}
   @default_beta {0.0, 0.0, 0.0, 0.0}
   # Standard-atmosphere surface meteorology, used when the troposphere term is
@@ -166,6 +185,18 @@ defmodule Orbis.GNSS.Positioning do
     * `:relative_humidity` - relative humidity fraction `[0, 1]` (default `0.5`)
     * `:initial_guess` - `{x_m, y_m, z_m, b_m}` start point (default all zeros)
     * `:with_geodetic` - also return the geodetic position (default `true`)
+    * `:coarse_search` - cold-start robustification for a degraded or absent
+      position prior (default `nil` = off, exact single solve from
+      `:initial_guess`). The solver's elevation mask and weights are frozen at
+      the seed geometry, so a seed far from the true surface point (the
+      `{0,0,0,0}` earth-center default, an antipodal last-known fix) either
+      starves on the horizon or returns the seed flagged converged. When set,
+      the solve is run from a deterministic set of near-surface seeds and the
+      best redundant fix is selected, so no hardcoded seed is needed. Accepts
+      `true` (the default seed count), an integer seed count, or a keyword list
+      `[seeds: n]`. Each seed is one extra `solve` of the cheap, deterministic
+      crate kernel, so the cost is `n` times the single-solve cost; leave it off
+      on the hot path where a good prior is already known.
 
   A mixed GPS+Galileo+BeiDou+GLONASS observation set is solved together with one
   receiver clock per GNSS (an inter-system bias is the difference between a
@@ -207,33 +238,153 @@ defmodule Orbis.GNSS.Positioning do
 
       obs = Enum.map(observations, fn {sat, pr} -> {sat, pr / 1.0} end)
 
-      args = [
-        handle,
-        obs,
-        t_rx_j2000_s,
-        sod,
-        doy,
-        to_tuple4(initial_guess),
-        apply_iono,
-        apply_tropo,
-        to_tuple4(alpha),
-        to_tuple4(beta),
-        pressure / 1.0,
-        temperature / 1.0,
-        humidity / 1.0,
-        with_geodetic
-      ]
+      shared = %{
+        source: source,
+        handle: handle,
+        obs: obs,
+        t_rx_j2000_s: t_rx_j2000_s,
+        sod: sod,
+        doy: doy,
+        apply_iono: apply_iono,
+        apply_tropo: apply_tropo,
+        alpha: alpha,
+        beta: beta,
+        pressure: pressure,
+        temperature: temperature,
+        humidity: humidity,
+        with_geodetic: with_geodetic
+      }
 
-      result =
-        case source do
-          :sp3 -> apply(NIF, :spp_solve, args)
-          :broadcast -> apply(NIF, :spp_solve_broadcast, args)
-        end
-
-      decode(result)
+      case coarse_search_count(Keyword.get(opts, :coarse_search)) do
+        nil -> single_solve(shared, initial_guess)
+        n -> coarse_search_solve(shared, initial_guess, n)
+      end
     end
   rescue
     e in ErlangError -> {:error, e.original}
+  end
+
+  # One crate solve from a single seed, exactly the original single-call path.
+  defp single_solve(shared, initial_guess) do
+    args = [
+      shared.handle,
+      shared.obs,
+      shared.t_rx_j2000_s,
+      shared.sod,
+      shared.doy,
+      to_tuple4(initial_guess),
+      shared.apply_iono,
+      shared.apply_tropo,
+      to_tuple4(shared.alpha),
+      to_tuple4(shared.beta),
+      shared.pressure / 1.0,
+      shared.temperature / 1.0,
+      shared.humidity / 1.0,
+      shared.with_geodetic
+    ]
+
+    result =
+      case shared.source do
+        :sp3 -> apply(NIF, :spp_solve, args)
+        :broadcast -> apply(NIF, :spp_solve_broadcast, args)
+      end
+
+    decode(result)
+  end
+
+  # Cold-start path: solve once from each near-surface seed (plus the caller's
+  # own `:initial_guess`, in case it is already good) and select the best
+  # redundant fix. Returns the same `{:ok, Solution}` / `{:error, reason}`
+  # contract as the single solve; the error is the last seed's error if no seed
+  # produced a usable fix.
+  defp coarse_search_solve(shared, initial_guess, n) do
+    seeds = [initial_guess | coarse_seeds(n)]
+
+    {candidates, last_error} =
+      Enum.reduce(seeds, {[], {:error, :no_coarse_solution}}, fn seed, {acc, last} ->
+        case single_solve(shared, seed) do
+          {:ok, %Solution{} = sol} -> {[sol | acc], last}
+          {:error, _reason} = err -> {acc, err}
+        end
+      end)
+
+    case select_coarse_candidate(candidates) do
+      nil -> last_error
+      %Solution{} = sol -> {:ok, sol}
+    end
+  end
+
+  # Keep only converged, redundant candidates, then pick the fix that uses the
+  # most satellites, tie-broken by smallest post-fit residual RMS and then GDOP.
+  #
+  # The selection rule is the load-bearing, non-obvious result of the cold-start
+  # measurement. A plain min-RMS rule is wrong twice over: an exactly determined
+  # fit (zero degrees of freedom) has near-zero residual RMS regardless of
+  # correctness, and even among redundant fits, dropping satellites lowers RMS
+  # without lowering the true error, so min-RMS systematically prefers a smaller,
+  # more biased satellite subset. Ranking on `n_used` first selects the fix that
+  # explains the most observations, which on the GPS-L1 ESBC00DNK epoch is the
+  # one closest to truth; the `@coarse_search_min_used` floor still excludes the
+  # degenerate near-determined fits.
+  defp select_coarse_candidate(candidates) do
+    candidates
+    |> Enum.filter(fn sol ->
+      sol.metadata.converged and length(sol.used_sats) >= @coarse_search_min_used and
+        residual_rms(sol) <= @coarse_search_max_residual_rms_m
+    end)
+    |> case do
+      [] -> nil
+      eligible -> Enum.min_by(eligible, &{-length(&1.used_sats), residual_rms(&1), gdop(&1)})
+    end
+  end
+
+  defp residual_rms(%Solution{residuals_m: []}), do: :infinity
+
+  defp residual_rms(%Solution{residuals_m: residuals}) do
+    n = length(residuals)
+    :math.sqrt(Enum.reduce(residuals, 0.0, fn r, acc -> acc + r * r end) / n)
+  end
+
+  defp gdop(%Solution{dop: %{gdop: g}}), do: g
+  defp gdop(%Solution{dop: nil}), do: :infinity
+
+  # Deterministic near-surface seeds on a golden-spiral (Fibonacci) lattice at
+  # mean Earth radius, clock bias zero. The lattice depends only on the seed
+  # count, never on the answer, so the search carries no hardcoded prior.
+  defp coarse_seeds(n) when n >= 1 do
+    golden = :math.pi() * (3.0 - :math.sqrt(5.0))
+
+    for i <- 0..(n - 1) do
+      z = 1.0 - 2.0 * (i + 0.5) / n
+      r = :math.sqrt(max(0.0, 1.0 - z * z))
+      theta = golden * i
+      x = r * :math.cos(theta)
+      y = r * :math.sin(theta)
+
+      {@mean_earth_radius_m * x, @mean_earth_radius_m * y, @mean_earth_radius_m * z, 0.0}
+    end
+  end
+
+  # Normalize the `:coarse_search` option to a seed count, or nil when off.
+  defp coarse_search_count(nil), do: nil
+  defp coarse_search_count(false), do: nil
+  defp coarse_search_count(true), do: @default_coarse_seeds
+  defp coarse_search_count(n) when is_integer(n) and n >= 1, do: n
+
+  defp coarse_search_count(opts) when is_list(opts) do
+    case Keyword.get(opts, :seeds, @default_coarse_seeds) do
+      n when is_integer(n) and n >= 1 ->
+        n
+
+      other ->
+        raise ArgumentError,
+              "coarse_search :seeds must be a positive integer, got #{inspect(other)}"
+    end
+  end
+
+  defp coarse_search_count(other) do
+    raise ArgumentError,
+          "coarse_search must be nil, a boolean, a positive integer, or [seeds: n], got #{inspect(other)}"
   end
 
   # --- decoding ------------------------------------------------------------

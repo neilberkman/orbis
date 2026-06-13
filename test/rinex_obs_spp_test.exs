@@ -69,6 +69,140 @@ defmodule Orbis.GNSS.RINEX.ObservationsSppTest do
     assert err < 5.0
   end
 
+  describe "coarse cold-start (:coarse_search)" do
+    # The convergence-basin capability: recover the surveyed position from a
+    # degraded or absent prior, with no hardcoded seed. The truth is the same
+    # RINEX APPROX POSITION the first test trusts; the declared tolerance is the
+    # pre-registered 5 m bar (single-frequency SPP floor here is about 2 m).
+    setup do
+      obs = Observations.load!(@obs_path)
+      eph = Broadcast.load!(@nav_path)
+      {truth_x, truth_y, truth_z} = Observations.approx_position(obs)
+      [%{index: index, epoch: epoch} | _] = Observations.epochs(obs)
+      {:ok, prs} = Observations.pseudoranges(obs, index, codes: %{"G" => ["C1C"]})
+      assert length(prs) >= 6
+
+      base_opts = [
+        ionosphere: true,
+        troposphere: true,
+        klobuchar_alpha: @gps_alpha,
+        klobuchar_beta: @gps_beta
+      ]
+
+      {:ok,
+       eph: eph, prs: prs, epoch: epoch, truth: {truth_x, truth_y, truth_z}, base_opts: base_opts}
+    end
+
+    defp err_3d(%{position: p}, {tx, ty, tz}) do
+      :math.sqrt((p.x_m - tx) ** 2 + (p.y_m - ty) ** 2 + (p.z_m - tz) ** 2)
+    end
+
+    test "converges from the earth-center default prior with no hardcoded seed", ctx do
+      # Without :coarse_search the {0,0,0,0} default returns the seed flagged
+      # converged at ~6.36e6 m (the kernel step-tolerance test fires on iteration
+      # 0). The coarse search must instead land on the true fix.
+      assert {:ok, baseline} =
+               Positioning.solve(ctx.eph, ctx.prs, ctx.epoch, ctx.base_opts)
+
+      assert err_3d(baseline, ctx.truth) > 1.0e6
+
+      assert {:ok, sol} =
+               Positioning.solve(
+                 ctx.eph,
+                 ctx.prs,
+                 ctx.epoch,
+                 Keyword.put(ctx.base_opts, :coarse_search, true)
+               )
+
+      assert sol.metadata.converged
+      assert length(sol.used_sats) >= 5
+      assert err_3d(sol, ctx.truth) <= 5.0
+    end
+
+    test "converges from an antipodal prior that starves the single solve", ctx do
+      {tx, ty, tz} = ctx.truth
+      antipodal = {-tx, -ty, -tz, 0.0}
+
+      # The single solve from the antipodal seed drops every satellite below the
+      # frozen horizon and returns too-few-satellites.
+      assert {:error, {:too_few_satellites, 0, 4}} =
+               Positioning.solve(
+                 ctx.eph,
+                 ctx.prs,
+                 ctx.epoch,
+                 Keyword.put(ctx.base_opts, :initial_guess, antipodal)
+               )
+
+      # The coarse search recovers the true fix regardless of the bad prior.
+      assert {:ok, sol} =
+               Positioning.solve(
+                 ctx.eph,
+                 ctx.prs,
+                 ctx.epoch,
+                 ctx.base_opts
+                 |> Keyword.put(:initial_guess, antipodal)
+                 |> Keyword.put(:coarse_search, true)
+               )
+
+      assert sol.metadata.converged
+      assert err_3d(sol, ctx.truth) <= 5.0
+    end
+
+    test "an explicit seed count is honored and meets the bar", ctx do
+      for n <- [12, 24] do
+        assert {:ok, sol} =
+                 Positioning.solve(
+                   ctx.eph,
+                   ctx.prs,
+                   ctx.epoch,
+                   Keyword.put(ctx.base_opts, :coarse_search, seeds: n)
+                 )
+
+        assert sol.metadata.converged
+        assert length(sol.used_sats) >= 5
+        assert err_3d(sol, ctx.truth) <= 5.0
+      end
+    end
+
+    test "coarse_search off is identical to the plain single solve", ctx do
+      good_prior =
+        Keyword.put(ctx.base_opts, :initial_guess, {
+          elem(ctx.truth, 0) + 30_000.0,
+          elem(ctx.truth, 1) - 20_000.0,
+          elem(ctx.truth, 2) + 25_000.0,
+          0.0
+        })
+
+      assert {:ok, plain} = Positioning.solve(ctx.eph, ctx.prs, ctx.epoch, good_prior)
+
+      assert {:ok, off} =
+               Positioning.solve(
+                 ctx.eph,
+                 ctx.prs,
+                 ctx.epoch,
+                 Keyword.put(good_prior, :coarse_search, nil)
+               )
+
+      # Byte-for-byte identical: the off path runs exactly one solve from the
+      # caller's seed, with no scorer or extra seeds in the way.
+      assert off.position == plain.position
+      assert off.rx_clock_s == plain.rx_clock_s
+      assert off.residuals_m == plain.residuals_m
+      assert off.used_sats == plain.used_sats
+    end
+
+    test "an invalid :coarse_search value is rejected", ctx do
+      assert_raise ArgumentError, fn ->
+        Positioning.solve(
+          ctx.eph,
+          ctx.prs,
+          ctx.epoch,
+          Keyword.put(ctx.base_opts, :coarse_search, 0)
+        )
+      end
+    end
+  end
+
   test "pseudoranges/3 accepts an epoch tuple as well as an index" do
     obs = Observations.load!(@obs_path)
     [%{index: index, epoch: epoch} | _] = Observations.epochs(obs)
