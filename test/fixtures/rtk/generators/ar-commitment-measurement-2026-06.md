@@ -78,12 +78,14 @@ of this plateau.
 
 Two honest caveats:
 
-- The clean pass pairs arming with the interim soft hold (hold sigma 1.0e-3),
-  which removes the sibling capability-3 singularity. Both are opt-in options
-  with unchanged defaults; the proper capability-3 fix (a gauge constraint
-  replacing the 1e8 hold-weight hammer) is specified and measured separately.
-  With the shipped default hold, arming still produces correct integers but
-  the population is throttled by the sub-arc resets (sweep A).
+- Sweep B uses the interim soft hold (hold sigma 1.0e-3) to isolate arming
+  from the sibling epoch-124 singularity. That singularity is now fixed by the
+  single-system SD gauge constraint (capability 3, gauge-constraint-spec.md and
+  gauge-constraint-measurement-2026-06.md): on the DEFAULT hold the continuous
+  arc solves and the arming clean pass reproduces sweep B (104 fixed, median
+  0.0297 m, final 0.0234 m), so no soft-hold crutch is needed. Sweep A
+  (default hold, no gauge) is retained as the pre-gauge record of the sub-arc
+  confound.
 - The sequential per-epoch float median for the armed cells is 0.40 m, worse
   than the 0.1455 m whole-arc batch float. This is the sequential float
   reality on this poor-early-geometry arc, not a regression: arming gates only

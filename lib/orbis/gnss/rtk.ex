@@ -5570,7 +5570,7 @@ defmodule Orbis.GNSS.RTK do
          prior_state,
          hold_sigma_m
        )
-       when map_size(refs) > 1 do
+       when map_size(refs) >= 1 do
     weight = 1.0 / (hold_sigma_m * hold_sigma_m)
     available = epoch_sats(epoch)
 

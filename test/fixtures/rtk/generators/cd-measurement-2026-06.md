@@ -273,3 +273,25 @@ handling) ahead of further physics terms for the sequential path; the
 remaining ledger terms (iono ~`0.03m`, tides) still matter for the batch
 ratio refusal, which sits at `1.40` against the `3.0` bar with correct
 integers in hand.
+
+## Resolution (2026-06-12): capabilities 1 and 3 landed
+
+Both sequential-path capabilities the addenda named are now implemented,
+reference-first and kernel-ported with === parity gates:
+
+- Capability 1, AR commitment arming gate (`:ar_arming_sigma_m`):
+  ar-commitment-spec.md / ar-commitment-measurement-2026-06.md. Withholds the
+  ambiguity search until the baseline posterior sigma converges, so the filter
+  stops committing the early wrong integers.
+- Capability 3, single-system SD gauge constraint:
+  gauge-constraint-spec.md / gauge-constraint-measurement-2026-06.md. Drops the
+  multi-system-only guard on the existing reference-SD gauge, removing the
+  epoch-124 singularity on the default hold.
+
+Together, on the default hold (1.0e-4) the continuous PASA/SCOA L1 arc solves
+240/240 and the fixed population passes the Amendment 1 invariant: 104 fixed,
+median `0.0297m`, final `0.0234m`, beating the RTKLIB oracle final `0.052m`.
+The wrong-fix poisoning measured in Phase 2 was the cost of premature
+commitment plus the gauge cancellation, not missing station physics. The
+remaining ledger terms (iono ~`0.03m`, tides) still target the batch ratio
+refusal, separately.

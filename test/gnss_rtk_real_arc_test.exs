@@ -626,8 +626,10 @@ defmodule Orbis.GNSS.RTKRealArcTest do
 
     epochs = real_gps_l1_rtk_epochs(sp3, base_obs, rover_obs, oracle["reference"]["epochs"])
 
-    # Soft hold removes the sibling epoch-124 singularity so the full arc solves
-    # continuously on both kernels; arming withholds the early wrong-integer fixes.
+    # Default hold: the single-system SD gauge constraint removes the epoch-124
+    # singularity so the full arc solves continuously on both kernels; arming
+    # withholds the early wrong-integer fixes. This is the clean pass with no
+    # soft-hold crutch.
     opts = [
       initial_baseline_m: initial_baseline,
       max_iterations: 10,
@@ -639,7 +641,6 @@ defmodule Orbis.GNSS.RTKRealArcTest do
       ambiguity_wavelength_m: @gps_l1_wavelength_m,
       integer_ratio_threshold: 3.0,
       integer_candidate_limit: 200_000,
-      hold_sigma_m: 1.0e-3,
       ar_arming_sigma_m: 0.05
     ]
 
@@ -666,6 +667,46 @@ defmodule Orbis.GNSS.RTKRealArcTest do
 
     median = Enum.at(fixed_errors, div(length(fixed_errors), 2))
     assert median <= 0.214
+  end
+
+  @tag timeout: 180_000
+  test "PASA/SCOA single-system gauge lets the default-hold arc solve, bit-exact across kernels" do
+    oracle = @pasa_scoa_l1_oracle_path |> File.read!() |> Jason.decode!()
+    repo = Path.expand("..", __DIR__)
+    truth = oracle["truth"]
+    inputs = oracle["inputs"]
+
+    base_ecef = ecef_json_to_tuple(truth["base_station"]["marker_ecef_m"])
+    sp3 = SP3.load!(Path.join(repo, inputs["sp3"]))
+    base_obs = Observations.load!(Path.join(repo, inputs["base_obs"]))
+    rover_obs = Observations.load!(Path.join(repo, inputs["rover_obs"]))
+    initial_baseline = sub3(Observations.approx_position(rover_obs), base_ecef)
+
+    epochs = real_gps_l1_rtk_epochs(sp3, base_obs, rover_obs, oracle["reference"]["epochs"])
+
+    # No soft hold, no arming: bare default-hold continuous solve. Without the
+    # single-system gauge this errors with {:singular_geometry, epoch_index: 124}.
+    opts = [
+      initial_baseline_m: initial_baseline,
+      max_iterations: 10,
+      on_cycle_slip: :split_arc,
+      elevation_mask_deg: 15.0,
+      stochastic_model: :rtklib,
+      code_sigma_m: 0.3,
+      phase_sigma_m: 0.003,
+      ambiguity_wavelength_m: @gps_l1_wavelength_m,
+      integer_ratio_threshold: 3.0,
+      integer_candidate_limit: 200_000
+    ]
+
+    assert {:ok, elixir_sol} =
+             RTK.solve_filter_baseline_epochs(base_ecef, epochs, opts ++ [filter_kernel: :elixir])
+
+    assert {:ok, rust_sol} =
+             RTK.solve_filter_baseline_epochs(base_ecef, epochs, opts ++ [filter_kernel: :rust])
+
+    assert length(elixir_sol.epochs) == oracle["reference"]["epochs"]
+    assert_filter_kernel_trace_exact(rust_sol, elixir_sol)
   end
 
   @tag timeout: 600_000
