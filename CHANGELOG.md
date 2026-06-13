@@ -6,6 +6,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-06-13
+
+### Added
+
+- `Orbis.GNSS.RTK.solve_widelane_filter_baseline_epochs/3`: a dual-frequency
+  (L1/L2) sequential RTK filter. It resolves the Melbourne-Wubbena wide-lane
+  integers per arc, forms the ionosphere-free narrow-lane observable, and runs
+  the sequential fix-and-hold filter (including the convergence arming gate and
+  the SD gauge constraint) on it. On the vendored PASA/SCOA L1/L2 arc it solves
+  continuously and reaches a centimeter-class fixed solution. Available on both
+  the Rust and Elixir kernels.
+
+### Documentation
+
+- Documented the `:ar_arming_sigma_m` convergence arming gate option and why it
+  is opt-in by default.
+- README install version, feature-table wording, and the example livebooks
+  refreshed; the livebooks now install the hex release so they run from the
+  Run-in-Livebook badge without a Rust toolchain.
+
 ## [0.22.0] - 2026-06-12
 
 ### Added

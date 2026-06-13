@@ -295,3 +295,22 @@ The wrong-fix poisoning measured in Phase 2 was the cost of premature
 commitment plus the gauge cancellation, not missing station physics. The
 remaining ledger terms (iono ~`0.03m`, tides) still target the batch ratio
 refusal, separately.
+
+## Negative result (2026-06-13): iono + tides do not lift the batch ratio
+
+A pass over differential ionosphere and solid-earth tides as a way to push the
+batch fixed ratio past 3.0 returned a null, recorded here so it is not
+re-attempted. The PASA/SCOA L1 oracle modeled broadcast Klobuchar iono
+(pos1-ionoopt=brdc), whose double difference is sub-cm on this short baseline,
+so matching the oracle adds essentially no iono signal; applied as a dispersive
+term it moves the batch ratio the wrong way (1.40 to 1.06), not toward 3.0.
+Solid-earth tides cannot be implemented honestly today: neither orbis nor
+astrodynamics carries a DEHANTTIDEINEL algorithm or a Sun/Moon ephemeris (the
+vendored tides golden is four oracle-only cases, not an algorithm). The
+decisive evidence that physics is not the lever: RTKLIB's own dual-frequency
+oracle, with tides on and iono eliminated by the ionosphere-free combination,
+still ends at ratio 1.5 in float on this arc. The ratio gap is a
+hold-accumulation property, addressed by the sequential arming gate and the SD
+gauge constraint (already shipped), not by these two single-arc physics terms.
+The terms remain real and would matter on longer baselines; they are simply not
+what validates a fix here.
