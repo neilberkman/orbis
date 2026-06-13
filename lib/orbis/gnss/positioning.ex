@@ -73,7 +73,10 @@ defmodule Orbis.GNSS.Positioning do
     contributing satellite id strings (e.g. `"G01"`); `rejected_sats` pairs each
     excluded satellite id with its reason atom (`:no_ephemeris` or
     `:low_elevation`). `metadata` reports solver iterations, convergence, and
-    which corrections were applied.
+    which corrections were applied; when the solve was run with `:robust`, it
+    also carries an `:fde` entry, `%{excluded: [{sat, :raim_excluded}],
+    iterations: n}`, listing the satellites the fault-detection-and-exclusion
+    loop removed.
     """
     @enforce_keys [
       :position,
@@ -108,11 +111,15 @@ defmodule Orbis.GNSS.Positioning do
             tdop: float()
           }
     @type metadata :: %{
-            iterations: non_neg_integer(),
-            converged: boolean(),
-            status: atom(),
-            ionosphere_applied: boolean(),
-            troposphere_applied: boolean()
+            :iterations => non_neg_integer(),
+            :converged => boolean(),
+            :status => atom(),
+            :ionosphere_applied => boolean(),
+            :troposphere_applied => boolean(),
+            optional(:fde) => %{
+              excluded: [{String.t(), :raim_excluded}],
+              iterations: non_neg_integer()
+            }
           }
 
     @type t :: %__MODULE__{
@@ -167,6 +174,39 @@ defmodule Orbis.GNSS.Positioning do
     * `:initial_guess` - `{x_m, y_m, z_m, b_m}` start point (default all zeros)
     * `:with_geodetic` - also return the geodetic position (default `true`)
 
+  ### Robustness (opt-in, default off)
+
+  These options add measurement-integrity handling on top of the crate solve.
+  Both default to the off value, so omitting them reproduces the bare solve
+  exactly.
+
+    * `:robust` - when `true` (default `false`), route the solve through the
+      `Orbis.GNSS.QC` leave-one-out fault-detection-and-exclusion (FDE) loop: a
+      chi-square RAIM test on the post-fit residuals flags an inconsistent set,
+      the satellite with the largest normalized residual is excluded, and the
+      position is re-solved, repeating until the set is self-consistent or the
+      geometry runs out of redundancy. A clean set excludes nothing and is
+      identical to the bare solve. The returned `Solution` carries the FDE
+      summary at `solution.metadata.fde` as
+      `%{excluded: [{sat, :raim_excluded}], iterations: n}`. The `:p_fa` and
+      `:weights` options below tune the RAIM test; all other options are
+      forwarded unchanged to every re-solve.
+    * `:p_fa` - false-alarm probability for the `:robust` RAIM test (default
+      `1.0e-3`); ignored when `:robust` is not set. See `Orbis.GNSS.QC.raim/2`.
+    * `:weights` - RAIM detection weights for the `:robust` test, `:unit`
+      (default) or a `%{sat => inverse_variance_weight}` map as built by
+      `Orbis.GNSS.QC.weight_vector/2` (e.g. from per-satellite elevation and
+      C/N0). These weights sharpen which satellite is identified as the worst;
+      they do not change the underlying crate solve numerics. Ignored when
+      `:robust` is not set.
+    * `:max_pdop` - degenerate-geometry guard (default `nil`, off). After the
+      solve, if the geometry is rank-deficient (`solution.dop == nil`) or its
+      PDOP exceeds this threshold, the solve returns
+      `{:error, {:degenerate_geometry, pdop}}` (with `pdop == nil` for the
+      rank-deficient case) instead of `{:ok, weak_fix}`. A typical operational
+      threshold from the literature is PDOP `> 6` marginal, `> 20` unusable;
+      pick per application.
+
   A mixed GPS+Galileo+BeiDou+GLONASS observation set is solved together with one
   receiver clock per GNSS (an inter-system bias is the difference between a
   system's clock and the reference system's), and dilution of precision is
@@ -175,20 +215,87 @@ defmodule Orbis.GNSS.Positioning do
   Returns `{:ok, %Orbis.GNSS.Positioning.Solution{}}` or `{:error, reason}`,
   where `reason` is one of `{:too_few_satellites, used, required}` (`required` is
   `3 + n_systems`), `:singular_geometry`, `{:duplicate_observation, sat}`,
-  `{:ephemeris_lost, sat}`, or `{:ionosphere_unsupported, sat}` (the ionosphere
-  correction was requested for a system with no modeled single-frequency carrier).
+  `{:ephemeris_lost, sat}`, `{:ionosphere_unsupported, sat}` (the ionosphere
+  correction was requested for a system with no modeled single-frequency
+  carrier), or `{:degenerate_geometry, pdop}` (the `:max_pdop` guard rejected a
+  weak or rank-deficient geometry).
   """
   @spec solve(SP3.t() | Broadcast.t(), [observation()], epoch(), keyword()) ::
           {:ok, Solution.t()} | {:error, term()}
   def solve(source, observations, epoch, opts \\ [])
 
-  def solve(%SP3{handle: handle}, observations, epoch, opts) when is_list(observations) do
-    run_solve(:sp3, handle, observations, epoch, opts)
+  def solve(%SP3{} = source, observations, epoch, opts) when is_list(observations) do
+    dispatch(source, observations, epoch, opts)
   end
 
-  def solve(%Broadcast{handle: handle}, observations, epoch, opts) when is_list(observations) do
-    run_solve(:broadcast, handle, observations, epoch, opts)
+  def solve(%Broadcast{} = source, observations, epoch, opts) when is_list(observations) do
+    dispatch(source, observations, epoch, opts)
   end
+
+  # Robustness wrapper. `:robust` and `:max_pdop` are Elixir-side, additive, and
+  # default off; when neither is set this is a single bare crate solve, bit
+  # identical to the pre-robustness path. `:robust` routes the solve through the
+  # FDE loop; `:max_pdop` rejects a weak or rank-deficient geometry. Both the
+  # robustness options are stripped before the crate marshalling and before the
+  # FDE re-solves, so the inner solves are plain and FDE cannot recurse into
+  # itself.
+  defp dispatch(source, observations, epoch, opts) do
+    robust = Keyword.get(opts, :robust, false)
+    max_pdop = Keyword.get(opts, :max_pdop)
+    core_opts = Keyword.drop(opts, [:robust, :p_fa, :weights, :max_pdop])
+
+    result =
+      if robust do
+        fde_solve(source, observations, epoch, opts, core_opts)
+      else
+        bare_solve(source, observations, epoch, core_opts)
+      end
+
+    apply_pdop_guard(result, max_pdop)
+  end
+
+  # Delegate to the existing leave-one-out FDE loop, forwarding only the RAIM
+  # options it understands plus the plain solve options. The FDE result's
+  # exclusion ledger is folded into the returned solution's metadata so a caller
+  # of `solve/4` sees what was dropped without reaching for `QC.fde/4` directly.
+  defp fde_solve(source, observations, epoch, opts, core_opts) do
+    raim_opts = Keyword.take(opts, [:p_fa, :weights])
+    fde_opts = Keyword.merge(core_opts, raim_opts)
+
+    case Orbis.GNSS.QC.fde(source, observations, epoch, fde_opts) do
+      {:ok, %{solution: solution, excluded: excluded, iterations: iterations}} ->
+        metadata = Map.put(solution.metadata, :fde, %{excluded: excluded, iterations: iterations})
+        {:ok, %{solution | metadata: metadata}}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp bare_solve(%SP3{handle: handle}, observations, epoch, opts),
+    do: run_solve(:sp3, handle, observations, epoch, opts)
+
+  defp bare_solve(%Broadcast{handle: handle}, observations, epoch, opts),
+    do: run_solve(:broadcast, handle, observations, epoch, opts)
+
+  # Degenerate-geometry guard. Off by default (`nil`): the solve result passes
+  # through untouched. With a threshold, a rank-deficient geometry (`dop == nil`)
+  # or one whose PDOP exceeds the threshold is converted into a tagged refusal
+  # rather than a silently returned weak fix.
+  defp apply_pdop_guard(result, nil), do: result
+
+  defp apply_pdop_guard({:ok, %Solution{dop: nil}}, _max_pdop),
+    do: {:error, {:degenerate_geometry, nil}}
+
+  defp apply_pdop_guard({:ok, %Solution{dop: %{pdop: pdop}}} = result, max_pdop) do
+    if pdop > max_pdop do
+      {:error, {:degenerate_geometry, pdop}}
+    else
+      result
+    end
+  end
+
+  defp apply_pdop_guard(other, _max_pdop), do: other
 
   defp run_solve(source, handle, observations, epoch, opts) do
     with {:ok, t_rx_j2000_s} <- j2000_seconds(epoch) do

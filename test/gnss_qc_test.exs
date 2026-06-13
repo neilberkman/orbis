@@ -224,6 +224,145 @@ defmodule Orbis.GNSS.QCTest do
     end
   end
 
+  describe "Positioning.solve robust (FDE in the solve path)" do
+    test "robust on a clean set is bit-identical to the bare solve and excludes nothing", ctx do
+      assert {:ok, bare} = Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts)
+
+      assert {:ok, robust} =
+               Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, [robust: true] ++ @solve_opts)
+
+      # Default-off invariant: with no fault the robust path is the same fix.
+      assert robust.position == bare.position
+      assert robust.rx_clock_s == bare.rx_clock_s
+      assert robust.used_sats == bare.used_sats
+      assert robust.metadata.fde == %{excluded: [], iterations: 0}
+    end
+
+    setup ctx do
+      biased_sat = elem(Enum.at(ctx.clean_obs, 4), 0)
+      {:ok, biased_sat: biased_sat}
+    end
+
+    test "robust excludes a biased satellite the bare solve would silently keep", ctx do
+      faulted_obs =
+        Enum.map(ctx.clean_obs, fn {sat, pr} ->
+          if sat == ctx.biased_sat, do: {sat, pr + 200.0}, else: {sat, pr}
+        end)
+
+      # Bare solve: the outlier is kept and biases the fix.
+      assert {:ok, bare} = Positioning.solve(ctx.sp3, faulted_obs, @epoch, @solve_opts)
+      bare_error = position_error(bare)
+
+      # Robust solve: the outlier is detected and removed, recovering the fix.
+      assert {:ok, robust} =
+               Positioning.solve(ctx.sp3, faulted_obs, @epoch, [robust: true] ++ @solve_opts)
+
+      assert robust.metadata.fde.excluded == [{ctx.biased_sat, :raim_excluded}]
+      assert robust.metadata.fde.iterations == 1
+
+      robust_error = position_error(robust)
+      assert robust_error < bare_error
+      assert robust_error < 1.0e-2
+    end
+
+    test "robust forwards :p_fa to the RAIM test without raising on a clean set", ctx do
+      assert {:ok, robust} =
+               Positioning.solve(
+                 ctx.sp3,
+                 ctx.clean_obs,
+                 @epoch,
+                 [robust: true, p_fa: 1.0e-6] ++ @solve_opts
+               )
+
+      assert robust.metadata.fde.excluded == []
+    end
+  end
+
+  describe "Gate 1: FDE exclusion correctness across a labelled bias sweep" do
+    setup ctx do
+      {:ok, clean} = Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts)
+      {:ok, clean_error: position_error(clean)}
+    end
+
+    # The biased satellite must localize (its post-fit residual must be the
+    # largest) for the largest-normalized-residual exclusion to name it; index 4
+    # is empirically the localizing satellite for this fixture/epoch, as in the
+    # existing +200 m test above.
+    test "each injected bias is the exactly-excluded sat and the fix recovers", ctx do
+      biased_sat = elem(Enum.at(ctx.clean_obs, 4), 0)
+
+      for bias_m <- [50.0, 100.0, 200.0, 500.0] do
+        faulted_obs =
+          Enum.map(ctx.clean_obs, fn {sat, pr} ->
+            if sat == biased_sat, do: {sat, pr + bias_m}, else: {sat, pr}
+          end)
+
+        assert {:ok, robust} =
+                 Positioning.solve(ctx.sp3, faulted_obs, @epoch, [robust: true] ++ @solve_opts)
+
+        assert robust.metadata.fde.excluded == [{biased_sat, :raim_excluded}],
+               "bias #{bias_m} m: expected exactly #{biased_sat} excluded"
+
+        assert position_error(robust) <= ctx.clean_error + 0.5,
+               "bias #{bias_m} m: recovered error exceeded clean + 0.5 m"
+      end
+    end
+
+    test "zero false exclusions on the clean set", ctx do
+      assert {:ok, robust} =
+               Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, [robust: true] ++ @solve_opts)
+
+      assert robust.metadata.fde.excluded == []
+      assert position_error(robust) <= ctx.clean_error + 1.0e-9
+    end
+  end
+
+  describe "Gate 3: degenerate-geometry guard (:max_pdop)" do
+    test "default (no :max_pdop) never refuses a converged fix", ctx do
+      assert {:ok, _sol} = Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts)
+    end
+
+    test "a generous threshold passes the same solution as the unguarded solve", ctx do
+      assert {:ok, bare} = Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts)
+      assert bare.dop != nil
+
+      assert {:ok, guarded} =
+               Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, [max_pdop: 1.0e6] ++ @solve_opts)
+
+      assert guarded.position == bare.position
+      assert guarded.dop == bare.dop
+    end
+
+    test "a threshold below the realized PDOP refuses with a tagged error", ctx do
+      assert {:ok, bare} = Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts)
+      pdop = bare.dop.pdop
+
+      # A threshold just under the realized PDOP must trip the guard.
+      assert {:error, {:degenerate_geometry, reported_pdop}} =
+               Positioning.solve(
+                 ctx.sp3,
+                 ctx.clean_obs,
+                 @epoch,
+                 [max_pdop: pdop * 0.999] ++ @solve_opts
+               )
+
+      assert_in_delta reported_pdop, pdop, 1.0e-9
+    end
+
+    test "the guard composes with :robust", ctx do
+      assert {:ok, bare} = Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts)
+      pdop = bare.dop.pdop
+
+      assert {:error, {:degenerate_geometry, _pdop}} =
+               Positioning.solve(
+                 ctx.sp3,
+                 ctx.clean_obs,
+                 @epoch,
+                 [robust: true, max_pdop: pdop * 0.999] ++ @solve_opts
+               )
+    end
+  end
+
   describe "raim/2 option validation" do
     test "an out-of-range p_fa raises ArgumentError, not an obscure math error", ctx do
       assert {:ok, sol} = Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts)
