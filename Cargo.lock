@@ -23,7 +23,8 @@ dependencies = [
 [[package]]
 name = "astrodynamics"
 version = "0.9.0"
-source = "git+https://github.com/neilberkman/astrodynamics.git?rev=f79359e#f79359eb6adb8c2243f19d35188022a0a77d9243"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0221eaf7e5b01aec23e72a20d315e2bdfb9e09b63b598b2380ce3177ad5ef53c"
 dependencies = [
  "cc",
  "nalgebra",
@@ -33,8 +34,9 @@ dependencies = [
 
 [[package]]
 name = "astrodynamics-gnss"
-version = "0.13.0"
-source = "git+https://github.com/neilberkman/astrodynamics.git?rev=f79359e#f79359eb6adb8c2243f19d35188022a0a77d9243"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "221d934784d92647d63920ac24d15c0266698635d3fcd09f89079b56c864ea6e"
 dependencies = [
  "astrodynamics",
  "nalgebra",

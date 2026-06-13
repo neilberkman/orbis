@@ -6,6 +6,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-06-12
+
+### Added
+
+- `Orbis.GNSS.RTK.solve_filter_baseline_epochs/3` accepts an opt-in
+  `ar_arming_sigma_m` convergence arming gate: the per-epoch ambiguity search
+  is attempted only once the baseline-block posterior standard deviation has
+  converged to at most the threshold, so the sequential filter stops committing
+  integers while the float state is still too loose to support a
+  half-wavelength decision. The default (unset) preserves the always-armed
+  behavior. Implemented in both kernels with a per-epoch bit-equality gate.
+
+### Changed
+
+- The reference single-difference ambiguity gauge constraint now applies to
+  single-system arcs (previously multi-system only). The reference SD ambiguity
+  is an unobservable gauge degree of freedom in any system count; on a long
+  single-system arc with tight integer holds its pivot otherwise cancels to
+  zero (a `:singular_geometry` failure). The gauge is a double-difference
+  null-space constraint, so baselines and double differences are unchanged, but
+  single-system sequential filter numerics now include it. Together with the
+  arming gate, the continuous real-arc L1 filter resolves centimeter-class
+  fixed solutions on the default ambiguity-hold sigma.
+
 ## [0.21.0] - 2026-06-12
 
 ### Added
