@@ -1338,14 +1338,6 @@ defmodule Orbis.GNSS.RTKTest do
                filter_kernel: :python
              ) == {:error, {:invalid_option, :filter_kernel}}
 
-      assert RTK.solve_filter_baseline_epochs(
-               @base,
-               [epoch],
-               ambiguity_wavelength_m: @l1_wavelength_m,
-               filter_kernel: :rust,
-               receiver_antenna_corrections: receiver_antenna_corrections_option(0.10, 0.05)
-             ) == {:error, {:unsupported_filter_kernel, :receiver_antenna_corrections}}
-
       assert RTK.solve_filter_baseline_epochs(@base, [epoch],
                ambiguity_wavelength_m: @l1_wavelength_m,
                dynamics_model: :bad
@@ -1400,6 +1392,41 @@ defmodule Orbis.GNSS.RTKTest do
 
       assert sol.metadata.filter_kernel == :elixir
       assert position_error(sol.baseline_m, @truth_baseline) < 2.0e-4
+    end
+
+    test "Rust filter kernel matches Elixir with up-only receiver antenna corrections" do
+      base_pco_up_m = 0.10
+      rover_pco_up_m = 0.05
+
+      epochs =
+        @sat_positions
+        |> Enum.take(3)
+        |> Enum.map(fn positions ->
+          synthetic_baseline_epoch(@base, @truth_baseline, positions)
+        end)
+        |> Enum.map(
+          &apply_receiver_antenna_corrections_to_epoch(
+            &1,
+            base_pco_up_m,
+            rover_pco_up_m
+          )
+        )
+
+      opts = [
+        reference_satellite_id: "G01",
+        ambiguity_wavelength_m: @l1_wavelength_m,
+        initial_baseline_m: {-40.0, 35.0, 12.0},
+        receiver_antenna_corrections:
+          receiver_antenna_corrections_option(base_pco_up_m, rover_pco_up_m)
+      ]
+
+      assert {:ok, elixir_sol} =
+               RTK.solve_filter_baseline_epochs(@base, epochs, opts ++ [filter_kernel: :elixir])
+
+      assert {:ok, rust_sol} =
+               RTK.solve_filter_baseline_epochs(@base, epochs, opts ++ [filter_kernel: :rust])
+
+      assert_filter_kernel_trace_exact(rust_sol, elixir_sol)
     end
   end
 
@@ -1914,6 +1941,27 @@ defmodule Orbis.GNSS.RTKTest do
     assert z === tz
   end
 
+  defp assert_filter_kernel_trace_exact(rust_sol, elixir_sol) do
+    assert Map.delete(rust_sol.metadata, :filter_kernel) ===
+             Map.delete(elixir_sol.metadata, :filter_kernel)
+
+    assert rust_sol.fixed_ambiguities_cycles === elixir_sol.fixed_ambiguities_cycles
+    assert length(rust_sol.epochs) == length(elixir_sol.epochs)
+    assert_exact_ecef_map(rust_sol.baseline_m, elixir_sol.baseline_m)
+
+    for {rust_epoch, elixir_epoch} <- Enum.zip(rust_sol.epochs, elixir_sol.epochs) do
+      assert rust_epoch.epoch === elixir_epoch.epoch
+      assert rust_epoch.index === elixir_epoch.index
+      assert_exact_ecef_map(rust_epoch.baseline_m, elixir_epoch.baseline_m)
+      assert rust_epoch.integer_status === elixir_epoch.integer_status
+      assert rust_epoch.integer_ratio === elixir_epoch.integer_ratio
+      assert rust_epoch.residuals_m === elixir_epoch.residuals_m
+      assert rust_epoch.newly_fixed_ambiguities === elixir_epoch.newly_fixed_ambiguities
+      assert rust_epoch.fixed_ambiguities === elixir_epoch.fixed_ambiguities
+      assert rust_epoch.innovation_screen === elixir_epoch.innovation_screen
+    end
+  end
+
   defp nonzero_off_diagonal?(matrix) do
     matrix
     |> Enum.with_index()
@@ -2208,7 +2256,6 @@ defmodule Orbis.GNSS.RTKTest do
     end
   end
 
-  defp scale3({x, y, z}, s), do: {x * s, y * s, z * s}
   defp dot3({ax, ay, az}, {bx, by, bz}), do: ax * bx + ay * by + az * bz
 
   defp sagnac_range(sat_pos, receiver) do

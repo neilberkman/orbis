@@ -783,10 +783,7 @@ defmodule Orbis.GNSS.RTK do
   defp validate_filter_kernel_receiver_corrections(:elixir, _receiver_antenna_corrections),
     do: :ok
 
-  defp validate_filter_kernel_receiver_corrections(:rust, nil), do: :ok
-
-  defp validate_filter_kernel_receiver_corrections(:rust, _receiver_antenna_corrections),
-    do: {:error, {:unsupported_filter_kernel, :receiver_antenna_corrections}}
+  defp validate_filter_kernel_receiver_corrections(:rust, _receiver_antenna_corrections), do: :ok
 
   defp receiver_antenna_corrections(opts) do
     case Keyword.get(opts, :receiver_antenna_corrections) do
@@ -4723,7 +4720,8 @@ defmodule Orbis.GNSS.RTK do
            rust_model_term(weights),
            rust_wavelengths,
            rust_offsets,
-           rust_update_opts_term(filter_opts, solve_opts, integer_opts, float_only_systems)
+           rust_update_opts_term(filter_opts, solve_opts, integer_opts, float_only_systems),
+           rust_receiver_antenna_corrections_term(receiver_antenna_corrections)
          ) do
       {:ok, updates} ->
         epochs
@@ -4758,8 +4756,8 @@ defmodule Orbis.GNSS.RTK do
   end
 
   defp apply_rust_filter_update(
-         {rust_state, reported_baseline, ratio, fixed?, newly_fixed_sd, fixed_sd_ids,
-          innovation_screen},
+         {rust_state, reported_baseline, reported_sd_ambiguities, ratio, fixed?, newly_fixed_sd,
+          fixed_sd_ids, innovation_screen},
          base,
          epoch,
          refs,
@@ -4775,7 +4773,15 @@ defmodule Orbis.GNSS.RTK do
            rust_filter_state_to_elixir(rust_state),
          # The carried state keeps the float baseline; the reported solution is
          # the kernel's ambiguity-conditioned baseline (matches the Elixir path).
-         report_state = %{state | baseline: reported_baseline},
+         reported_sd_ambiguities =
+           reported_sd_ambiguities ||
+             Enum.map(sd_ambiguity_ids, &Map.fetch!(state.ambiguities, &1)),
+         true <- length(reported_sd_ambiguities) == length(sd_ambiguity_ids),
+         report_state = %{
+           state
+           | baseline: reported_baseline,
+             ambiguities: sd_ambiguity_ids |> Enum.zip(reported_sd_ambiguities) |> Map.new()
+         },
          {:ok, fixed_cycles} <-
            rust_sd_fixed_map_to_dd_ids(
              sd_fixed_cycles,
@@ -4854,6 +4860,9 @@ defmodule Orbis.GNSS.RTK do
            rust_state: rust_state,
            epochs: [epoch_result | acc.epochs]
        }}
+    else
+      false -> {:error, {:invalid_rust_filter_state, :reported_ambiguity_dimension}}
+      {:error, _reason} = err -> err
     end
   end
 
@@ -4974,6 +4983,31 @@ defmodule Orbis.GNSS.RTK do
 
   defp rust_innovation_screen_sigma(%{enabled?: true, threshold_sigma: threshold}), do: threshold
   defp rust_innovation_screen_sigma(_screen), do: 0.0
+
+  defp rust_receiver_antenna_corrections_term(nil), do: nil
+
+  defp rust_receiver_antenna_corrections_term(%{base: base, rover: rover}) do
+    {
+      rust_receiver_antenna_correction_term(base),
+      rust_receiver_antenna_correction_term(rover)
+    }
+  end
+
+  defp rust_receiver_antenna_correction_term(%{antenna: antenna, frequency: frequency}) do
+    frequency_block = Map.fetch!(antenna.frequencies, String.trim(frequency))
+
+    {noazi, azi} =
+      Enum.reduce(frequency_block.pcv_samples, {[], []}, fn
+        %{grid: :noazi, zenith_deg: zenith_deg, value_m: value_m}, {noazi, azi} ->
+          {[{zenith_deg, value_m} | noazi], azi}
+
+        %{grid: :azi, azimuth_deg: azimuth_deg, zenith_deg: zenith_deg, value_m: value_m},
+        {noazi, azi} ->
+          {noazi, [{azimuth_deg, zenith_deg, value_m} | azi]}
+      end)
+
+    {frequency_block.pco_m, Enum.reverse(noazi), Enum.reverse(azi)}
+  end
 
   defp rust_innovation_screen_meta(nil), do: nil
 

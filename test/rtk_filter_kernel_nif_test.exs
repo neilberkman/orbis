@@ -45,16 +45,26 @@ defmodule Orbis.RTKFilterKernelNIFTest do
                model,
                wavelengths,
                offsets,
-               opts
+               opts,
+               nil
              )
 
     assert {:error, {:missing_wavelength, "G02"}} =
-             NIF.rtk_filter_update_epoch(state, epoch, base, model, [], offsets, opts)
+             NIF.rtk_filter_update_epoch(state, epoch, base, model, [], offsets, opts, nil)
 
     assert {:ok,
-            {next_state, reported_baseline, ratio, true, ["G02", "G03", "G04", "G05"], fixed_ids,
-             nil}} =
-             NIF.rtk_filter_update_epoch(state, epoch, base, model, wavelengths, offsets, opts)
+            {next_state, reported_baseline, _reported_ambiguities, ratio, true,
+             ["G02", "G03", "G04", "G05"], fixed_ids, nil}} =
+             NIF.rtk_filter_update_epoch(
+               state,
+               epoch,
+               base,
+               model,
+               wavelengths,
+               offsets,
+               opts,
+               nil
+             )
 
     assert ratio >= 3.0
     assert fixed_ids == ["G02", "G03", "G04", "G05"]
@@ -72,7 +82,9 @@ defmodule Orbis.RTKFilterKernelNIFTest do
              abs(metres - expected * lambda) < 1.0e-9
            end)
 
-    assert {:ok, {second_state, _second_reported, second_ratio, true, [], ^fixed_ids, nil}} =
+    assert {:ok,
+            {second_state, _second_reported, _second_reported_ambiguities, second_ratio, true, [],
+             ^fixed_ids, nil}} =
              NIF.rtk_filter_update_epoch(
                next_state,
                epoch,
@@ -80,7 +92,8 @@ defmodule Orbis.RTKFilterKernelNIFTest do
                model,
                wavelengths,
                offsets,
-               opts
+               opts,
+               nil
              )
 
     assert second_ratio == 0.0
@@ -121,9 +134,10 @@ defmodule Orbis.RTKFilterKernelNIFTest do
 
     assert {:ok,
             [
-              {first_state, first_reported, first_ratio, true, ["G02", "G03", "G04", "G05"],
-               first_fixed_ids, nil},
-              {second_state, _second_reported, second_ratio, true, [], second_fixed_ids, nil}
+              {first_state, first_reported, _first_reported_ambiguities, first_ratio, true,
+               ["G02", "G03", "G04", "G05"], first_fixed_ids, nil},
+              {second_state, _second_reported, _second_reported_ambiguities, second_ratio, true,
+               [], second_fixed_ids, nil}
             ]} =
              NIF.rtk_filter_update_epochs(
                state,
@@ -132,7 +146,8 @@ defmodule Orbis.RTKFilterKernelNIFTest do
                model,
                wavelengths,
                offsets,
-               opts
+               opts,
+               nil
              )
 
     assert first_ratio >= 3.0
