@@ -2,7 +2,7 @@
 
 ```elixir
 Mix.install([
-  {:orbis, path: ".."}
+  {:orbis, "~> 0.22"}
 ])
 ```
 

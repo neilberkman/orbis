@@ -2,7 +2,7 @@
 
 ```elixir
 Mix.install([
-  {:orbis, github: "neilberkman/orbis"},
+  {:orbis, "~> 0.22"},
   {:kino, "~> 0.14"},
   {:kino_maplibre, "~> 0.1"}
 ])

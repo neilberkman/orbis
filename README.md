@@ -20,11 +20,11 @@ SGP4/SDP4, coordinate transforms, GNSS positioning, orbit determination, and the
 | **Coordinate transforms**  | TEME, GCRS, ITRS, geodetic, topocentric — 0 ULP Skyfield parity (Rust NIF)                                                                                                                                                                                                                                      |
 | **Ground station**         | Pass prediction, look angles, Doppler shift, RF link budget                                                                                                                                                                                                                                                     |
 | **Orbit determination**    | Gibbs, Herrick-Gibbs, Gauss angles-only, Lambert/Battin (Rust NIF)                                                                                                                                                                                                                                              |
-| **Conjunction assessment** | Closest approach finder validated against the Iridium 33 / Cosmos 2251 collision                                                                                                                                                                                                                                |
+| **Conjunction assessment** | Closest-approach finder (validated against the Iridium 33 / Cosmos 2251 collision), collision probability (Foster equal-area and numerical), CCSDS CDM parsing, and catalog screening                                                                                                                            |
 | **Eclipse prediction**     | Sunlit / penumbra / umbra with shadow fraction                                                                                                                                                                                                                                                                  |
 | **Atmospheric density**    | NRLMSISE-00 model, surface to ~1000 km (Rust NIF)                                                                                                                                                                                                                                                               |
 | **JPL ephemeris**          | SPK/BSP reader for Sun, Moon, planets (Rust NIF)                                                                                                                                                                                                                                                                |
-| **GNSS positioning**       | Single-point positioning from SP3 or broadcast ephemeris — GPS, Galileo, BeiDou, GLONASS — plus single/multi-epoch carrier-phase positioning, integer ambiguity fixing, partial ambiguity resolution, and RTK baseline solving. The sequential RTK filter defaults to the Rust NIF, with `:elixir` retained as the bit-identical reference implementation |
+| **GNSS positioning**       | Single-point positioning from SP3 or broadcast ephemeris — GPS, Galileo, BeiDou, GLONASS — plus carrier-phase positioning, integer ambiguity fixing (LAMBDA, with partial ambiguity resolution), and RTK baseline solving: float, integer-fixed, and a sequential fix-and-hold filter                            |
 | **GNSS ephemeris & data**  | SP3 precise products (read, multi-source merge across analysis centers, and write back out) plus broadcast-vs-precise orbit/clock accuracy checks, RINEX 3.x/4.xx broadcast navigation, GNSS constellation catalogs, and optional SP3/CLK/NAV/IONEX fetch/cache from public archives                            |
 | **GNSS observations**      | RINEX 3 observation parsing with Hatanaka (CRINEX) decoding — raw observation values, carrier phases, pseudoranges, and station positioning from `.crx`/`.rnx` files (Rust NIF)                                                                                                                                 |
 | **Reduced orbit**          | Compact fitted mean-element model (circular or eccentric) for fast approximate position, caching, and transport — with source-backed drift reporting (Rust NIF)                                                                                                                                                 |
@@ -40,7 +40,7 @@ SGP4/SDP4, coordinate transforms, GNSS positioning, orbit determination, and the
 
 ```elixir
 def deps do
-  [{:orbis, "~> 0.16.0"}]
+  [{:orbis, "~> 0.22"}]
 end
 ```
 
@@ -143,6 +143,9 @@ for {tca_min, distance_km} <- approaches do
   IO.puts("TCA: +#{Float.round(tca_min / 60, 1)}h, miss: #{Float.round(distance_km, 2)} km")
 end
 ```
+
+For collision probability from a CCSDS CDM and catalog-wide screening, see
+[`examples/conjunction_alert.livemd`](examples/conjunction_alert.livemd).
 
 ### RF Link Budget
 

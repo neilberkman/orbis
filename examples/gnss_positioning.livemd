@@ -2,7 +2,7 @@
 
 ```elixir
 Mix.install([
-  {:orbis, github: "neilberkman/orbis"},
+  {:orbis, "~> 0.22"},
   # Optional: only needed for fetching products over HTTPS via Orbis.GNSS.Data.
   {:req, "~> 0.5"}
 ])
