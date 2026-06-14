@@ -500,4 +500,92 @@ defmodule Orbis.GNSS.QCTest do
       assert_raise ArgumentError, fn -> QC.raim(sol, weights: bad_weights) end
     end
   end
+
+  describe "solve/4 :huber contract" do
+    test "huber:true with no overrides solves (uses the validated 5 m scale-floor default)",
+         ctx do
+      # A clean synthetic set has no outliers, so Huber is a no-op here; the point
+      # is that the default opt-in path is accepted and returns a fix using the
+      # validated default rather than a neutered 1 m floor.
+      assert {:ok, sol} =
+               Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts ++ [huber: true])
+
+      assert position_error(sol) < 1.0e-2
+    end
+
+    test "omitting :huber is byte-identical to huber: false (whole Solution)", ctx do
+      assert {:ok, a} = Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts)
+
+      assert {:ok, b} =
+               Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts ++ [huber: false])
+
+      # The additive-off guarantee covers the ENTIRE decoded solution, not just
+      # the position: clock(s), DOP, residuals, used/rejected sets, and metadata
+      # must match exactly. The off path carries no :huber metadata key at all
+      # (it is surfaced only when the reweighting actually runs), so both solves
+      # produce byte-identical structs.
+      assert a == b
+      refute Map.has_key?(a.metadata, :huber)
+    end
+
+    test "huber: true surfaces :huber metadata (outer_iterations + final_scale_m)", ctx do
+      assert {:ok, sol} =
+               Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts ++ [huber: true])
+
+      assert %{outer_iterations: outer, final_scale_m: scale} = sol.metadata.huber
+      assert is_integer(outer) and outer >= 0
+      assert is_float(scale) and scale > 0.0
+    end
+
+    test "malformed :huber options return tagged errors, never raise", ctx do
+      base = @solve_opts ++ [huber: true]
+
+      assert Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts ++ [huber: :yes]) ==
+               {:error, {:invalid_option, :huber}}
+
+      assert Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, base ++ [huber_k: :bad]) ==
+               {:error, {:invalid_option, :huber_k}}
+
+      assert Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, base ++ [huber_sigma: 0.0]) ==
+               {:error, {:invalid_option, :huber_sigma}}
+
+      assert Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, base ++ [huber_max_iter: 5.0]) ==
+               {:error, {:invalid_option, :huber_max_iter}}
+    end
+
+    test "an out-of-range :huber_max_iter is rejected (DoS cap), never raises", ctx do
+      base = @solve_opts ++ [huber: true]
+
+      # The value becomes the crate outer-loop count; an unbounded value is a
+      # denial-of-service knob, so reject above the cap rather than honor it.
+      assert Positioning.solve(
+               ctx.sp3,
+               ctx.clean_obs,
+               @epoch,
+               base ++ [huber_max_iter: 1_000_000]
+             ) ==
+               {:error, {:invalid_option, :huber_max_iter}}
+    end
+
+    test "malformed :robust returns a tagged error, never raises", ctx do
+      assert Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts ++ [robust: :yes]) ==
+               {:error, {:invalid_option, :robust}}
+    end
+
+    test "robust and huber are mutually exclusive", ctx do
+      weights = Map.new(ctx.clean_obs, fn {sat, _pr} -> {sat, 1.0 / 25.0} end)
+
+      assert Positioning.solve(
+               ctx.sp3,
+               ctx.clean_obs,
+               @epoch,
+               @solve_opts ++ [robust: true, weights: weights, huber: true]
+             ) == {:error, {:incompatible_options, [:robust, :huber]}}
+    end
+
+    test "QC.fde/4 refuses huber: true rather than forwarding it into re-solves", ctx do
+      assert QC.fde(ctx.sp3, ctx.clean_obs, @epoch, huber: true) ==
+               {:error, {:incompatible_options, [:robust, :huber]}}
+    end
+  end
 end

@@ -65,9 +65,16 @@ solves on IDENTICAL inputs and identical seed/troposphere settings:
   * A = bare (static elevation-weighted, `:huber` off);
   * B = Huber-on (`:huber true` with the declared `k` / `scale_floor_m`).
 
-Report per arc and pooled: n (solved/matched), 3D median, 3D p95, horizontal
-median, horizontal p95 for bare vs Huber, plus delta, against the demo5 absolute
-context. Sample floor 100 epochs/arc (arcs carry ~1554).
+Epoch stride 1 (every matched epoch, ~1554/arc); no decimation. Every epoch's
+outcome is tallied (both-ok, bare-only, huber-only, both-error); error stats are
+over both-ok epochs and a Huber-only failure (bare ok, Huber error) is an
+availability regression that fails the strict bar, never a silently dropped
+epoch. Strict bar: powered (n >= 100), no availability regression, and Huber 3D
+median <= bare AND Huber 3D p95 <= bare on every arc.
+
+Report per arc and pooled: n (solved/matched), the outcome counts, 3D median, 3D
+p95, horizontal median, horizontal p95 for bare vs Huber, plus delta, against the
+demo5 absolute context.
 
 ## Strict bar (declared before measuring)
 

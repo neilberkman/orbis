@@ -147,7 +147,10 @@ fn atom_from<'a>(env: Env<'a>, name: &str) -> Term<'a> {
 ///  [residual_m, ...],                    # post-fit residuals, used_sats order
 ///  ["G01", ...],                         # used satellites
 ///  [{"G07", :low_elevation}, ...],       # rejected satellites + reason atom
-///  {iterations, converged, status, ionosphere_applied, troposphere_applied},
+///  {iterations, converged, status,       # solver metadata, plus the opt-in
+///   ionosphere_applied, troposphere_applied,
+///   outer_iterations,                    # Huber/IRLS outer reweighting count (0 off)
+///   final_robust_scale_m | nil},         # final MAD robust scale, nil off the robust path
 ///  [{"G", clock_s}, {"E", clock_s}]}     # per-system receiver clocks, seconds
 /// ```
 fn encode_solution<'a>(env: Env<'a>, sol: &ReceiverSolution) -> Term<'a> {
@@ -186,6 +189,10 @@ fn encode_solution<'a>(env: Env<'a>, sol: &ReceiverSolution) -> Term<'a> {
         .collect();
 
     let status = atom_from(env, status_atom_name(sol.metadata.status));
+    let final_robust_scale: Term<'a> = match sol.metadata.final_robust_scale_m {
+        Some(scale) => scale.encode(env),
+        None => atom::nil().encode(env),
+    };
     let metadata = make_tuple(
         env,
         &[
@@ -194,6 +201,8 @@ fn encode_solution<'a>(env: Env<'a>, sol: &ReceiverSolution) -> Term<'a> {
             status,
             sol.metadata.ionosphere_applied.encode(env),
             sol.metadata.troposphere_applied.encode(env),
+            (sol.metadata.outer_iterations as i64).encode(env),
+            final_robust_scale,
         ],
     );
 

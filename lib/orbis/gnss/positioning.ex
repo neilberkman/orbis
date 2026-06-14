@@ -77,7 +77,10 @@ defmodule Orbis.GNSS.Positioning do
     `systems`, the `redundancy` (degrees of freedom, `used_count - (3 + systems)`),
     and `raim_checkable?` (`redundancy >= 1`). An exactly determined fix has
     `redundancy < 1`, forcing the residuals near zero and leaving the fix
-    unverifiable by RAIM.
+    unverifiable by RAIM. When the opt-in `:huber` reweighting runs, `metadata`
+    also carries `:huber` with the `outer_iterations` count and the
+    `final_scale_m` (the last MAD robust scale in meters); the key is absent on
+    the default static path.
     """
     @enforce_keys [
       :position,
@@ -124,6 +127,10 @@ defmodule Orbis.GNSS.Positioning do
             optional(:fde) => %{
               excluded: [{String.t(), :raim_excluded}],
               iterations: non_neg_integer()
+            },
+            optional(:huber) => %{
+              outer_iterations: non_neg_integer(),
+              final_scale_m: float()
             }
           }
 
@@ -157,6 +164,24 @@ defmodule Orbis.GNSS.Positioning do
   # seeds cover the sphere finely enough that at least one lands in the
   # convergence basin on the ESBC00DNK GPS-L1 arc, with margin under the bar.
   @default_coarse_seeds 24
+  # Default crate-layer Huber/IRLS tuning, used when :huber is on and the caller
+  # does not override. k = 1.345 is the textbook ~95%-efficiency Huber constant.
+  @default_huber_k 1.345
+  # MAD-scale floor in metres. Matches the value the GSDC measurement validated
+  # (huber-irls-measurement-2026-06.md): a 5 m floor sets the down-weighting knee
+  # at the metre-class noise of cheap single-frequency receivers. A 1 m floor
+  # would start down-weighting around 1.3 m and neuter the robustness on phone
+  # data, so the public default must be the validated 5 m.
+  @default_huber_sigma 5.0
+  @default_huber_max_iter 5
+  # Upper bound on a caller-supplied :huber_max_iter. The value is the crate
+  # outer-loop cap (a Rust usize); robust IRLS converges in a handful of outer
+  # solves, so anything beyond this is a denial-of-service knob, not tuning.
+  @huber_max_iter_cap 100
+  # Upper bound on the :huber_k / :huber_sigma tuning values. k is dimensionless
+  # and near 1; the scale floor is metres. A value this large is nonsensical, and
+  # the cap also keeps a huge integer from raising on float coercion downstream.
+  @huber_param_cap 1.0e6
   # A genuinely converged single-point fix has post-fit residuals at the
   # measurement-noise scale (metres to tens of metres). A converged-flagged
   # solution whose post-fit residual RMS exceeds this sanity bound did not
@@ -266,6 +291,18 @@ defmodule Orbis.GNSS.Positioning do
       returns `{:error, {:incompatible_options, [:coarse_search, :robust]}}`. A
       non-positive or non-integer value returns
       `{:error, {:invalid_option, :coarse_search}}`.
+    * `:huber` - when `true` (default `false`), apply opt-in crate-layer
+      Huber/IRLS robust reweighting: the per-satellite weight is recomputed each
+      outer iteration from the post-fit residual (down-weighting large residuals)
+      rather than the FDE all-or-nothing exclusion of `:robust`. On cheap
+      single-frequency phone arcs this improves the fix (see
+      huber-irls-measurement-2026-06.md). Mutually exclusive with `:robust`
+      (`{:error, {:incompatible_options, [:robust, :huber]}}`). Tuning, used only
+      when `:huber` is set: `:huber_k` (Huber constant, default `1.345`),
+      `:huber_sigma` (MAD scale floor in metres, default `5.0`, sized to
+      metre-class single-frequency noise), `:huber_max_iter` (outer-loop cap,
+      default `5`). A malformed `:huber`/`:huber_k`/`:huber_sigma`/`:huber_max_iter`
+      value returns `{:error, {:invalid_option, key}}` before any solve.
 
   Regardless of options, a fix that did not converge to a physical receiver
   position is refused rather than returned: one whose geocentric radius is
@@ -289,13 +326,17 @@ defmodule Orbis.GNSS.Positioning do
   `reason` is the PDOP), `{:implausible_position, radius_m}` (the fix is outside
   the plausible geocentric-radius band), `{:no_convergence, rms_m}` (a
   converged-flagged fix with physically implausible post-fit residual RMS),
-  `{:invalid_option, :max_pdop}`, `{:invalid_option, :coarse_search}`,
+  `{:invalid_option, :max_pdop}`, `{:invalid_option, :robust}`,
+  `{:invalid_option, :coarse_search}`,
   `{:incompatible_options, [:coarse_search, :robust]}`, or, for `:robust`,
   `{:robust_requires_noise_model, :no_weights}` / `{:robust_requires_noise_model, :incomplete_weights}`
   (robust was requested with no realistic noise model, or a weights map that does
   not cover every observed satellite with a positive weight, and no explicit
   unsafe opt-in), `{:invalid_option, :p_fa}`, or `{:fault_unresolved, statistic}`
-  (the FDE loop exhausted its iterations with a fault still flagged).
+  (the FDE loop exhausted its iterations with a fault still flagged). For
+  `:huber`: `{:incompatible_options, [:robust, :huber]}`, or
+  `{:invalid_option, key}` for a malformed `:huber`, `:huber_k`, `:huber_sigma`,
+  or `:huber_max_iter`.
   """
   @spec solve(SP3.t() | Broadcast.t(), [observation()], epoch(), keyword()) ::
           {:ok, Solution.t()} | {:error, term()}
@@ -320,10 +361,20 @@ defmodule Orbis.GNSS.Positioning do
     robust? = Keyword.get(opts, :robust, false)
     huber? = Keyword.get(opts, :huber, false)
     coarse = coarse_search_count(Keyword.get(opts, :coarse_search))
+    huber_opt_error = if huber? == true, do: invalid_huber_opt(opts)
 
     cond do
+      not is_boolean(robust?) ->
+        {:error, {:invalid_option, :robust}}
+
+      not is_boolean(huber?) ->
+        {:error, {:invalid_option, :huber}}
+
       coarse == :invalid ->
         {:error, {:invalid_option, :coarse_search}}
+
+      huber_opt_error != nil ->
+        huber_opt_error
 
       robust? and huber? ->
         # The Elixir-layer FDE (:robust, whole-satellite exclusion) and the
@@ -348,6 +399,40 @@ defmodule Orbis.GNSS.Positioning do
         run_solve(source_tag, handle, observations, epoch, opts)
     end
   end
+
+  # Validate the crate-layer Huber/IRLS option values BEFORE the solve so a
+  # malformed value returns a tagged error from solve/4 rather than raising in
+  # the Elixir arithmetic or sending a nonsensical config into the NIF/crate.
+  defp invalid_huber_opt(opts) do
+    cond do
+      not valid_pos_number(Keyword.get(opts, :huber_k, @default_huber_k)) ->
+        {:error, {:invalid_option, :huber_k}}
+
+      not valid_pos_number(Keyword.get(opts, :huber_sigma, @default_huber_sigma)) ->
+        {:error, {:invalid_option, :huber_sigma}}
+
+      not valid_pos_integer(Keyword.get(opts, :huber_max_iter, @default_huber_max_iter)) ->
+        {:error, {:invalid_option, :huber_max_iter}}
+
+      true ->
+        nil
+    end
+  end
+
+  # A strictly-positive number in the physically sane range for a Huber tuning
+  # constant or a metre-scale floor. BEAM floats are always finite (overflow
+  # raises rather than producing infinity or NaN), but BEAM integers are
+  # arbitrary-precision and still satisfy is_number/1, so an enormous integer
+  # would pass a bare `> 0.0` check and then raise on the `/ 1.0` float coercion
+  # in huber_arg/1. The cap rejects it as a tagged error instead, honoring the
+  # "never raises" contract; anything above it is nonsensical tuning regardless.
+  defp valid_pos_number(v) when is_float(v), do: v > 0.0 and v <= @huber_param_cap
+  defp valid_pos_number(v) when is_integer(v), do: v > 0 and v <= @huber_param_cap
+  defp valid_pos_number(_), do: false
+  # A positive integer capped at @huber_max_iter_cap: the value becomes the
+  # crate outer-loop count (decoded to a Rust usize), so an unbounded value is a
+  # denial-of-service knob, not a useful tuning.
+  defp valid_pos_integer(v), do: is_integer(v) and v > 0 and v <= @huber_max_iter_cap
 
   # :robust routes through the QC leave-one-out FDE loop. A realistic noise model
   # is required: unit-weight FDE treats ordinary code noise as faults and
@@ -589,14 +674,6 @@ defmodule Orbis.GNSS.Positioning do
     e in ErlangError -> {:error, e.original}
   end
 
-  # Default crate-layer Huber tuning, used when :huber is on and the caller does
-  # not override. `k = 1.345` is the textbook ~95%-efficiency Huber constant;
-  # `sigma` is the MAD scale floor (m), sized to metre-class single-frequency
-  # code noise; `max_iter` caps the outer reweighting loop.
-  @default_huber_k 1.345
-  @default_huber_sigma 1.0
-  @default_huber_max_iter 5
-
   # The crate `robust` NIF argument: `nil` (off, byte-identical to the static
   # elevation-weighted solve) unless `:huber` is set, in which case a
   # `{huber_k, scale_floor_m, max_outer}` tuple drives the opt-in outer IRLS.
@@ -759,14 +836,26 @@ defmodule Orbis.GNSS.Positioning do
   defp dop_map({gdop, pdop, hdop, vdop, tdop}),
     do: %{gdop: gdop, pdop: pdop, hdop: hdop, vdop: vdop, tdop: tdop}
 
-  defp metadata_map({iterations, converged, status, iono, tropo}) do
-    %{
+  defp metadata_map(
+         {iterations, converged, status, iono, tropo, outer_iterations, final_robust_scale_m}
+       ) do
+    base = %{
       iterations: iterations,
       converged: converged,
       status: status,
       ionosphere_applied: iono,
       troposphere_applied: tropo
     }
+
+    # The crate only sets a robust scale when the Huber/IRLS loop actually ran,
+    # so `final_robust_scale_m` is `nil` on the default static path. Surfacing
+    # :huber only in that case keeps the off-path metadata byte-identical to the
+    # pre-Huber shape (no :huber key) while exposing the outer-loop diagnostics
+    # when :huber engages, mirroring how :robust surfaces its FDE ledger.
+    case final_robust_scale_m do
+      nil -> base
+      scale -> Map.put(base, :huber, %{outer_iterations: outer_iterations, final_scale_m: scale})
+    end
   end
 
   # --- helpers -------------------------------------------------------------

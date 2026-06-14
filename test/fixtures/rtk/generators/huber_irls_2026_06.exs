@@ -13,8 +13,8 @@ defmodule HuberIrls202606 do
   #
   # Run from the orbis worktree root:
   #   ORBIS_BUILD=1 mix run test/fixtures/rtk/generators/huber_irls_2026_06.exs
-  # Options: --work DIR (default /tmp/gsdc-work), --results FILE, --report FILE,
-  #          --stride N.
+  # Options: --work DIR (default /tmp/gsdc-work), --results FILE, --report FILE.
+  # Every matched epoch is measured (no decimation), per the pre-registered spec.
 
   alias Orbis.GNSS.Broadcast
   alias Orbis.GNSS.Positioning
@@ -39,7 +39,6 @@ defmodule HuberIrls202606 do
 
   # Declared up-front gate parameters (see huber-irls-spec.md).
   @min_epochs 100
-  @credibility_factor 2.0
   # Huber tuning, frozen in the spec.
   @huber_k 1.345
   # MAD scale floor (m): the realistic phone L1 code sigma, the load-bearing
@@ -50,7 +49,7 @@ defmodule HuberIrls202606 do
   def main(args) do
     {opts, _argv, invalid} =
       OptionParser.parse(args,
-        strict: [work: :string, results: :string, report: :string, stride: :integer],
+        strict: [work: :string, results: :string, report: :string],
         aliases: [w: :work, r: :results]
       )
 
@@ -59,7 +58,6 @@ defmodule HuberIrls202606 do
     generator_dir = __DIR__
     fixture_dir = Path.expand("..", generator_dir)
     work = Keyword.get(opts, :work, @default_work)
-    stride = max(Keyword.get(opts, :stride, 1), 1)
     results_path = Keyword.get(opts, :results, @default_results)
 
     report_path =
@@ -69,16 +67,14 @@ defmodule HuberIrls202606 do
         Path.join(generator_dir, "huber-irls-measurement-2026-06.md")
       )
 
-    arcs = Enum.map(@oracle_fixtures, &measure_arc(fixture_dir, &1, work, stride))
+    arcs = Enum.map(@oracle_fixtures, &measure_arc(fixture_dir, &1, work))
     pooled = pool(arcs)
 
     results = %{
       generated_at: DateTime.utc_now() |> DateTime.to_iso8601(),
       work_dir: work,
-      stride: stride,
       gate_params: %{
         min_epochs: @min_epochs,
-        credibility_factor: @credibility_factor,
         huber_k: @huber_k,
         huber_sigma_m: @huber_sigma_m,
         huber_max_iter: @huber_max_iter
@@ -94,7 +90,7 @@ defmodule HuberIrls202606 do
     print_summary(arcs, pooled)
   end
 
-  defp measure_arc(fixture_dir, fixture, work, stride) do
+  defp measure_arc(fixture_dir, fixture, work) do
     oracle_path = Path.join(fixture_dir, fixture)
     oracle = oracle_path |> File.read!() |> Jason.decode!()
     inputs = oracle["inputs"]
@@ -127,15 +123,17 @@ defmodule HuberIrls202606 do
         oracle_by_key = Map.new(oracle["per_epoch"], &{&1["time"], &1})
         base_arp = base_arp(oracle)
 
-        epochs =
-          rover_obs
-          |> matched_epochs(oracle_by_key)
-          |> Enum.with_index()
-          |> Enum.filter(fn {_e, i} -> rem(i, stride) == 0 end)
-          |> Enum.map(&elem(&1, 0))
+        # Every matched epoch, no decimation (pre-registered spec).
+        epochs = matched_epochs(rover_obs, oracle_by_key)
 
-        rows = Enum.flat_map(epochs, &solve_set(rover_obs, nav, &1, base_arp))
+        all_rows = Enum.flat_map(epochs, &solve_set(rover_obs, nav, &1, base_arp))
+        rows = Enum.filter(all_rows, &(&1.outcome == :both_ok))
+        counts = Enum.frequencies_by(all_rows, & &1.outcome)
+        huber_only_failures = Map.get(counts, :huber_failed, 0)
 
+        # Error stats are over both-ok epochs (the only ones with a comparable
+        # pair); availability is tracked separately so a Huber-only failure
+        # cannot be hidden by dropping the epoch.
         bare = summarize(Enum.map(rows, & &1.bare_3d), Enum.map(rows, & &1.bare_h))
         huber = summarize(Enum.map(rows, & &1.huber_3d), Enum.map(rows, & &1.huber_h))
         demo5 = demo5_summary(oracle["per_epoch"])
@@ -145,16 +143,15 @@ defmodule HuberIrls202606 do
           label: oracle["reference"]["label"],
           matched_epochs: length(epochs),
           solved_epochs: length(rows),
+          outcome_counts: counts,
+          huber_only_failures: huber_only_failures,
           identical_off: Enum.all?(rows, & &1.identical_off?),
-          # Fraction of solved epochs where the Huber fix differs from the bare
-          # fix: direct proof the outer reweighting loop engaged (the crate-side
-          # outer_iterations counter is not surfaced through the NIF, which keeps
-          # the off-path solution tuple byte-identical).
           huber_changed_fraction: changed_fraction(rows),
           bare: bare,
           huber: huber,
           demo5: demo5,
-          verdict: verdict(bare, huber, demo5, length(rows))
+          # A Huber-only availability regression fails the strict bar outright.
+          verdict: verdict(bare, huber, demo5, length(rows), huber_only_failures)
         }
     end
   end
@@ -179,60 +176,70 @@ defmodule HuberIrls202606 do
 
   defp solve_set(rover_obs, nav, %{entry: entry, oracle_epoch: oracle_epoch}, base_arp) do
     {:ok, observations} = Observations.pseudoranges(rover_obs, entry.index, codes: @l1_codes)
+    seed = with_clock(base_arp, 0.0)
 
-    if length(observations) < 5 do
-      []
-    else
-      seed = with_clock(base_arp, 0.0)
+    bare =
+      Positioning.solve(nav, observations, entry.epoch, initial_guess: seed, troposphere: true)
 
-      bare =
-        Positioning.solve(nav, observations, entry.epoch, initial_guess: seed, troposphere: true)
+    # Huber-on: identical inputs/seed/troposphere, opt-in crate IRLS only.
+    huber =
+      Positioning.solve(nav, observations, entry.epoch,
+        initial_guess: seed,
+        troposphere: true,
+        huber: true,
+        huber_k: @huber_k,
+        huber_sigma: @huber_sigma_m,
+        huber_max_iter: @huber_max_iter
+      )
 
-      # Huber-on: identical inputs/seed/troposphere, opt-in crate IRLS only.
-      huber =
-        Positioning.solve(nav, observations, entry.epoch,
-          initial_guess: seed,
-          troposphere: true,
-          huber: true,
-          huber_k: @huber_k,
-          huber_sigma: @huber_sigma_m,
-          huber_max_iter: @huber_max_iter
-        )
+    # Tag EVERY epoch's outcome; never silently drop one-sided failures. A
+    # Huber-only failure (bare ok, huber error) is an availability regression
+    # and must count against the strict bar, not vanish from the distribution.
+    # Both arms attempt the solve (no pre-filter): the solver's own
+    # 3 + n_systems satellite floor decides solvability, so an epoch with fewer
+    # L1 pseudoranges than that is classified :too_few_obs from the actual
+    # too_few_satellites errors, not a guessed observation count.
+    case {bare, huber} do
+      {{:ok, bare_sol}, {:ok, huber_sol}} ->
+        truth = oracle_epoch["truth_ecef_m"]
+        truth_tuple = {truth["x"], truth["y"], truth["z"]}
 
-      case {bare, huber} do
-        {{:ok, bare_sol}, {:ok, huber_sol}} ->
-          truth = oracle_epoch["truth_ecef_m"]
-          truth_tuple = {truth["x"], truth["y"], truth["z"]}
+        [
+          %{
+            outcome: :both_ok,
+            bare_3d: error_3d(bare_sol, truth_tuple),
+            bare_h: error_h(bare_sol, truth_tuple),
+            huber_3d: error_3d(huber_sol, truth_tuple),
+            huber_h: error_h(huber_sol, truth_tuple),
+            huber_changed?: ecef(huber_sol) != ecef(bare_sol),
+            identical_off?: identical_off?(nav, observations, entry.epoch, seed, bare_sol)
+          }
+        ]
 
-          [
-            %{
-              bare_3d: error_3d(bare_sol, truth_tuple),
-              bare_h: error_h(bare_sol, truth_tuple),
-              huber_3d: error_3d(huber_sol, truth_tuple),
-              huber_h: error_h(huber_sol, truth_tuple),
-              # Did the Huber fix move off the bare fix?
-              huber_changed?: ecef(huber_sol) != ecef(bare_sol),
-              # Additive-off cross-check: a SECOND bare solve with :huber false
-              # must be byte-identical to the first bare solve.
-              identical_off?: identical_off?(nav, observations, entry.epoch, seed, bare_sol)
-            }
-          ]
+      {{:ok, _bare_sol}, {:error, _}} ->
+        [%{outcome: :huber_failed}]
 
-        _ ->
-          []
-      end
+      {{:error, _}, {:ok, _huber_sol}} ->
+        [%{outcome: :bare_failed}]
+
+      {{:error, {:too_few_satellites, _, _}}, {:error, {:too_few_satellites, _, _}}} ->
+        [%{outcome: :too_few_obs}]
+
+      _ ->
+        [%{outcome: :both_failed}]
     end
   end
 
-  # Re-solve with an explicit `huber: false` and assert byte-identical ECEF to
-  # the bare solve, proving the default path is unchanged on real data.
+  # Re-solve with an explicit `huber: false` and assert the whole %Solution{} is
+  # byte-identical to the bare solve, proving the default path is unchanged on
+  # real data.
   defp identical_off?(nav, observations, epoch, seed, bare_sol) do
     case Positioning.solve(nav, observations, epoch,
            initial_guess: seed,
            troposphere: true,
            huber: false
          ) do
-      {:ok, off_sol} -> ecef(off_sol) == ecef(bare_sol)
+      {:ok, off_sol} -> off_sol == bare_sol
       _ -> false
     end
   end
@@ -272,18 +279,21 @@ defmodule HuberIrls202606 do
     }
   end
 
-  defp verdict(bare, huber, demo5, n) do
+  defp verdict(bare, huber, _demo5, n, huber_only_failures) do
     powered? = n >= @min_epochs
-    substrate_ok? = bare.median_3d_m <= @credibility_factor * demo5.median_3d_m
+    no_availability_regress? = huber_only_failures == 0
 
     improved? =
-      powered? and huber.median_3d_m <= bare.median_3d_m and huber.p95_3d_m <= bare.p95_3d_m
+      powered? and no_availability_regress? and
+        huber.median_3d_m <= bare.median_3d_m and huber.p95_3d_m <= bare.p95_3d_m
 
     %{
       powered?: powered?,
-      substrate_ok?: substrate_ok?,
       improved?: improved?,
-      median_non_regress?: powered? and huber.median_3d_m <= bare.median_3d_m,
+      no_availability_regress?: no_availability_regress?,
+      huber_only_failures: huber_only_failures,
+      median_non_regress?:
+        powered? and no_availability_regress? and huber.median_3d_m <= bare.median_3d_m,
       delta_median_3d_m: bare.median_3d_m - huber.median_3d_m,
       delta_p95_3d_m: bare.p95_3d_m - huber.p95_3d_m,
       classification:
@@ -291,8 +301,11 @@ defmodule HuberIrls202606 do
           not powered? ->
             "underpowered (#{n} < #{@min_epochs} epochs)"
 
+          not no_availability_regress? ->
+            "FAIL: #{huber_only_failures} Huber-only availability regressions (bare ok, Huber error)"
+
           improved? ->
-            "improved: Huber non-regression on median and p95"
+            "improved: Huber non-regression on median and p95, no availability loss"
 
           huber.median_3d_m <= bare.median_3d_m ->
             "median-only: median non-regress, p95 regressed (null on strict bar)"
@@ -342,17 +355,35 @@ defmodule HuberIrls202606 do
   end
 
   defp report(results) do
-    rows =
+    acc_rows =
       results.arcs
       |> Enum.map_join("\n", fn arc ->
         if Map.has_key?(arc, :blocked) do
-          "| #{arc.label} | BLOCKED | #{arc.blocked} | | | | | | |"
+          "| #{arc.label} | BLOCKED | #{arc.blocked} | | | | | | | |"
         else
           v = arc.verdict
 
-          "| #{arc.label} | #{arc.solved_epochs} | #{fmt(arc.bare.median_3d_m)} | #{fmt(arc.bare.p95_3d_m)} | #{fmt(arc.huber.median_3d_m)} | #{fmt(arc.huber.p95_3d_m)} | #{fmt(v.delta_median_3d_m)} | #{fmt(v.delta_p95_3d_m)} | #{fmt(arc.demo5.median_3d_m)} | #{v.classification} |"
+          "| #{arc.label} | #{arc.solved_epochs} | #{fmt(arc.bare.median_3d_m)} | #{fmt(arc.bare.p95_3d_m)} | #{fmt(arc.huber.median_3d_m)} | #{fmt(arc.huber.p95_3d_m)} | #{fmt(arc.bare.median_h_m)} | #{fmt(arc.huber.median_h_m)} | #{fmt(v.delta_median_3d_m)} | #{fmt(arc.demo5.median_3d_m)} | #{v.classification} |"
         end
       end)
+
+    solved_arcs = Enum.reject(results.arcs, &Map.has_key?(&1, :blocked))
+
+    count_rows =
+      Enum.map_join(solved_arcs, "\n", fn arc ->
+        c = arc.outcome_counts
+        oc = fn k -> Map.get(c, k, 0) end
+
+        "| #{arc.label} | #{arc.matched_epochs} | #{oc.(:both_ok)} | #{oc.(:huber_failed)} | #{oc.(:bare_failed)} | #{oc.(:both_failed)} | #{oc.(:too_few_obs)} |"
+      end)
+
+    total_huber_only =
+      Enum.sum(Enum.map(solved_arcs, &Map.get(&1.outcome_counts, :huber_failed, 0)))
+
+    huber_only_clause =
+      if total_huber_only == 0,
+        do: "there are none here",
+        else: "there are #{total_huber_only} here, so the strict bar FAILS"
 
     """
     # huber-irls GSDC truth metric (#{results.generated_at})
@@ -363,13 +394,30 @@ defmodule HuberIrls202606 do
     position-domain oracle. Truth is GSDC ground truth carried in the oracle. See
     huber-irls-spec.md (pre-registered).
 
-    Gate params: min epochs #{results.gate_params.min_epochs}, credibility factor #{results.gate_params.credibility_factor}x demo5 median (absolute floor only), Huber k #{fmt(results.gate_params.huber_k)}, MAD scale floor #{fmt(results.gate_params.huber_sigma_m)} m, max outer #{results.gate_params.huber_max_iter}. Epoch stride #{results.stride}.
+    Gate params: min epochs #{results.gate_params.min_epochs}, Huber k #{fmt(results.gate_params.huber_k)}, MAD scale floor #{fmt(results.gate_params.huber_sigma_m)} m, max outer #{results.gate_params.huber_max_iter}. Every matched epoch is measured (no decimation).
 
-    | arc | n | bare med 3D | bare p95 3D | huber med 3D | huber p95 3D | delta med 3D | delta p95 3D | demo5 med 3D | classification |
-    |---|---|---|---|---|---|---|---|---|---|
-    #{rows}
+    ## Accuracy (both-ok epochs)
+
+    | arc | n | bare med 3D | bare p95 3D | huber med 3D | huber p95 3D | bare med H | huber med H | delta med 3D | demo5 med 3D (all oracle) | classification |
+    |---|---|---|---|---|---|---|---|---|---|---|
+    #{acc_rows}
 
     All values in metres. Delta is bare minus Huber (positive = Huber better).
+    The bare/Huber `n` and stats are over both-ok epochs only; the epoch
+    accounting below shows that no epoch was silently dropped to get there. The
+    demo5 column is the reference median over ALL of its oracle epochs (a coarse
+    absolute-context bar, not aligned to the both-ok subset).
+
+    ## Epoch accounting (all matched epochs)
+
+    | arc | matched | both ok | huber-only fail | bare-only fail | both fail | too few sats |
+    |---|---|---|---|---|---|---|
+    #{count_rows}
+
+    A huber-only failure (bare solves, Huber errors) is an availability
+    regression and fails the strict bar outright; #{huber_only_clause}. "too few
+    sats" epochs are those where both arms return `{:too_few_satellites, _, _}`
+    (fewer L1 pseudoranges than the solver's 3 + n_systems floor).
 
     Pooled: powered arcs #{results.pooled.powered_arc_count}/#{results.pooled.total_arc_count}; Huber-off byte-identical to bare on every powered arc? #{results.pooled.all_off_identical?}; all powered arcs median non-regress (Huber <= bare on median)? #{results.pooled.all_powered_median_non_regress?}; all powered arcs median AND p95 non-regress? #{results.pooled.all_powered_improved?}.
 
@@ -378,10 +426,13 @@ defmodule HuberIrls202606 do
     The default path (`:huber` off) producing byte-identical numbers re-proves
     additive-off on real data.
 
-    Reading: orbis runs an unaided single-frequency SPP per epoch; demo5 is a
-    tuned multi-GNSS RTK reference and is the absolute context bar, not the
-    comparand for the reweighting delta. The capability claim is the bare-vs-Huber
-    delta on identical orbis SPP inputs.
+    Reading: each epoch's SPP (both arms) is seeded from the network base-station
+    marker ECEF carried in the oracle, a fixed coarse regional prior identical for
+    bare and Huber (not the per-epoch rover truth); the elevation weights freeze at
+    that seed geometry. demo5 is a tuned multi-GNSS RTK reference and is the
+    absolute context bar, not the comparand for the reweighting delta. The
+    capability claim is solely the bare-vs-Huber delta on identical orbis SPP
+    inputs.
     """
   end
 

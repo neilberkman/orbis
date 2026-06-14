@@ -351,7 +351,11 @@ defmodule Orbis.GNSS.QC do
   ## Options
 
   All `Orbis.GNSS.Positioning.solve/4` options are forwarded to every re-solve
-  (e.g. `:initial_guess`, `:ionosphere`, `:troposphere`). Additionally:
+  (e.g. `:initial_guess`, `:ionosphere`, `:troposphere`), except `:huber`: FDE
+  is itself the leave-one-out robust path, so combining it with the crate-layer
+  Huber/IRLS reweighting is undefined and `huber: true` returns
+  `{:error, {:incompatible_options, [:robust, :huber]}}` (the same refusal
+  `solve/4` gives for `robust: true, huber: true`). Additionally:
 
     * `:p_fa` - false-alarm probability for the RAIM test (default `1.0e-3`)
     * `:weights` - forwarded to `raim/2` (default `:unit`)
@@ -384,13 +388,21 @@ defmodule Orbis.GNSS.QC do
           | {:error, {:fault_unresolved, float()}}
           | {:error, term()}
   def fde(source, observations, epoch, opts \\ []) when is_list(observations) do
-    max_iterations =
-      Keyword.get(opts, :max_iterations, max(length(observations) - 4, 0))
+    # FDE is itself the leave-one-out robust path, so composing it with the
+    # crate-layer Huber/IRLS reweighting is the same undefined combination that
+    # solve/4 refuses for robust + huber. Reject it here rather than silently
+    # forwarding :huber into every re-solve.
+    if Keyword.get(opts, :huber, false) == true do
+      {:error, {:incompatible_options, [:robust, :huber]}}
+    else
+      max_iterations =
+        Keyword.get(opts, :max_iterations, max(length(observations) - 4, 0))
 
-    raim_opts = Keyword.take(opts, [:p_fa, :weights, :n_systems])
-    solve_opts = Keyword.drop(opts, [:p_fa, :weights, :n_systems, :max_iterations])
+      raim_opts = Keyword.take(opts, [:p_fa, :weights, :n_systems])
+      solve_opts = Keyword.drop(opts, [:p_fa, :weights, :n_systems, :max_iterations])
 
-    fde_loop(source, observations, epoch, solve_opts, raim_opts, max_iterations, [], 0)
+      fde_loop(source, observations, epoch, solve_opts, raim_opts, max_iterations, [], 0)
+    end
   end
 
   defp fde_loop(
