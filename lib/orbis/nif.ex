@@ -191,7 +191,8 @@ defmodule Orbis.NIF do
         _pressure_hpa,
         _temperature_k,
         _relative_humidity,
-        _with_geodetic
+        _with_geodetic,
+        _robust
       ), do: :erlang.nif_error(:nif_not_loaded)
 
   def spp_solve_broadcast(
@@ -208,7 +209,8 @@ defmodule Orbis.NIF do
         _pressure_hpa,
         _temperature_k,
         _relative_humidity,
-        _with_geodetic
+        _with_geodetic,
+        _robust
       ), do: :erlang.nif_error(:nif_not_loaded)
 
   def klobuchar_delay(

@@ -318,11 +318,20 @@ defmodule Orbis.GNSS.Positioning do
   # bare-path numerics or the gates.
   defp dispatch(source, source_tag, handle, observations, epoch, opts) do
     robust? = Keyword.get(opts, :robust, false)
+    huber? = Keyword.get(opts, :huber, false)
     coarse = coarse_search_count(Keyword.get(opts, :coarse_search))
 
     cond do
       coarse == :invalid ->
         {:error, {:invalid_option, :coarse_search}}
+
+      robust? and huber? ->
+        # The Elixir-layer FDE (:robust, whole-satellite exclusion) and the
+        # crate-layer Huber/IRLS reweighting (:huber) are independent robustness
+        # levers; composing them is undefined, so the combination is refused
+        # rather than silently honoring one (mirrors the :coarse_search/:robust
+        # exclusion).
+        {:error, {:incompatible_options, [:robust, :huber]}}
 
       robust? and is_integer(coarse) ->
         # The robust FDE path and the per-seed coarse search are not composed;
@@ -564,7 +573,8 @@ defmodule Orbis.GNSS.Positioning do
         pressure / 1.0,
         temperature / 1.0,
         humidity / 1.0,
-        with_geodetic
+        with_geodetic,
+        huber_arg(opts)
       ]
 
       result =
@@ -577,6 +587,27 @@ defmodule Orbis.GNSS.Positioning do
     end
   rescue
     e in ErlangError -> {:error, e.original}
+  end
+
+  # Default crate-layer Huber tuning, used when :huber is on and the caller does
+  # not override. `k = 1.345` is the textbook ~95%-efficiency Huber constant;
+  # `sigma` is the MAD scale floor (m), sized to metre-class single-frequency
+  # code noise; `max_iter` caps the outer reweighting loop.
+  @default_huber_k 1.345
+  @default_huber_sigma 1.0
+  @default_huber_max_iter 5
+
+  # The crate `robust` NIF argument: `nil` (off, byte-identical to the static
+  # elevation-weighted solve) unless `:huber` is set, in which case a
+  # `{huber_k, scale_floor_m, max_outer}` tuple drives the opt-in outer IRLS.
+  defp huber_arg(opts) do
+    if Keyword.get(opts, :huber, false) do
+      {
+        Keyword.get(opts, :huber_k, @default_huber_k) / 1.0,
+        Keyword.get(opts, :huber_sigma, @default_huber_sigma) / 1.0,
+        Keyword.get(opts, :huber_max_iter, @default_huber_max_iter)
+      }
+    end
   end
 
   defp validate_max_pdop(nil), do: :ok

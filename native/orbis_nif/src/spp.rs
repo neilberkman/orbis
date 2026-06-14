@@ -17,7 +17,8 @@
 use astrodynamics_gnss::{
     positioning::{
         solve, Corrections, EphemerisSource, KlobucharCoeffs, Observation, ReceiverSolution,
-        RejectionReason, SolveInputs, SppError, SurfaceMet,
+        RejectionReason, RobustConfig, SolveInputs, SppError, SurfaceMet,
+        DEFAULT_ROBUST_OUTER_TOL_M,
     },
     GnssSatelliteId, GnssSystem,
 };
@@ -230,6 +231,32 @@ fn encode_solution<'a>(env: Env<'a>, sol: &ReceiverSolution) -> Term<'a> {
 ///
 /// Returns `{:ok, solution}` (see [`encode_solution`]) or `{:error, reason}`
 /// where `reason` is the mapped [`SppError`] atom.
+/// Decode the opt-in Huber robust-reweighting argument. `nil` (the off path)
+/// decodes to `None`, byte-identical to the static elevation-weighted solve. A
+/// `{huber_k, scale_floor_m, max_outer}` tuple decodes to a [`RobustConfig`];
+/// the outer-loop position step tolerance is left at the crate default. This is
+/// the only place the boundary touches the robust path, so the off path is a
+/// straight `None`.
+fn decode_robust(term: Term<'_>) -> NifResult<Option<RobustConfig>> {
+    if term.is_atom() {
+        // The only valid atom is `nil` (off). Any other atom is a contract error.
+        let name: String = term.atom_to_string().unwrap_or_default();
+        if name == "nil" {
+            return Ok(None);
+        }
+        return Err(Error::Term(Box::new(format!(
+            "robust must be nil or {{k, sigma, max_iter}}, got atom {name:?}"
+        ))));
+    }
+    let (huber_k, scale_floor_m, max_outer): (f64, f64, u64) = term.decode()?;
+    Ok(Some(RobustConfig {
+        huber_k,
+        scale_floor_m,
+        max_outer: max_outer as usize,
+        outer_tol_m: DEFAULT_ROBUST_OUTER_TOL_M,
+    }))
+}
+
 /// Decode the common SPP term arguments into a [`SolveInputs`]. Shared by the
 /// SP3-backed and broadcast-backed entry points, which differ only in the
 /// ephemeris source they pass to the solver.
@@ -247,6 +274,7 @@ fn build_solve_inputs(
     pressure_hpa: f64,
     temperature_k: f64,
     relative_humidity: f64,
+    robust: Option<RobustConfig>,
 ) -> NifResult<SolveInputs> {
     let mut obs = Vec::with_capacity(observations.len());
     for (token, pseudorange_m) in &observations {
@@ -288,6 +316,7 @@ fn build_solve_inputs(
             temperature_k,
             relative_humidity,
         },
+        robust,
     })
 }
 
@@ -322,7 +351,9 @@ fn spp_solve<'a>(
     temperature_k: f64,
     relative_humidity: f64,
     with_geodetic: bool,
+    robust: Term<'a>,
 ) -> NifResult<Term<'a>> {
+    let robust = decode_robust(robust)?;
     let inputs = build_solve_inputs(
         observations,
         t_rx_j2000_s,
@@ -336,6 +367,7 @@ fn spp_solve<'a>(
         pressure_hpa,
         temperature_k,
         relative_humidity,
+        robust,
     )?;
     Ok(solve_to_term(env, &handle.sp3, &inputs, with_geodetic))
 }
@@ -360,7 +392,9 @@ fn spp_solve_broadcast<'a>(
     temperature_k: f64,
     relative_humidity: f64,
     with_geodetic: bool,
+    robust: Term<'a>,
 ) -> NifResult<Term<'a>> {
+    let robust = decode_robust(robust)?;
     let mut inputs = build_solve_inputs(
         observations,
         t_rx_j2000_s,
@@ -374,6 +408,7 @@ fn spp_solve_broadcast<'a>(
         pressure_hpa,
         temperature_k,
         relative_humidity,
+        robust,
     )?;
     // A BeiDou satellite uses the NAV product's own broadcast Klobuchar
     // coefficients (BDSA/BDSB) when present, rather than the GPS set the caller
