@@ -1543,7 +1543,8 @@ defmodule Orbis.GNSS.RTKTest do
                RTK.solve_widelane_fixed_baseline_epochs(@base, epochs,
                  reference_satellite_id: "G01",
                  initial_baseline_m: {-40.0, 35.0, 12.0},
-                 wide_lane_tolerance_cycles: 0.01
+                 wide_lane_tolerance_cycles: 0.01,
+                 troposphere: false
                )
 
       assert sol.metadata.integer_status == :fixed
@@ -1622,7 +1623,8 @@ defmodule Orbis.GNSS.RTKTest do
                  # Disable threshold-based slip detection so the only arc break is
                  # the G05 outage gap (which is detected independently of LLI).
                  gf_threshold_m: 1.0e9,
-                 mw_threshold_cycles: 1.0e9
+                 mw_threshold_cycles: 1.0e9,
+                 troposphere: false
                )
 
       assert sol.metadata.integer_status == :fixed
@@ -1678,7 +1680,8 @@ defmodule Orbis.GNSS.RTKTest do
                  on_cycle_slip: :split_arc,
                  wide_lane_min_epochs: 1,
                  wide_lane_tolerance_cycles: 0.01,
-                 initial_baseline_m: {-40.0, 35.0, 12.0}
+                 initial_baseline_m: {-40.0, 35.0, 12.0},
+                 troposphere: false
                )
 
       g02_ids = Enum.filter(sol.used_sats, &String.contains?(&1, "G02"))
@@ -1728,7 +1731,8 @@ defmodule Orbis.GNSS.RTKTest do
                  on_cycle_slip: :split_arc,
                  wide_lane_min_epochs: 2,
                  wide_lane_tolerance_cycles: 0.01,
-                 initial_baseline_m: {-40.0, 35.0, 12.0}
+                 initial_baseline_m: {-40.0, 35.0, 12.0},
+                 troposphere: false
                )
 
       g02_ids = Enum.filter(sol.used_sats, &String.contains?(&1, "G02"))
@@ -1815,7 +1819,8 @@ defmodule Orbis.GNSS.RTKTest do
                  reference_satellite_id: "G01",
                  initial_baseline_m: {-40.0, 35.0, 12.0},
                  wide_lane_tolerance_cycles: 0.01,
-                 filter_kernel: :elixir
+                 filter_kernel: :elixir,
+                 troposphere: false
                )
 
       assert sol.metadata.integer_method == :widelane_narrowlane_sequential
@@ -1847,7 +1852,8 @@ defmodule Orbis.GNSS.RTKTest do
                RTK.solve_widelane_filter_baseline_epochs(@base, dual_epochs,
                  reference_satellite_id: "G01",
                  wide_lane_tolerance_cycles: 0.01,
-                 filter_kernel: :elixir
+                 filter_kernel: :elixir,
+                 troposphere: false
                )
 
       assert dual.metadata.integer_method == :widelane_narrowlane_sequential

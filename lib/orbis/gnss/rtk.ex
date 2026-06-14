@@ -59,10 +59,12 @@ defmodule Orbis.GNSS.RTK do
       zero_vector: 1
     ]
 
+  alias Orbis.Coordinates
   alias Orbis.GNSS.Antex
   alias Orbis.GNSS.{CarrierPhase, IonosphereFree}
   alias Orbis.GNSS.Core.{Constants, Types}
   alias Orbis.GNSS.Core.IntegerLeastSquares
+  alias Orbis.GNSS.Troposphere
   alias Orbis.NIF
 
   @default_max_iterations 8
@@ -134,7 +136,8 @@ defmodule Orbis.GNSS.RTK do
     :wide_lane_min_epochs,
     :wide_lane_tolerance_cycles,
     :gf_threshold_m,
-    :mw_threshold_cycles
+    :mw_threshold_cycles,
+    :troposphere
   ]
   @widelane_baseline_options (@fixed_baseline_options --
                                 [:ambiguity_wavelength_m, :ambiguity_offset_m]) ++
@@ -1220,11 +1223,13 @@ defmodule Orbis.GNSS.RTK do
            baseline_reference_satellite(common_sats, opts, base, prepared_dual_epochs),
          {:ok, wide_lane_cycles} <-
            estimate_dual_baseline_wide_lanes(prepared_dual_epochs, reference_sat, opts),
+         {:ok, tropo} <- dual_tropo_config(base, opts),
          {:ok, if_epochs, wavelengths, offsets} <-
            ionosphere_free_baseline_epochs(
              prepared_dual_epochs,
              reference_sat,
-             wide_lane_cycles
+             wide_lane_cycles,
+             tropo
            ),
          fixed_opts =
            opts
@@ -1310,11 +1315,13 @@ defmodule Orbis.GNSS.RTK do
            baseline_reference_satellite(common_sats, opts, base, prepared_dual_epochs),
          {:ok, wide_lane_cycles} <-
            estimate_dual_baseline_wide_lanes(prepared_dual_epochs, reference_sat, opts),
+         {:ok, tropo} <- dual_tropo_config(base, opts),
          {:ok, if_epochs, wavelengths, offsets} <-
            ionosphere_free_baseline_epochs(
              prepared_dual_epochs,
              reference_sat,
-             wide_lane_cycles
+             wide_lane_cycles,
+             tropo
            ),
          filter_opts =
            opts
@@ -2113,10 +2120,15 @@ defmodule Orbis.GNSS.RTK do
     end
   end
 
-  defp ionosphere_free_baseline_epochs(dual_epochs, reference_sat, wide_lane_cycles) do
+  defp ionosphere_free_baseline_epochs(dual_epochs, reference_sat, wide_lane_cycles, tropo) do
     with {:ok, params} <- dual_narrow_lane_params(dual_epochs, reference_sat, wide_lane_cycles),
          {:ok, if_epochs} <-
-           dual_ionosphere_free_baseline_epochs(dual_epochs, reference_sat, wide_lane_cycles) do
+           dual_ionosphere_free_baseline_epochs(
+             dual_epochs,
+             reference_sat,
+             wide_lane_cycles,
+             tropo
+           ) do
       wavelengths = Map.new(params, fn {id, p} -> {id, p.wavelength_m} end)
       offsets = Map.new(params, fn {id, p} -> {id, p.offset_m} end)
       {:ok, if_epochs, wavelengths, offsets}
@@ -2226,7 +2238,7 @@ defmodule Orbis.GNSS.RTK do
     end
   end
 
-  defp dual_ionosphere_free_baseline_epochs(dual_epochs, reference_sat, wide_lane_cycles) do
+  defp dual_ionosphere_free_baseline_epochs(dual_epochs, reference_sat, wide_lane_cycles, tropo) do
     dual_epochs
     |> Enum.reduce_while({:ok, []}, fn epoch, {:ok, acc} ->
       keep_sats = dual_ionosphere_free_keep_sats(epoch, reference_sat, wide_lane_cycles)
@@ -2234,8 +2246,22 @@ defmodule Orbis.GNSS.RTK do
       if length(keep_sats) < 2 do
         {:cont, {:ok, acc}}
       else
-        with {:ok, base_obs} <- dual_ionosphere_free_observations(epoch.base, keep_sats),
-             {:ok, rover_obs} <- dual_ionosphere_free_observations(epoch.rover, keep_sats) do
+        with {:ok, base_obs} <-
+               dual_ionosphere_free_observations(
+                 epoch.base,
+                 keep_sats,
+                 tropo,
+                 epoch,
+                 :base
+               ),
+             {:ok, rover_obs} <-
+               dual_ionosphere_free_observations(
+                 epoch.rover,
+                 keep_sats,
+                 tropo,
+                 epoch,
+                 :rover
+               ) do
           {:cont,
            {:ok,
             [
@@ -2283,15 +2309,19 @@ defmodule Orbis.GNSS.RTK do
     end
   end
 
-  defp dual_ionosphere_free_observations(observations, keep_sats) do
+  defp dual_ionosphere_free_observations(observations, keep_sats, tropo, epoch, receiver) do
     keep = MapSet.new(keep_sats)
+    sat_positions = receiver_satellite_positions(epoch, receiver)
 
     observations
     |> Enum.sort_by(fn {sat, _obs} -> sat end)
     |> Enum.reduce_while({:ok, []}, fn {sat, obs}, {:ok, acc} ->
       if MapSet.member?(keep, sat) do
-        case dual_ionosphere_free_observation(obs) do
-          {:ok, converted} -> {:cont, {:ok, [converted | acc]}}
+        with {:ok, tropo_m} <-
+               dual_slant_tropo_m(tropo, receiver, Map.get(sat_positions, sat), epoch.epoch),
+             {:ok, converted} <- dual_ionosphere_free_observation(obs, tropo_m) do
+          {:cont, {:ok, [converted | acc]}}
+        else
           {:error, _} = err -> {:halt, err}
         end
       else
@@ -2304,7 +2334,43 @@ defmodule Orbis.GNSS.RTK do
     end
   end
 
-  defp dual_ionosphere_free_observation(obs) do
+  defp receiver_satellite_positions(epoch, :base), do: epoch.base_positions
+  defp receiver_satellite_positions(epoch, :rover), do: epoch.rover_positions
+
+  # The a-priori slant tropospheric delay (positive metres) modelled for this
+  # receiver/satellite line of sight. Subtracting it from each one-way
+  # ionosphere-free observable (code and phase, both, since tropo is
+  # non-dispersive and its range coefficients sum to 1 in the IF combination) is
+  # mathematically identical to adding the modelled delay to the range model,
+  # but keeps the correction in Elixir so both the :rust and :elixir kernels
+  # receive identical corrected observables and stay bit-identical. Disabled
+  # (`tropo == nil`) returns 0.0 for a byte-identical off path.
+  defp dual_slant_tropo_m(nil, _receiver, _sat_pos, _epoch_time), do: {:ok, 0.0}
+
+  defp dual_slant_tropo_m(_tropo, _receiver, nil, _epoch_time), do: {:ok, 0.0}
+
+  defp dual_slant_tropo_m(tropo, receiver, sat_pos, epoch_time) do
+    geo = dual_tropo_receiver_geodetic(tropo, receiver)
+    elevation_deg = geodetic_elevation_deg(geo, dual_tropo_receiver_pos(tropo, receiver), sat_pos)
+    met = standard_atmosphere_met(geo.height_m)
+
+    Troposphere.slant_delay(
+      elevation_deg,
+      geo.lat_deg,
+      geo.lon_deg,
+      geo.height_m,
+      met,
+      epoch_time
+    )
+  end
+
+  defp dual_tropo_receiver_pos(%{base_pos: base_pos}, :base), do: base_pos
+  defp dual_tropo_receiver_pos(%{rover_pos: rover_pos}, :rover), do: rover_pos
+
+  defp dual_tropo_receiver_geodetic(%{base_geodetic: geo}, :base), do: geo
+  defp dual_tropo_receiver_geodetic(%{rover_geodetic: geo}, :rover), do: geo
+
+  defp dual_ionosphere_free_observation(obs, tropo_m) do
     with {:ok, code_m} <- IonosphereFree.iono_free(obs.p1_m, obs.p2_m, obs.f1_hz, obs.f2_hz),
          {:ok, phase_m} <-
            IonosphereFree.iono_free_phase_cycles(
@@ -2317,8 +2383,8 @@ defmodule Orbis.GNSS.RTK do
        %{
          satellite_id: obs.satellite_id,
          ambiguity_id: obs.ambiguity_id,
-         code_m: code_m,
-         phase_m: phase_m
+         code_m: code_m - tropo_m,
+         phase_m: phase_m - tropo_m
        }}
     else
       {:error, reason} -> {:error, {:ionosphere_free_failed, obs.satellite_id, reason}}
@@ -2327,6 +2393,84 @@ defmodule Orbis.GNSS.RTK do
 
   defp dual_receiver_observations(epoch, :base), do: epoch.base
   defp dual_receiver_observations(epoch, :rover), do: epoch.rover
+
+  # Resolve the a-priori troposphere configuration for the dual-frequency
+  # baseline. On by default (matches RTKLIB `pos1-tropopt=saas`), set
+  # `troposphere: false` for an explicit byte-identical off path. Precomputes the
+  # base and rover receiver geodetic positions (rover approx = base + initial
+  # baseline) so the per-epoch per-satellite slant is just an elevation + a
+  # cached standard-atmosphere meteorology lookup.
+  defp dual_tropo_config(base, opts) do
+    case Keyword.get(opts, :troposphere, true) do
+      false ->
+        {:ok, nil}
+
+      true ->
+        with {:ok, baseline} <- initial_baseline(opts) do
+          rover_pos = add3(base, baseline)
+
+          {:ok,
+           %{
+             base_pos: base,
+             rover_pos: rover_pos,
+             base_geodetic: receiver_geodetic(base),
+             rover_geodetic: receiver_geodetic(rover_pos)
+           }}
+        end
+
+      _other ->
+        {:error, {:invalid_option, :troposphere}}
+    end
+  end
+
+  # Receiver geodetic latitude/longitude/height (degrees, degrees, metres) from
+  # ECEF, using the shared WGS84 inverse so SPP and RTK agree on the receiver
+  # frame. Height is the WGS84 ellipsoidal height clamped to >= 0, matching
+  # RTKLIB `hgt = max(pos[2], 0)`.
+  defp receiver_geodetic({x, y, z}) do
+    geo = Coordinates.to_geodetic({x / 1000.0, y / 1000.0, z / 1000.0})
+
+    %{
+      lat_deg: geo.latitude,
+      lon_deg: geo.longitude,
+      height_m: max(geo.altitude_km * 1000.0, 0.0)
+    }
+  end
+
+  # Geodetic (ENU) elevation in degrees from the receiver geodetic frame to the
+  # satellite, matching RTKLIB `satazel` (ecef2pos geodetic up), NOT geocentric
+  # up. Mirrors `Orbis.GNSS.Observables.topocentric/7`.
+  defp geodetic_elevation_deg(geo, {rx, ry, rz}, {sx, sy, sz}) do
+    dx = sx - rx
+    dy = sy - ry
+    dz = sz - rz
+    range = :math.sqrt(dx * dx + dy * dy + dz * dz)
+
+    if range <= 0.0 do
+      0.0
+    else
+      lat = geo.lat_deg * :math.pi() / 180.0
+      lon = geo.lon_deg * :math.pi() / 180.0
+
+      u =
+        :math.cos(lat) * :math.cos(lon) * dx + :math.cos(lat) * :math.sin(lon) * dy +
+          :math.sin(lat) * dz
+
+      :math.asin(max(-1.0, min(1.0, u / range))) * 180.0 / :math.pi()
+    end
+  end
+
+  # Height-derived standard atmosphere, matching RTKLIB `tropmodel`:
+  # P = 1013.25*(1 - 2.2557e-5*h)^5.2568 hPa, T = 15.0 - 6.5e-3*h + 273.16 K.
+  # RTKLIB `tropopt=saas` in the relative path uses humidity 0.0 (hydrostatic
+  # only, no wet term), so relative_humidity is fixed at 0.0 here.
+  defp standard_atmosphere_met(height_m) do
+    %{
+      pressure_hpa: 1013.25 * :math.pow(1.0 - 2.2557e-5 * height_m, 5.2568),
+      temperature_k: 15.0 - 6.5e-3 * height_m + 273.16,
+      relative_humidity: 0.0
+    }
+  end
 
   defp same_frequency?(a, b), do: abs(a - b) <= 1.0e-6
 
