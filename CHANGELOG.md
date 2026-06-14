@@ -6,6 +6,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-06-14
+
+### Added
+
+- `Orbis.GNSS.Positioning.solve/4` gains an opt-in `:huber` option: a
+  crate-layer Huber/IRLS robust reweighting loop that recomputes each
+  satellite's weight from its post-fit residual, down-weighting multipath and
+  gross code outliers on cheap single-frequency receivers rather than excluding
+  whole satellites. Tunable via `:huber_k`, `:huber_sigma` (MAD scale floor,
+  default 5.0 m), and `:huber_max_iter`. Default off and byte-identical to the
+  static elevation-weighted solve when unused. On the vendored GSDC Pixel-5
+  arcs it improves the 3D median and p95 on every arc with no loss of
+  availability.
+- When `:huber` runs, `solution.metadata` carries `:huber` with the
+  `outer_iterations` count and the `final_scale_m` (the last MAD robust scale);
+  the key is absent on the default path.
+
+### Changed
+
+- Riding `astrodynamics-gnss` 0.15.0 / `astrodynamics` 0.10.0, which carry the
+  robust-reweighting kernel.
+
 ## [0.25.0] - 2026-06-13
 
 ### Added

@@ -1,7 +1,7 @@
 defmodule Orbis.MixProject do
   use Mix.Project
 
-  @version "0.25.0"
+  @version "0.26.0"
   @source_url "https://github.com/neilberkman/orbis"
 
   def project do
