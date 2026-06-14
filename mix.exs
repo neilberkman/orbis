@@ -81,7 +81,8 @@ defmodule Orbis.MixProject do
         "guides/batch_analysis.md",
         "guides/gnss_constellation_catalog.md",
         "examples/iss_tracker.livemd",
-        "examples/gnss_positioning.livemd"
+        "examples/gnss_positioning.livemd",
+        "examples/conjunction_alert.livemd"
       ],
       groups_for_extras: [
         Guides: Path.wildcard("guides/*.md")
