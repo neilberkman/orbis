@@ -361,9 +361,18 @@ defmodule Orbis.GNSS.QC do
   Returns `{:ok, %{solution: Solution.t(), excluded: [{sat, :raim_excluded}],
   iterations: non_neg_integer()}}` — `excluded` is the list of removed
   satellites in exclusion order (empty for a clean set), and `iterations` is the
-  number of exclusion steps performed. Returns `{:error, reason}` if any solve
-  fails (the `solve/4` reason is propagated, e.g.
-  `{:too_few_satellites, used, required}`).
+  number of exclusion steps performed.
+
+  When the exclusion loop runs out of permitted iterations (or out of
+  satellites to exclude) while RAIM still flags the fix as faulted, the set
+  could not be made self-consistent: rather than hand back a fix RAIM rejects,
+  this returns `{:error, {:fault_unresolved, test_statistic}}`, carrying the
+  final RAIM test statistic. A success exit (`{:ok, _}`) means either the set
+  passed RAIM or the geometry has no redundancy left to test (`dof <= 0`), never
+  a still-faulted fix at the iteration cap.
+
+  Returns `{:error, reason}` if any solve fails (the `solve/4` reason is
+  propagated, e.g. `{:too_few_satellites, used, required}`).
   """
   @spec fde(term(), [Positioning.observation()], Positioning.epoch(), keyword()) ::
           {:ok,
@@ -372,6 +381,7 @@ defmodule Orbis.GNSS.QC do
              excluded: [{String.t(), :raim_excluded}],
              iterations: non_neg_integer()
            }}
+          | {:error, {:fault_unresolved, float()}}
           | {:error, term()}
   def fde(source, observations, epoch, opts \\ []) when is_list(observations) do
     max_iterations =
@@ -399,12 +409,17 @@ defmodule Orbis.GNSS.QC do
 
         cond do
           not result.fault_detected? ->
+            # Either the set passed RAIM, or the geometry has no redundancy left
+            # to test (dof <= 0, so raim/2 reports fault_detected? false): a
+            # legitimate success exit, not a masked fault.
             {:ok, %{solution: solution, excluded: Enum.reverse(excluded), iterations: iter}}
 
           iter >= max_iterations or is_nil(result.worst_sat) ->
-            # No more exclusions permitted/possible: return the best solution we
-            # have, still carrying whatever was excluded so far.
-            {:ok, %{solution: solution, excluded: Enum.reverse(excluded), iterations: iter}}
+            # The fault is still flagged (the not-fault_detected? clause above did
+            # not match) but no further exclusion is permitted or possible. The
+            # set could not be made self-consistent; refuse rather than return a
+            # fix RAIM still rejects, carrying the final test statistic.
+            {:error, {:fault_unresolved, result.test_statistic}}
 
           true ->
             worst = result.worst_sat

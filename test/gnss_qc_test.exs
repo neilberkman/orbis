@@ -224,6 +224,266 @@ defmodule Orbis.GNSS.QCTest do
     end
   end
 
+  describe "solve/4 :robust contract (defect 2)" do
+    test "robust:true with no noise model and no escape hatch refuses before solving", ctx do
+      assert Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts ++ [robust: true]) ==
+               {:error, {:robust_requires_noise_model, :no_weights}}
+    end
+
+    test "robust:true with an empty or partial weights map refuses (no unit-weight bypass)",
+         ctx do
+      # An empty map must not silently fall back to unit weight per satellite.
+      assert Positioning.solve(
+               ctx.sp3,
+               ctx.clean_obs,
+               @epoch,
+               @solve_opts ++ [robust: true, weights: %{}]
+             ) == {:error, {:robust_requires_noise_model, :incomplete_weights}}
+
+      # A map missing some observed satellites is equally incomplete.
+      {one_sat, _pr} = hd(ctx.clean_obs)
+      partial = %{one_sat => 1.0 / 25.0}
+
+      assert Positioning.solve(
+               ctx.sp3,
+               ctx.clean_obs,
+               @epoch,
+               @solve_opts ++ [robust: true, weights: partial]
+             ) == {:error, {:robust_requires_noise_model, :incomplete_weights}}
+    end
+
+    test "robust:true with a complete map plus an invalid extra key does not raise", ctx do
+      # A weight map covering every observed satellite (positive) plus an extra
+      # key for a non-observed satellite (here a non-positive one) must be
+      # accepted by dropping the irrelevant extra, never raising from solve/4.
+      weights =
+        ctx.clean_obs
+        |> Map.new(fn {sat, _pr} -> {sat, 1.0 / 25.0} end)
+        |> Map.put("G99", -1.0)
+
+      assert {:ok, sol} =
+               Positioning.solve(
+                 ctx.sp3,
+                 ctx.clean_obs,
+                 @epoch,
+                 @solve_opts ++ [robust: true, weights: weights]
+               )
+
+      assert sol.metadata.fde == %{excluded: [], iterations: 0}
+    end
+
+    test "robust:true with an invalid observed weight (non-positive or absurd) is a tagged error, not a raise",
+         ctx do
+      # Non-positive observed weight.
+      neg = Map.new(ctx.clean_obs, fn {sat, _pr} -> {sat, -1.0} end)
+
+      assert Positioning.solve(
+               ctx.sp3,
+               ctx.clean_obs,
+               @epoch,
+               @solve_opts ++ [robust: true, weights: neg]
+             ) ==
+               {:error, {:invalid_option, :weights}}
+
+      # Absurd magnitude that would overflow RAIM's r^2 * weight on BEAM.
+      huge = Map.new(ctx.clean_obs, fn {sat, _pr} -> {sat, 1.0e308} end)
+
+      assert Positioning.solve(
+               ctx.sp3,
+               ctx.clean_obs,
+               @epoch,
+               @solve_opts ++ [robust: true, weights: huge]
+             ) ==
+               {:error, {:invalid_option, :weights}}
+
+      # Bad :p_fa is also a tagged error.
+      good = Map.new(ctx.clean_obs, fn {sat, _pr} -> {sat, 1.0 / 25.0} end)
+
+      assert Positioning.solve(
+               ctx.sp3,
+               ctx.clean_obs,
+               @epoch,
+               @solve_opts ++ [robust: true, weights: good, p_fa: 1.5]
+             ) ==
+               {:error, {:invalid_option, :p_fa}}
+    end
+
+    test "robust:true never raises from solve/4 on malformed options (p_fa, unsafe flag, n_systems)",
+         ctx do
+      weights = Map.new(ctx.clean_obs, fn {sat, _pr} -> {sat, 1.0 / 25.0} end)
+      base = @solve_opts ++ [robust: true, weights: weights]
+
+      # Sub-epsilon p_fa rounds 1.0 - p_fa to 1.0; refused, not raised.
+      assert Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, base ++ [p_fa: 1.0e-20]) ==
+               {:error, {:invalid_option, :p_fa}}
+
+      # Non-boolean escape hatch is a tagged error, not a FunctionClauseError.
+      assert Positioning.solve(
+               ctx.sp3,
+               ctx.clean_obs,
+               @epoch,
+               @solve_opts ++ [robust: true, unsafe_unit_weights: :yes]
+             ) ==
+               {:error, {:invalid_option, :unsafe_unit_weights}}
+
+      # A leaked RAIM-only option must not reach RAIM arithmetic and raise.
+      assert {:ok, _sol} =
+               Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, base ++ [n_systems: :bad])
+    end
+
+    test "robust and coarse_search are mutually exclusive; bad coarse_search is tagged", ctx do
+      weights = Map.new(ctx.clean_obs, fn {sat, _pr} -> {sat, 1.0 / 25.0} end)
+
+      assert Positioning.solve(
+               ctx.sp3,
+               ctx.clean_obs,
+               @epoch,
+               @solve_opts ++ [robust: true, weights: weights, coarse_search: 24]
+             ) == {:error, {:incompatible_options, [:coarse_search, :robust]}}
+
+      assert Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts ++ [coarse_search: 0]) ==
+               {:error, {:invalid_option, :coarse_search}}
+    end
+
+    test "robust:true with :weights is admitted (a clean weighted set excludes nothing)", ctx do
+      weights = Map.new(ctx.clean_obs, fn {sat, _pr} -> {sat, 1.0 / 25.0} end)
+
+      assert {:ok, sol} =
+               Positioning.solve(
+                 ctx.sp3,
+                 ctx.clean_obs,
+                 @epoch,
+                 @solve_opts ++ [robust: true, weights: weights]
+               )
+
+      assert sol.metadata.fde == %{excluded: [], iterations: 0}
+      assert position_error(sol) < 1.0e-2
+    end
+
+    test "robust clean via :unsafe_unit_weights is a no-op bit-identical to the bare solve",
+         ctx do
+      assert {:ok, bare} = Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts)
+
+      assert {:ok, robust} =
+               Positioning.solve(
+                 ctx.sp3,
+                 ctx.clean_obs,
+                 @epoch,
+                 @solve_opts ++ [robust: true, unsafe_unit_weights: true]
+               )
+
+      # The escape hatch is the only route to unit-weight FDE; on a clean
+      # synthetic set it excludes nothing and the position is bit-identical.
+      assert robust.metadata.fde == %{excluded: [], iterations: 0}
+      assert robust.position == bare.position
+      assert robust.rx_clock_s == bare.rx_clock_s
+    end
+
+    test "robust isolates a labelled fault via the escape hatch and folds the ledger", ctx do
+      biased_sat = elem(Enum.at(ctx.clean_obs, 4), 0)
+
+      for bias <- [50.0, 100.0, 200.0, 500.0] do
+        faulted =
+          Enum.map(ctx.clean_obs, fn {sat, pr} ->
+            if sat == biased_sat, do: {sat, pr + bias}, else: {sat, pr}
+          end)
+
+        assert {:ok, sol} =
+                 Positioning.solve(
+                   ctx.sp3,
+                   faulted,
+                   @epoch,
+                   @solve_opts ++ [robust: true, unsafe_unit_weights: true]
+                 ),
+               "bias #{bias}"
+
+        assert sol.metadata.fde.excluded == [{biased_sat, :raim_excluded}], "bias #{bias}"
+
+        clean_err =
+          (fn ->
+             {:ok, clean_sol} = Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts)
+             position_error(clean_sol)
+           end).()
+
+        assert position_error(sol) <= clean_err + 0.5, "bias #{bias}"
+      end
+    end
+
+    test "robust propagates the {:fault_unresolved, T} refusal out of solve/4", ctx do
+      biased_sat = elem(Enum.at(ctx.clean_obs, 4), 0)
+
+      faulted =
+        Enum.map(ctx.clean_obs, fn {sat, pr} ->
+          if sat == biased_sat, do: {sat, pr + 500.0}, else: {sat, pr}
+        end)
+
+      assert {:error, {:fault_unresolved, statistic}} =
+               Positioning.solve(
+                 ctx.sp3,
+                 faulted,
+                 @epoch,
+                 @solve_opts ++ [robust: true, unsafe_unit_weights: true, max_iterations: 0]
+               )
+
+      assert is_float(statistic) and statistic > 0.0
+    end
+
+    test "robust composes with the rank/plausibility gates (degenerate is still refused)", ctx do
+      # max_pdop below the realized PDOP must refuse even under robust, proving
+      # the post_process gates still apply to the cleaned re-solve.
+      assert {:error, {:degenerate_geometry, _}} =
+               Positioning.solve(
+                 ctx.sp3,
+                 ctx.clean_obs,
+                 @epoch,
+                 @solve_opts ++ [robust: true, unsafe_unit_weights: true, max_pdop: 0.1]
+               )
+    end
+  end
+
+  describe "fde/4 exhausted-but-faulted (defect 1)" do
+    setup ctx do
+      # Inject a large bias on the same localizing satellite, but cap the loop at
+      # zero iterations so the fault cannot be excluded: the loop is forced past
+      # its budget with RAIM still flagging the fix.
+      biased_sat = elem(Enum.at(ctx.clean_obs, 4), 0)
+
+      faulted_obs =
+        Enum.map(ctx.clean_obs, fn {sat, pr} ->
+          if sat == biased_sat, do: {sat, pr + 500.0}, else: {sat, pr}
+        end)
+
+      {:ok, biased_sat: biased_sat, faulted_obs: faulted_obs}
+    end
+
+    test "the loop refuses with {:fault_unresolved, T} at the cap, never a faulted fix", ctx do
+      # max_iterations: 0 means no exclusion is permitted; RAIM still flags the
+      # fix, so fde/4 must return the tagged refusal carrying the statistic.
+      opts = Keyword.put(@solve_opts, :max_iterations, 0)
+
+      assert {:error, {:fault_unresolved, statistic}} =
+               QC.fde(ctx.sp3, ctx.faulted_obs, @epoch, opts)
+
+      assert is_float(statistic) and statistic > 0.0
+
+      # Sanity: that statistic is the RAIM statistic of the un-excluded faulted
+      # solve (it exceeds the chi-square threshold).
+      {:ok, faulted_sol} = Positioning.solve(ctx.sp3, ctx.faulted_obs, @epoch, @solve_opts)
+      result = QC.raim(faulted_sol)
+      assert result.fault_detected?
+      assert_in_delta statistic, result.test_statistic, 1.0e-6
+    end
+
+    test "a non-testable (dof <= 0) set is a legitimate {:ok} success, not a refusal", ctx do
+      # Exactly four GPS sats: dof == 0, so RAIM is non-testable and reports
+      # fault_detected? false. fde/4 returns {:ok} with nothing excluded.
+      four_obs = Enum.take(ctx.clean_obs, 4)
+
+      assert {:ok, fde} = QC.fde(ctx.sp3, four_obs, @epoch, @solve_opts)
+      assert fde.excluded == []
+    end
+  end
+
   describe "raim/2 option validation" do
     test "an out-of-range p_fa raises ArgumentError, not an obscure math error", ctx do
       assert {:ok, sol} = Positioning.solve(ctx.sp3, ctx.clean_obs, @epoch, @solve_opts)

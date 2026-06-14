@@ -14,6 +14,11 @@ defmodule Orbis.GNSS.RINEX.ObservationsSppTest do
   alias Orbis.GNSS.Positioning
   alias Orbis.GNSS.RINEX.Observations
 
+  defp err_3d(sol, {tx, ty, tz}) do
+    p = sol.position
+    :math.sqrt(:math.pow(p.x_m - tx, 2) + :math.pow(p.y_m - ty, 2) + :math.pow(p.z_m - tz, 2))
+  end
+
   @obs_path Path.join(__DIR__, "fixtures/obs/ESBC00DNK_R_20201770000_01D_30S_MO_trim.crx")
   @nav_path Path.join(__DIR__, "fixtures/nav/ESBC00DNK_R_20201770000_01D_MN.rnx")
 
@@ -241,6 +246,102 @@ defmodule Orbis.GNSS.RINEX.ObservationsSppTest do
                initial_guess: coarse,
                max_pdop: 0.0
              ) == {:error, {:invalid_option, :max_pdop}}
+    end
+  end
+
+  describe "solve/4 :coarse_search cold start" do
+    setup do
+      obs = Observations.load!(@obs_path)
+      eph = Broadcast.load!(@nav_path)
+      {tx, ty, tz} = Observations.approx_position(obs)
+      [%{index: index, epoch: epoch} | _] = Observations.epochs(obs)
+      {:ok, prs} = Observations.pseudoranges(obs, index, codes: %{"G" => ["C1C"]})
+      {:ok, eph: eph, prs: prs, epoch: epoch, truth: {tx, ty, tz}}
+    end
+
+    test "nil (off) is byte-identical to the single solve", ctx do
+      g =
+        {elem(ctx.truth, 0) + 30_000.0, elem(ctx.truth, 1) - 20_000.0,
+         elem(ctx.truth, 2) + 25_000.0, 0.0}
+
+      assert {:ok, single} =
+               Positioning.solve(ctx.eph, ctx.prs, ctx.epoch, troposphere: true, initial_guess: g)
+
+      assert {:ok, off} =
+               Positioning.solve(ctx.eph, ctx.prs, ctx.epoch,
+                 troposphere: true,
+                 initial_guess: g,
+                 coarse_search: nil
+               )
+
+      assert single.position == off.position
+      assert single.rx_clock_s == off.rx_clock_s
+      assert single.metadata == off.metadata
+    end
+
+    test "recovers a real fix from the earth-center default prior", ctx do
+      assert {:ok, sol} =
+               Positioning.solve(ctx.eph, ctx.prs, ctx.epoch,
+                 troposphere: true,
+                 coarse_search: 24
+               )
+
+      assert sol.metadata.converged
+      assert sol.metadata.redundancy >= 1
+      # A real near-surface fix, not the never-iterated earth-center seed
+      # pass-through; metre-class on this single-frequency arc.
+      assert err_3d(sol, ctx.truth) < 6.0
+    end
+
+    test "recovers a real fix from an antipodal prior that the single solve cannot", ctx do
+      {tx, ty, tz} = ctx.truth
+      antipodal = {-tx, -ty, -tz, 0.0}
+
+      # The bare single solve from the antipodal seed starves on the frozen
+      # horizon mask.
+      assert {:error, _} =
+               Positioning.solve(ctx.eph, ctx.prs, ctx.epoch,
+                 troposphere: true,
+                 initial_guess: antipodal
+               )
+
+      assert {:ok, sol} =
+               Positioning.solve(ctx.eph, ctx.prs, ctx.epoch,
+                 troposphere: true,
+                 initial_guess: antipodal,
+                 coarse_search: 24
+               )
+
+      assert sol.metadata.converged
+      assert sol.metadata.redundancy >= 1
+      assert err_3d(sol, ctx.truth) < 6.0
+    end
+
+    test "accepts true and [seeds: n] forms", ctx do
+      assert {:ok, _} =
+               Positioning.solve(ctx.eph, ctx.prs, ctx.epoch,
+                 troposphere: true,
+                 coarse_search: true
+               )
+
+      assert {:ok, _} =
+               Positioning.solve(ctx.eph, ctx.prs, ctx.epoch,
+                 troposphere: true,
+                 coarse_search: [seeds: 12]
+               )
+    end
+
+    test "every returned candidate is converged and redundant (gates applied per seed)", ctx do
+      # max_pdop composes per candidate: a generous ceiling still returns a fix.
+      assert {:ok, sol} =
+               Positioning.solve(ctx.eph, ctx.prs, ctx.epoch,
+                 troposphere: true,
+                 coarse_search: 24,
+                 max_pdop: 100.0
+               )
+
+      assert sol.metadata.converged
+      assert sol.metadata.raim_checkable?
     end
   end
 end

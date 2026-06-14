@@ -112,15 +112,19 @@ defmodule Orbis.GNSS.Positioning do
             tdop: float()
           }
     @type metadata :: %{
-            iterations: non_neg_integer(),
-            converged: boolean(),
-            status: atom(),
-            ionosphere_applied: boolean(),
-            troposphere_applied: boolean(),
-            used_count: non_neg_integer(),
-            systems: [String.t()],
-            redundancy: integer(),
-            raim_checkable?: boolean()
+            :iterations => non_neg_integer(),
+            :converged => boolean(),
+            :status => atom(),
+            :ionosphere_applied => boolean(),
+            :troposphere_applied => boolean(),
+            :used_count => non_neg_integer(),
+            :systems => [String.t()],
+            :redundancy => integer(),
+            :raim_checkable? => boolean(),
+            optional(:fde) => %{
+              excluded: [{String.t(), :raim_excluded}],
+              iterations: non_neg_integer()
+            }
           }
 
     @type t :: %__MODULE__{
@@ -143,6 +147,16 @@ defmodule Orbis.GNSS.Positioning do
   @type epoch :: NaiveDateTime.t() | tuple()
 
   @default_initial_guess {0.0, 0.0, 0.0, 0.0}
+  # Mean Earth radius, used to place coarse cold-start seeds on a near-surface
+  # shell. The crate freezes its elevation mask and weights at the seed geometry,
+  # so a seed must be a near-surface point for the visible-satellite geometry to
+  # be physical; the seed is only an input and is never gated.
+  @mean_earth_radius_m 6_371_000.0
+  # Default number of golden-spiral surface seeds when `:coarse_search` is on
+  # without an explicit count. Pinned by the cold-start measurement: this many
+  # seeds cover the sphere finely enough that at least one lands in the
+  # convergence basin on the ESBC00DNK GPS-L1 arc, with margin under the bar.
+  @default_coarse_seeds 24
   # A genuinely converged single-point fix has post-fit residuals at the
   # measurement-noise scale (metres to tens of metres). A converged-flagged
   # solution whose post-fit residual RMS exceeds this sanity bound did not
@@ -194,6 +208,65 @@ defmodule Orbis.GNSS.Positioning do
       with `{:error, {:degenerate_geometry, pdop}}` (a non-positive value is
       `{:error, {:invalid_option, :max_pdop}}`); default unset.
 
+  ### Robustness (opt-in, default off)
+
+    * `:robust` - when `true` (default `false`), route the solve through the
+      `Orbis.GNSS.QC` leave-one-out fault-detection-and-exclusion (FDE) loop: a
+      chi-square RAIM test on the post-fit residuals flags an inconsistent set,
+      the satellite with the largest normalized residual is excluded, and the
+      position is re-solved, repeating until the set is self-consistent or the
+      geometry runs out of redundancy. A clean set excludes nothing; the cleaned
+      re-solve still runs through every integrity gate above, so `:robust`
+      composes with the rank, `:max_pdop`, plausibility, and convergence
+      refusals. The returned `Solution` carries the FDE summary at
+      `solution.metadata.fde` as `%{excluded: [{sat, :raim_excluded}],
+      iterations: n}`. If the loop hits its iteration cap (or runs out of
+      satellites) while RAIM still flags a fault, the set could not be made
+      self-consistent and the solve returns
+      `{:error, {:fault_unresolved, statistic}}` rather than a still-faulted fix.
+    * `:weights` - RAIM detection weights for the `:robust` test, a
+      `%{sat => inverse_variance_weight}` map (`1 / sigma_i^2`) as built by
+      `Orbis.GNSS.QC.weight_vector/2` from per-satellite elevation and/or C/N0.
+      When given, it must carry a positive weight for every observed satellite;
+      a partial map (missing an observed satellite) is rejected with
+      `{:error, {:robust_requires_noise_model, :incomplete_weights}}`, and a
+      non-positive, non-finite, or absurdly large observed weight with
+      `{:error, {:invalid_option, :weights}}`, rather than silently falling back
+      to unit weight or overflowing the detection statistic.
+      A realistic noise model is REQUIRED for `:robust`: with unit weights the
+      RAIM test reads ordinary code noise (several metres on a phone) as faults
+      and over-excludes, degrading the fix. `:robust` therefore refuses to run
+      without a noise basis: `:robust true` with no `:weights` and no
+      `:unsafe_unit_weights` returns
+      `{:error, {:robust_requires_noise_model, :no_weights}}` before any solve.
+      Ignored when `:robust` is not set.
+    * `:unsafe_unit_weights` - explicit escape hatch (default `false`). Set to
+      `true` to run `:robust` FDE with unit weights (sigma = 1 m assumed), the
+      only route to unit-weight FDE. Named to be self-documenting and grep-able
+      because unit-weight FDE is the harmful mode on noisy real data; it is
+      appropriate only when the measurements are genuinely sigma-1 clean (for
+      example a synthetic oracle). Ignored when `:robust` is not set.
+    * `:p_fa` - false-alarm probability for the `:robust` RAIM test (default
+      `1.0e-3`); ignored when `:robust` is not set. See `Orbis.GNSS.QC.raim/2`.
+    * `:coarse_search` - cold-start convergence-basin widening for a degraded or
+      absent position prior (default `nil` = off, exact single solve from
+      `:initial_guess`). The crate freezes its elevation mask and weights at the
+      seed geometry, so a seed far from the true surface point (the `{0,0,0,0}`
+      earth-center default, an antipodal last-known fix) either starves on the
+      horizon or is refused by the integrity gates. When set, the solve runs
+      once from each of a deterministic golden-spiral lattice of near-surface
+      seeds (plus the caller's `:initial_guess`), routes every per-seed candidate
+      through the same integrity gates, and selects the best redundant
+      (`redundancy >= 1`) converged fix, so no hardcoded prior is needed.
+      Accepts `true` (the default seed count), a positive integer seed count, or
+      a keyword list `[seeds: n]`. Each seed is one extra crate solve, so the
+      cost scales with the seed count; leave it off on the hot path where a good
+      prior is known. Composes with the integrity gates (including `:max_pdop`)
+      per candidate, but is mutually exclusive with `:robust`: setting both
+      returns `{:error, {:incompatible_options, [:coarse_search, :robust]}}`. A
+      non-positive or non-integer value returns
+      `{:error, {:invalid_option, :coarse_search}}`.
+
   Regardless of options, a fix that did not converge to a physical receiver
   position is refused rather than returned: one whose geocentric radius is
   outside the plausible band (for example from the earth-center default seed, or
@@ -215,19 +288,248 @@ defmodule Orbis.GNSS.Positioning do
   `reason` is `:rank_deficient`, or exceeds the optional `:max_pdop` ceiling, so
   `reason` is the PDOP), `{:implausible_position, radius_m}` (the fix is outside
   the plausible geocentric-radius band), `{:no_convergence, rms_m}` (a
-  converged-flagged fix with physically implausible post-fit residual RMS), or
-  `{:invalid_option, :max_pdop}`.
+  converged-flagged fix with physically implausible post-fit residual RMS),
+  `{:invalid_option, :max_pdop}`, `{:invalid_option, :coarse_search}`,
+  `{:incompatible_options, [:coarse_search, :robust]}`, or, for `:robust`,
+  `{:robust_requires_noise_model, :no_weights}` / `{:robust_requires_noise_model, :incomplete_weights}`
+  (robust was requested with no realistic noise model, or a weights map that does
+  not cover every observed satellite with a positive weight, and no explicit
+  unsafe opt-in), `{:invalid_option, :p_fa}`, or `{:fault_unresolved, statistic}`
+  (the FDE loop exhausted its iterations with a fault still flagged).
   """
   @spec solve(SP3.t() | Broadcast.t(), [observation()], epoch(), keyword()) ::
           {:ok, Solution.t()} | {:error, term()}
   def solve(source, observations, epoch, opts \\ [])
 
-  def solve(%SP3{handle: handle}, observations, epoch, opts) when is_list(observations) do
-    run_solve(:sp3, handle, observations, epoch, opts)
+  def solve(%SP3{handle: handle} = source, observations, epoch, opts)
+      when is_list(observations) do
+    dispatch(source, :sp3, handle, observations, epoch, opts)
   end
 
-  def solve(%Broadcast{handle: handle}, observations, epoch, opts) when is_list(observations) do
-    run_solve(:broadcast, handle, observations, epoch, opts)
+  def solve(%Broadcast{handle: handle} = source, observations, epoch, opts)
+      when is_list(observations) do
+    dispatch(source, :broadcast, handle, observations, epoch, opts)
+  end
+
+  # Opt-in robustness layer over the bare crate solve. When neither :robust nor
+  # :coarse_search is set, this is byte-identical to the pre-robustness path: a
+  # single run_solve through the same post_process integrity gates. The robust
+  # and coarse options are additive Elixir-side wrappers; they never change the
+  # bare-path numerics or the gates.
+  defp dispatch(source, source_tag, handle, observations, epoch, opts) do
+    robust? = Keyword.get(opts, :robust, false)
+    coarse = coarse_search_count(Keyword.get(opts, :coarse_search))
+
+    cond do
+      coarse == :invalid ->
+        {:error, {:invalid_option, :coarse_search}}
+
+      robust? and is_integer(coarse) ->
+        # The robust FDE path and the per-seed coarse search are not composed;
+        # rejecting the combination is honest rather than silently honoring one.
+        {:error, {:incompatible_options, [:coarse_search, :robust]}}
+
+      robust? ->
+        robust_solve(source, observations, epoch, opts)
+
+      is_integer(coarse) ->
+        coarse_search_solve(source_tag, handle, observations, epoch, opts)
+
+      true ->
+        run_solve(source_tag, handle, observations, epoch, opts)
+    end
+  end
+
+  # :robust routes through the QC leave-one-out FDE loop. A realistic noise model
+  # is required: unit-weight FDE treats ordinary code noise as faults and
+  # over-excludes, so it is refused unless the caller passes :weights or the
+  # explicit :unsafe_unit_weights escape hatch. The cleaned re-solve still flows
+  # through run_solve/post_process, so :robust composes with every integrity
+  # gate. The FDE exclusion ledger is folded into metadata.fde.
+  defp robust_solve(source, observations, epoch, opts) do
+    weights = Keyword.get(opts, :weights)
+    unsafe? = Keyword.get(opts, :unsafe_unit_weights, false)
+
+    # Validate the robust contract BEFORE any solve, so solve/4 returns a tagged
+    # error rather than raising from deep in the FDE/RAIM path. A weights map is
+    # a valid noise model only when it carries a positive weight for EVERY
+    # observed satellite: an empty or partial map would otherwise fall back to
+    # unit weight per satellite inside RAIM, the exact silent-degrade this
+    # contract exists to prevent.
+    with :ok <- validate_p_fa(Keyword.get(opts, :p_fa)),
+         :ok <- validate_unsafe_unit_weights(unsafe?),
+         {:ok, raim_weights} <- robust_weights(weights, unsafe?, observations) do
+      run_fde(source, observations, epoch, opts, raim_weights)
+    end
+  end
+
+  defp validate_p_fa(nil), do: :ok
+  # Reject a probability so small that `1.0 - p_fa` rounds to exactly 1.0 in
+  # f64, which the chi-square inverse rejects (it would raise after a solve).
+  defp validate_p_fa(p) when is_number(p) and p > 0.0 and p < 1.0 and 1.0 - p < 1.0, do: :ok
+  defp validate_p_fa(_), do: {:error, {:invalid_option, :p_fa}}
+
+  defp validate_unsafe_unit_weights(v) when is_boolean(v), do: :ok
+  defp validate_unsafe_unit_weights(_), do: {:error, {:invalid_option, :unsafe_unit_weights}}
+
+  # robust_weights is the single validation point for the FDE weight map: it
+  # filters to the observed satellites before RAIM, so RAIM never sees an
+  # unvalidated weight and cannot raise out of solve/4. A weight is 1/sigma^2;
+  # the upper bound caps sigma at ~1 micrometre (far below any real GNSS sigma)
+  # and keeps RAIM's r^2 * weight term finite rather than overflowing.
+  @max_robust_weight 1.0e12
+
+  defp robust_weights(weights, _unsafe?, observations) when is_map(weights) do
+    sats = Enum.map(observations, fn {sat, _pr} -> sat end)
+    present = Enum.filter(sats, &Map.has_key?(weights, &1))
+
+    cond do
+      length(present) < length(sats) ->
+        {:error, {:robust_requires_noise_model, :incomplete_weights}}
+
+      not Enum.all?(present, fn sat -> valid_robust_weight?(Map.get(weights, sat)) end) ->
+        {:error, {:invalid_option, :weights}}
+
+      true ->
+        {:ok, Map.take(weights, sats)}
+    end
+  end
+
+  defp robust_weights(_weights, true, _observations), do: {:ok, :unit}
+
+  defp robust_weights(_weights, false, _observations),
+    do: {:error, {:robust_requires_noise_model, :no_weights}}
+
+  defp valid_robust_weight?(w), do: is_number(w) and w > 0.0 and w <= @max_robust_weight
+
+  defp run_fde(source, observations, epoch, opts, raim_weights) do
+    # Drop the robust-only options and RAIM-only options that are not part of the
+    # public solve/4 surface (:n_systems would otherwise reach RAIM arithmetic
+    # unvalidated and raise); RAIM derives :n_systems from the used satellites.
+    core_opts =
+      Keyword.drop(opts, [
+        :robust,
+        :weights,
+        :unsafe_unit_weights,
+        :p_fa,
+        :coarse_search,
+        :n_systems
+      ])
+
+    fde_opts =
+      core_opts
+      |> Keyword.put(:weights, raim_weights)
+      |> maybe_put(:p_fa, Keyword.get(opts, :p_fa))
+
+    case Orbis.GNSS.QC.fde(source, observations, epoch, fde_opts) do
+      {:ok, %{solution: solution, excluded: excluded, iterations: iterations}} ->
+        metadata = Map.put(solution.metadata, :fde, %{excluded: excluded, iterations: iterations})
+        {:ok, %{solution | metadata: metadata}}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp maybe_put(opts, _key, nil), do: opts
+  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
+
+  # Coarse cold-start: solve once per deterministic near-surface seed (plus the
+  # caller's own :initial_guess), route EVERY per-seed candidate through the same
+  # run_solve/post_process gates the single path uses, and select the best
+  # redundant converged fix. The 0.24.0 plausibility/convergence gates drop the
+  # never-iterated earth-center seed pass-through (it lands near radius zero), so
+  # no residual-RMS workaround is needed; the scorer only ever sees real fixes.
+  defp coarse_search_solve(source_tag, handle, observations, epoch, opts) do
+    n = coarse_search_count(Keyword.get(opts, :coarse_search))
+    core_opts = Keyword.delete(opts, :coarse_search)
+    caller_guess = Keyword.get(opts, :initial_guess, @default_initial_guess)
+    seeds = [caller_guess | coarse_seeds(n)]
+
+    {candidates, last_error} =
+      Enum.reduce(seeds, {[], {:error, :no_coarse_solution}}, fn seed, {acc, last} ->
+        case run_solve(
+               source_tag,
+               handle,
+               observations,
+               epoch,
+               Keyword.put(core_opts, :initial_guess, seed)
+             ) do
+          {:ok, %Solution{} = sol} -> {[sol | acc], last}
+          {:error, _reason} = err -> {acc, err}
+        end
+      end)
+
+    case select_coarse_candidate(candidates) do
+      nil -> last_error
+      %Solution{} = sol -> {:ok, sol}
+    end
+  end
+
+  # Normalize the :coarse_search option to a seed count, or nil when off.
+  defp coarse_search_count(nil), do: nil
+  defp coarse_search_count(false), do: nil
+  defp coarse_search_count(true), do: @default_coarse_seeds
+  defp coarse_search_count(n) when is_integer(n) and n >= 1, do: n
+
+  defp coarse_search_count(opts) when is_list(opts) do
+    # Only a proper keyword list is the [seeds: n] form; any other list (a
+    # charlist, a positional list) is an invalid request, not a default.
+    if Keyword.keyword?(opts) do
+      coarse_search_count(Keyword.get(opts, :seeds, true))
+    else
+      :invalid
+    end
+  end
+
+  # Any other value (0, negative, non-integer) is an invalid request, surfaced
+  # as a tagged error by dispatch rather than crashing solve/4.
+  defp coarse_search_count(_other), do: :invalid
+
+  # Eligibility uses the 0.24.0 redundancy metadata that post_process populates
+  # (redundancy = used_count - (3 + distinct_systems)): keep only converged,
+  # redundant (redundancy >= 1) candidates. This is correct for mixed-
+  # constellation solves, where two systems estimate 5 states so 5 sats is zero
+  # redundancy, unlike a hard-coded min-satellite constant.
+  #
+  # Among the eligible fits the scorer ranks on satellites-used-first, tie-broken
+  # by post-fit residual RMS then GDOP. This is the ratified rule (see the spec
+  # ratification note): a pure min-RMS rule prefers a smaller, more biased
+  # satellite subset, because dropping a satellite lowers post-fit RMS without
+  # lowering true position error; ranking on n_used selects the fix that explains
+  # the most observations, closest to truth on the over-determined oracle.
+  defp select_coarse_candidate(candidates) do
+    candidates
+    |> Enum.filter(fn sol -> sol.metadata.converged and sol.metadata.redundancy >= 1 end)
+    |> case do
+      [] ->
+        nil
+
+      eligible ->
+        Enum.min_by(eligible, &{-length(&1.used_sats), candidate_rms(&1), candidate_gdop(&1)})
+    end
+  end
+
+  defp candidate_rms(%Solution{residuals_m: residuals}), do: residual_rms(residuals)
+
+  defp candidate_gdop(%Solution{dop: %{gdop: g}}), do: g
+  defp candidate_gdop(%Solution{dop: nil}), do: :infinity
+
+  # Deterministic near-surface seeds on a golden-spiral (Fibonacci) lattice at
+  # mean Earth radius, clock bias zero. The lattice depends only on the seed
+  # count, never on the answer, so the search carries no hardcoded prior.
+  defp coarse_seeds(n) when n >= 1 do
+    golden = :math.pi() * (3.0 - :math.sqrt(5.0))
+
+    for i <- 0..(n - 1) do
+      z = 1.0 - 2.0 * (i + 0.5) / n
+      r = :math.sqrt(max(0.0, 1.0 - z * z))
+      theta = golden * i
+      x = @mean_earth_radius_m * r * :math.cos(theta)
+      y = @mean_earth_radius_m * r * :math.sin(theta)
+      zc = @mean_earth_radius_m * z
+      {x, y, zc, 0.0}
+    end
   end
 
   defp run_solve(source, handle, observations, epoch, opts) do
