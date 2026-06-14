@@ -1,7 +1,7 @@
 %{
-  "liborbis_nif-v0.25.0-nif-2.15-aarch64-apple-darwin.so.tar.gz" => "sha256:99b9409065816234415a4c8383a16bab658b7712848f08b2540e3f9bb0a80ed3",
-  "liborbis_nif-v0.25.0-nif-2.15-aarch64-unknown-linux-gnu.so.tar.gz" => "sha256:7b603dd21c478e166e7605a91dba867115228a16501de4250bfe5bcaffc7d62e",
-  "liborbis_nif-v0.25.0-nif-2.15-x86_64-apple-darwin.so.tar.gz" => "sha256:bad911669b4d482e8dc1963b7bf80f8a1d5ba10b42538e011fd2bee8aa081138",
-  "liborbis_nif-v0.25.0-nif-2.15-x86_64-unknown-linux-gnu.so.tar.gz" => "sha256:e7c1b7e2de777258e9a48d35cc3df443e47b7e45857fca606fb915f5afd07e6e",
-  "orbis_nif-v0.25.0-nif-2.15-x86_64-pc-windows-msvc.dll.tar.gz" => "sha256:566f3f227951587a26243e6d493654e29d4a0bdc1761e23c8c616fcab9b9f324",
+  "liborbis_nif-v0.26.0-nif-2.15-aarch64-apple-darwin.so.tar.gz" => "sha256:83ab46a4a79d67619844cbcfa89c8b8074f6455e2c79c35da086651e109d8af4",
+  "liborbis_nif-v0.26.0-nif-2.15-aarch64-unknown-linux-gnu.so.tar.gz" => "sha256:50255ef2b9eecc8da3795c6df4e242f507348feee7478dacc4e42530c544f350",
+  "liborbis_nif-v0.26.0-nif-2.15-x86_64-apple-darwin.so.tar.gz" => "sha256:9f5a1e71f3d4b364b56ba1e9e287020fe8cc23007cd63f6339eab533328c31a0",
+  "liborbis_nif-v0.26.0-nif-2.15-x86_64-unknown-linux-gnu.so.tar.gz" => "sha256:b1b2321a6704132af533a3098f8ecb1f23d26379af10e50c98f8c89d15660aca",
+  "orbis_nif-v0.26.0-nif-2.15-x86_64-pc-windows-msvc.dll.tar.gz" => "sha256:107ce34b96ae1163eaf7381166bd9538affc192dd34681b2860b485e3695ee47",
 }
