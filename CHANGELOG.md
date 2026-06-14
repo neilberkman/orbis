@@ -6,6 +6,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-06-13
+
+### Added
+
+- `Orbis.GNSS.Positioning.solve/4` accepts an opt-in `:robust` flag that routes
+  the single-point solve through RAIM leave-one-out fault detection and
+  exclusion. It requires a real measurement noise model: a `:weights` map with a
+  positive, finite weight for every observed satellite (extra keys are ignored),
+  or the explicit `:unsafe_unit_weights` escape hatch. Without a noise model it
+  refuses (`{:error, {:robust_requires_noise_model, :no_weights}}`) rather than
+  silently running unit-weight FDE, which degrades real receiver fixes. An
+  exhausted-but-still-faulted search returns `{:error, {:fault_unresolved, statistic}}`,
+  and the exclusion ledger is reported in `solution.metadata.fde`.
+- `solve/4` accepts an opt-in `:coarse_search` that widens the cold-start
+  convergence basin from a degraded or absent position prior by solving from a
+  deterministic golden-spiral lattice of near-surface seeds and selecting the
+  best redundant converged fix. It is mutually exclusive with `:robust`. Default
+  off (`nil`) preserves the single exact solve.
+
+### Notes
+
+- All `solve/4` robust and coarse options are additive and default to current
+  behavior; with neither set the solve is unchanged from 0.24.0. Malformed
+  robust/coarse option values return tagged `{:error, _}` rather than raising.
+
 ## [0.24.0] - 2026-06-13
 
 ### Fixed
