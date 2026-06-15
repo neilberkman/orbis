@@ -35,6 +35,11 @@ defmodule Orbis.GNSS.Data do
       (`navigation-office.esa.int`)
     * `:igs_ult`, `:cod_ult`, `:esa_ult`, `:gfz_ult` — ultra-rapid `OPSULT`
       SP3 products for current-day/live-latency use
+    * `:cod_rap` — CODE rapid IONEX (`COD0OPSRAP`) over plain HTTP, the
+      low-latency global ionosphere map (final lags ~1-3 weeks)
+    * `:cod_prd1`, `:cod_prd2` — CODE 1-day and 2-day predicted IONEX
+      (`COD0OPSPRD`); published ahead of time, so `:cod_prd1` resolves for the
+      current/near-future UTC day
     * `:igs` — the IGS merged broadcast navigation file (`:nav`) over HTTPS from
       the BKG IGS archive
 
@@ -244,6 +249,55 @@ defmodule Orbis.GNSS.Data do
       build!(center, :ionex, date, Keyword.get(opts, :sample) || default_sample!(center, :ionex))
 
   @doc """
+  Build the CODE **rapid** IONEX product (`COD0OPSRAP`) for a UTC day.
+
+  The rapid global ionosphere map is the low-latency CODE GIM; the final
+  `COD0OPSFIN` map lags one to three weeks. It resolves on the AIUB `/CODE` root
+  over plain HTTP and defaults to `01H` sampling.
+
+  ## Examples
+
+      iex> p = Orbis.GNSS.Data.rapid_ionex(~D[2026-06-13])
+      iex> Orbis.GNSS.Data.Product.canonical_filename(p)
+      {:ok, "COD0OPSRAP_20261640000_01D_01H_GIM.INX"}
+  """
+  @spec rapid_ionex(Date.t(), keyword()) :: Product.t()
+  def rapid_ionex(%Date{} = date, opts \\ []),
+    do:
+      build!(
+        :cod_rap,
+        :ionex,
+        date,
+        Keyword.get(opts, :sample) || default_sample!(:cod_rap, :ionex)
+      )
+
+  @doc """
+  Build a CODE **predicted** IONEX product (`COD0OPSPRD`) for a UTC day.
+
+  CODE publishes a single predicted GIM; the catalog distinguishes horizons by
+  the day each alias targets. `center` is `:cod_prd1` (1-day-ahead, the
+  current/near-future day) or `:cod_prd2` (2-day-ahead, the day after `date`).
+  Predicted maps are published before their target day starts, so a predicted
+  product is resolvable for the current/near-future UTC day. Resolves on the
+  AIUB `/CODE` root over plain HTTP and defaults to `01H` sampling.
+
+  ## Examples
+
+      iex> p = Orbis.GNSS.Data.predicted_ionex(:cod_prd1, ~D[2026-06-14])
+      iex> Orbis.GNSS.Data.Product.canonical_filename(p)
+      {:ok, "COD0OPSPRD_20261650000_01D_01H_GIM.INX"}
+
+      iex> p = Orbis.GNSS.Data.predicted_ionex(:cod_prd2, ~D[2026-06-14])
+      iex> Orbis.GNSS.Data.Product.canonical_filename(p)
+      {:ok, "COD0OPSPRD_20261660000_01D_01H_GIM.INX"}
+  """
+  @spec predicted_ionex(atom(), Date.t(), keyword()) :: Product.t()
+  def predicted_ionex(center, %Date{} = date, opts \\ []) when center in [:cod_prd1, :cod_prd2] do
+    target = Date.add(date, Catalog.predicted_day_offset(center))
+    build!(center, :ionex, target, Keyword.get(opts, :sample) || default_sample!(center, :ionex))
+  end
+
+  @doc """
   Build a daily **station observation** product (RINEX 3 CRINEX, 30 s default).
 
   Station observation files are keyed by a 9-character site id (e.g.
@@ -390,6 +444,54 @@ defmodule Orbis.GNSS.Data do
         {:error, _} = err ->
           err
       end
+    end
+  end
+
+  @doc """
+  Fetch a CODE rapid or predicted IONEX map for a target day, walking candidate
+  days newest first.
+
+  The rapid map (`:cod_rap`) lands a day or two late and the predicted maps
+  (`:cod_prd1`, `:cod_prd2`) are published ahead of their target day, so the
+  freshest file present may be for a slightly earlier day than first requested.
+  This tries `Orbis.GNSS.Data.Catalog.gim_date_candidates/3` newest first through
+  the ordinary `fetch/2` path and returns the first hit, or the last error when
+  every candidate misses (preserving the `{:offline_miss, _}` taxonomy offline).
+
+  Returns `{:ok, path}` or a typed `{:error, _}`.
+  """
+  @spec fetch_ionex(atom(), Date.t() | NaiveDateTime.t() | DateTime.t(), keyword()) ::
+          {:ok, String.t()} | error()
+  def fetch_ionex(center, target, opts \\ []) do
+    lookback = Keyword.get(opts, :lookback, 2)
+    sample_opts = Keyword.take(opts, [:sample])
+
+    case Catalog.gim_date_candidates(center, target, lookback) do
+      dates when is_list(dates) ->
+        fetch_first_ionex(center, dates, sample_opts, opts, nil)
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp fetch_first_ionex(_center, [], _sample_opts, _opts, last_error),
+    do: last_error || {:error, {:unsupported_product, :no_candidate}}
+
+  defp fetch_first_ionex(center, [date | rest], sample_opts, opts, _last_error) do
+    # gim_date_candidates already applied the predicted horizon offset, so build
+    # the product directly at the candidate date (no further offset here).
+    product =
+      build!(
+        center,
+        :ionex,
+        date,
+        Keyword.get(sample_opts, :sample) || default_sample!(center, :ionex)
+      )
+
+    case fetch(product, opts) do
+      {:ok, path} -> {:ok, path}
+      {:error, _} = err -> fetch_first_ionex(center, rest, sample_opts, opts, err)
     end
   end
 

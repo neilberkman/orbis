@@ -124,6 +124,20 @@ defmodule Orbis.GNSS.DataTest do
                Data.fetch(bad, offline: true, cache_dir: cache_dir)
     end
 
+    test "returns an offline_miss for a rapid IONEX product", %{cache_dir: cache_dir} do
+      product = Data.rapid_ionex(~D[2026-06-13])
+
+      assert {:error, {:offline_miss, "COD0OPSRAP_20261640000_01D_01H_GIM.INX"}} =
+               Data.fetch(product, offline: true, cache_dir: cache_dir)
+    end
+
+    test "fetch_ionex offline-miss exhausts every candidate day", %{cache_dir: cache_dir} do
+      # No candidate seeded: the rapid walk tries doy 165/164/163 and the last
+      # offline miss is surfaced (the oldest candidate, doy 163).
+      assert {:error, {:offline_miss, "COD0OPSRAP_20261630000_01D_01H_GIM.INX"}} =
+               Data.fetch_ionex(:cod_rap, ~D[2026-06-14], offline: true, cache_dir: cache_dir)
+    end
+
     test "respects app-config offline mode", %{cache_dir: cache_dir} do
       Application.put_env(:orbis, :gnss_data_offline, true)
       on_exit(fn -> Application.delete_env(:orbis, :gnss_data_offline) end)
@@ -188,6 +202,42 @@ defmodule Orbis.GNSS.DataTest do
 
       assert {:error, {:offline_miss, _}} =
                Data.sp3(product, offline: true, cache_dir: cache_dir)
+    end
+
+    test "rapid_ionex/2 and predicted_ionex/3 resolve canonical CODE GIM names" do
+      assert {:ok, "COD0OPSRAP_20261640000_01D_01H_GIM.INX"} =
+               Data.Product.canonical_filename(Data.rapid_ionex(~D[2026-06-13]))
+
+      # 1-day-ahead targets the given day; 2-day-ahead targets the day after.
+      assert {:ok, "COD0OPSPRD_20261650000_01D_01H_GIM.INX"} =
+               Data.Product.canonical_filename(Data.predicted_ionex(:cod_prd1, ~D[2026-06-14]))
+
+      assert {:ok, "COD0OPSPRD_20261660000_01D_01H_GIM.INX"} =
+               Data.Product.canonical_filename(Data.predicted_ionex(:cod_prd2, ~D[2026-06-14]))
+    end
+
+    test "fetch_ionex/3 returns a cached rapid GIM from a fallback day offline", %{
+      cache_dir: cache_dir
+    } do
+      # Today's (doy 165) rapid map has not landed; seed the prior day (doy 164)
+      # so the newest-first candidate walk falls back to it without network.
+      product = Data.rapid_ionex(~D[2026-06-13])
+      seeded = seed(cache_dir, product, "IONEX VERSION / TYPE\n")
+
+      assert {:ok, ^seeded} =
+               Data.fetch_ionex(:cod_rap, ~D[2026-06-14], offline: true, cache_dir: cache_dir)
+    end
+
+    test "fetch_ionex/3 resolves a 1-day predicted GIM for the current UTC day offline", %{
+      cache_dir: cache_dir
+    } do
+      # The 1-day predicted map for a UTC day exists before that day starts, so
+      # the current-day candidate is the first one tried and resolves directly.
+      product = Data.predicted_ionex(:cod_prd1, ~D[2026-06-14])
+      seeded = seed(cache_dir, product, "IONEX VERSION / TYPE\n")
+
+      assert {:ok, ^seeded} =
+               Data.fetch_ionex(:cod_prd1, ~D[2026-06-14], offline: true, cache_dir: cache_dir)
     end
 
     test "station_obs/3 resolves the canonical RINEX-3 observation name" do
@@ -403,6 +453,30 @@ defmodule Orbis.GNSS.DataTest do
       product = Data.mgex_ionex(:cod, ~D[2024-06-24])
 
       assert {:ok, path} = Data.fetch(product, cache_dir: cache_dir)
+      assert File.exists?(path)
+      assert File.read!(path) =~ "IONEX VERSION / TYPE"
+    end
+
+    @tag :network
+    test "downloads a real CODE rapid IONEX over AIUB HTTP", %{cache_dir: cache_dir} do
+      # The CODE rapid GIM lands a day or two late, so a recent past day is used.
+      # fetch_ionex walks candidate days newest first through the ordinary
+      # fetch/2 path (the same surface as the final IONEX above).
+      assert {:ok, path} =
+               Data.fetch_ionex(:cod_rap, Date.utc_today() |> Date.add(-1), cache_dir: cache_dir)
+
+      assert File.exists?(path)
+      assert File.read!(path) =~ "IONEX VERSION / TYPE"
+    end
+
+    @tag :network
+    test "downloads a real CODE 1-day predicted IONEX for a current UTC day over AIUB HTTP",
+         %{cache_dir: cache_dir} do
+      # The 1-day predicted map for a UTC day is published before that day starts,
+      # so the current UTC day resolves through the same fetch path.
+      assert {:ok, path} =
+               Data.fetch_ionex(:cod_prd1, Date.utc_today(), cache_dir: cache_dir)
+
       assert File.exists?(path)
       assert File.read!(path) =~ "IONEX VERSION / TYPE"
     end

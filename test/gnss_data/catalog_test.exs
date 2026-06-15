@@ -237,6 +237,73 @@ defmodule Orbis.GNSS.Data.CatalogTest do
     end
   end
 
+  describe "CODE rapid and predicted IONEX" do
+    test "rapid GIM uses the COD0OPSRAP token on the AIUB CODE root" do
+      assert {:ok, "COD0OPSRAP_20261640000_01D_01H_GIM.INX"} =
+               Catalog.canonical_filename(:cod_rap, :ionex, ~D[2026-06-13], "01H")
+
+      assert {:ok, "http://ftp.aiub.unibe.ch/CODE/COD0OPSRAP_20261640000_01D_01H_GIM.INX.gz"} =
+               Catalog.archive_url(:cod_rap, :ionex, ~D[2026-06-13], "01H")
+    end
+
+    test "predicted GIMs share the COD0OPSPRD token and CODE root" do
+      # The two predicted aliases differ only in the day they target; both serve
+      # the single COD0OPSPRD product (horizon is in the file header, not name).
+      assert {:ok, "COD0OPSPRD_20261650000_01D_01H_GIM.INX"} =
+               Catalog.canonical_filename(:cod_prd1, :ionex, ~D[2026-06-14], "01H")
+
+      assert {:ok, "http://ftp.aiub.unibe.ch/CODE/COD0OPSPRD_20261650000_01D_01H_GIM.INX.gz"} =
+               Catalog.archive_url(:cod_prd1, :ionex, ~D[2026-06-14], "01H")
+
+      # The low-level catalog call encodes the date verbatim; the predicted-day
+      # offset is applied by the convenience builder / candidate walk, not here.
+      # So the same date yields the same filename for both predicted aliases.
+      assert {:ok, "http://ftp.aiub.unibe.ch/CODE/COD0OPSPRD_20261660000_01D_01H_GIM.INX.gz"} =
+               Catalog.archive_url(:cod_prd2, :ionex, ~D[2026-06-15], "01H")
+
+      assert {:ok, "http://ftp.aiub.unibe.ch/CODE/COD0OPSPRD_20261660000_01D_01H_GIM.INX.gz"} =
+               Catalog.archive_url(:cod_prd1, :ionex, ~D[2026-06-15], "01H")
+    end
+
+    test "rapid and predicted GIMs compress as .gz and default to 01H" do
+      assert {:ok, :gzip} = Catalog.compression(:cod_rap, :ionex)
+      assert {:ok, :gzip} = Catalog.compression(:cod_prd1, :ionex)
+      assert {:ok, "01H"} = Catalog.default_sample(:cod_rap, :ionex)
+      assert {:ok, "01H"} = Catalog.default_sample(:cod_prd2, :ionex)
+    end
+
+    test "predicted_day_offset distinguishes 1-day from 2-day horizon" do
+      assert Catalog.predicted_day_offset(:cod_prd1) == 0
+      assert Catalog.predicted_day_offset(:cod_prd2) == 1
+      assert Catalog.predicted_day_offset(:cod_rap) == 0
+    end
+
+    test "gim_date_candidates walks the calendar day backward, newest first" do
+      assert [~D[2026-06-14], ~D[2026-06-13], ~D[2026-06-12]] =
+               Catalog.gim_date_candidates(:cod_rap, ~D[2026-06-14])
+
+      # The predicted offset is applied to the target before fallback expansion.
+      assert [~D[2026-06-14], ~D[2026-06-13]] =
+               Catalog.gim_date_candidates(:cod_prd1, ~D[2026-06-14], 1)
+
+      assert [~D[2026-06-15], ~D[2026-06-14]] =
+               Catalog.gim_date_candidates(:cod_prd2, ~D[2026-06-14], 1)
+    end
+
+    test "the IGS combined rapid IONEX has no open mirror" do
+      assert {:error, {:no_open_mirror, {:igs, :ionex}}} =
+               Catalog.canonical_filename(:igs, :ionex, ~D[2026-06-14], "01H")
+    end
+
+    test "AIUB is the only host introduced by the new IONEX aliases" do
+      hosts = Catalog.allowed_hosts()
+      assert MapSet.member?(hosts, "ftp.aiub.unibe.ch")
+      assert :cod_rap in Catalog.centers()
+      assert :cod_prd1 in Catalog.centers()
+      assert :cod_prd2 in Catalog.centers()
+    end
+  end
+
   describe "protocol/1, compression/2, and allowed_hosts/0" do
     test "maps centers to catalog protocols" do
       assert {:ok, :https} = Catalog.protocol(:gfz)

@@ -27,6 +27,9 @@ defmodule Orbis.GNSS.Data.Catalog do
   | `:cod_ult` | CODE ultra-rapid                     | HTTP     | `ftp.aiub.unibe.ch`          |
   | `:esa_ult` | ESA ultra-rapid                      | HTTPS    | `navigation-office.esa.int`  |
   | `:gfz_ult` | GFZ ultra-rapid                      | HTTPS    | `isdc-data.gfz.de`           |
+  | `:cod_rap` | CODE rapid global ionosphere map     | HTTP     | `ftp.aiub.unibe.ch`          |
+  | `:cod_prd1`| CODE 1-day predicted ionosphere map  | HTTP     | `ftp.aiub.unibe.ch`          |
+  | `:cod_prd2`| CODE 2-day predicted ionosphere map  | HTTP     | `ftp.aiub.unibe.ch`          |
 
   AIUB's public CODE archive does not offer HTTPS. CODE products are public
   data, but fresh products do not have published checksums; transport integrity
@@ -48,8 +51,19 @@ defmodule Orbis.GNSS.Data.Catalog do
     * `:nav` — the IGS merged multi-GNSS broadcast navigation file
       (`BRDC00WRD_R_..._MN.rnx`). Only `:igs` publishes it.
     * `:ionex` — the global ionosphere TEC map (`..._GIM.INX`). `:cod` serves
-      `COD0OPSFIN` over HTTP and `:esa` serves `ESA0OPSFIN` over HTTPS. IONEX
-      cadence is sub-daily, so the default sampling is `01H`/`02H`, not `01D`.
+      the final `COD0OPSFIN` over HTTP and `:esa` serves `ESA0OPSFIN` over
+      HTTPS. Lower-latency CODE GIMs live in the AIUB `/CODE` root: `:cod_rap`
+      serves the rapid map `COD0OPSRAP` (short name `CORG<ddd>0.<yy>I`), and the
+      predicted aliases `:cod_prd1` (1-day-ahead) and `:cod_prd2` (2-day-ahead)
+      both serve `COD0OPSPRD` (short name `COPG<ddd>0.<yy>I`). The predicted
+      product is published in real time: the 1-day map for a UTC day exists
+      before that day starts, so `:cod_prd1` resolves for the current/near-future
+      UTC day and `:cod_prd2` for the day after. AIUB encodes the prediction
+      horizon only in the file's `COMMENT` header, not the filename; the catalog
+      distinguishes the horizons by the target date the convenience builders
+      offset to. The IGS combined rapid map `IGS0OPSRAP` has no verified open
+      HTTP(S) mirror and stays in `@no_open_mirrors`. IONEX cadence is sub-daily,
+      so the default sampling is `01H`/`02H`, not `01D`.
 
   ## Filename conventions
 
@@ -154,6 +168,36 @@ defmodule Orbis.GNSS.Data.Catalog do
       spans: %{sp3: "02D"},
       samples: %{sp3: "05M"},
       issues: @opsult_issues
+    },
+    cod_rap: %{
+      name: "CODE rapid global ionosphere map",
+      protocol: :http,
+      host: "ftp.aiub.unibe.ch",
+      root: "http://ftp.aiub.unibe.ch",
+      tokens: %{ionex: "COD0OPSRAP"},
+      layouts: %{ionex: :aiub_code_root},
+      spans: %{ionex: "01D"},
+      samples: %{ionex: "01H"}
+    },
+    cod_prd1: %{
+      name: "CODE 1-day predicted global ionosphere map",
+      protocol: :http,
+      host: "ftp.aiub.unibe.ch",
+      root: "http://ftp.aiub.unibe.ch",
+      tokens: %{ionex: "COD0OPSPRD"},
+      layouts: %{ionex: :aiub_code_root},
+      spans: %{ionex: "01D"},
+      samples: %{ionex: "01H"}
+    },
+    cod_prd2: %{
+      name: "CODE 2-day predicted global ionosphere map",
+      protocol: :http,
+      host: "ftp.aiub.unibe.ch",
+      root: "http://ftp.aiub.unibe.ch",
+      tokens: %{ionex: "COD0OPSPRD"},
+      layouts: %{ionex: :aiub_code_root},
+      spans: %{ionex: "01D"},
+      samples: %{ionex: "01H"}
     },
     igs: %{
       name: "IGS Combined Analysis Center",
@@ -440,6 +484,79 @@ defmodule Orbis.GNSS.Data.Catalog do
       end
     end
   end
+
+  @doc """
+  Day offset, relative to a target UTC date, that a predicted IONEX alias maps to.
+
+  CODE publishes a single predicted product (`COD0OPSPRD`); the prediction
+  horizon ("1-DAY", "2-DAY", ... PREDICTED) appears only in the file's COMMENT
+  header, never the filename. The catalog therefore distinguishes the horizons by
+  the calendar day each alias targets: `:cod_prd1` is the current/near-future day
+  (offset `0`) and `:cod_prd2` is the day after (offset `+1`). Non-predicted
+  centers return `0`.
+
+  ## Examples
+
+      iex> Orbis.GNSS.Data.Catalog.predicted_day_offset(:cod_prd1)
+      0
+
+      iex> Orbis.GNSS.Data.Catalog.predicted_day_offset(:cod_prd2)
+      1
+
+      iex> Orbis.GNSS.Data.Catalog.predicted_day_offset(:cod_rap)
+      0
+  """
+  @spec predicted_day_offset(atom()) :: integer()
+  def predicted_day_offset(:cod_prd1), do: 0
+  def predicted_day_offset(:cod_prd2), do: 1
+  def predicted_day_offset(_center), do: 0
+
+  @doc """
+  Candidate UTC dates for a daily GIM (rapid or predicted) at or before `target`,
+  newest first.
+
+  Unlike ultra-rapid SP3, the CODE rapid and predicted GIMs are daily files with
+  no sub-daily issue time, so the latest-available fallback walks the calendar day
+  backward instead of the issue clock. The rapid map lands a day or two late and
+  the predicted map is published ahead of its target day; in both cases the
+  freshest file present may be for a slightly earlier day than first requested, so
+  the fetch layer tries these candidates newest first.
+
+  Returns a list of `Date` values (at most `lookback + 1` entries, default
+  lookback `2`), or a tagged error for an unsupported center/content.
+
+  ## Examples
+
+      iex> Orbis.GNSS.Data.Catalog.gim_date_candidates(:cod_rap, ~D[2026-06-14])
+      [~D[2026-06-14], ~D[2026-06-13], ~D[2026-06-12]]
+
+      iex> Orbis.GNSS.Data.Catalog.gim_date_candidates(:cod_prd1, ~D[2026-06-14], 1)
+      [~D[2026-06-14], ~D[2026-06-13]]
+  """
+  @spec gim_date_candidates(
+          atom(),
+          Date.t() | NaiveDateTime.t() | DateTime.t(),
+          non_neg_integer()
+        ) ::
+          [Date.t()] | error()
+  def gim_date_candidates(center, target, lookback \\ 2) do
+    with :ok <- open_mirror(center, :ionex),
+         {:ok, _cdef} <- center(center),
+         {:ok, base} <- gim_target_date(center, target) do
+      for back <- 0..lookback, do: Date.add(base, -back)
+    end
+  end
+
+  defp gim_target_date(center, %Date{} = date),
+    do: {:ok, Date.add(date, predicted_day_offset(center))}
+
+  defp gim_target_date(center, %DateTime{} = target),
+    do: gim_target_date(center, DateTime.to_date(target))
+
+  defp gim_target_date(center, %NaiveDateTime{} = target),
+    do: gim_target_date(center, NaiveDateTime.to_date(target))
+
+  defp gim_target_date(_center, _target), do: {:error, {:unsupported_product, :bad_target}}
 
   @doc """
   Build the canonical IGS long-name filename for a daily station observation

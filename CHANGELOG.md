@@ -6,6 +6,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-06-14
+
+### Added
+
+- Lower-latency CODE IONEX (global ionosphere TEC map) products in the data
+  catalog, alongside the existing final `COD0OPSFIN`: `:cod_rap` (rapid GIM,
+  `COD0OPSRAP`) and `:cod_prd1` / `:cod_prd2` (predicted GIM, `COD0OPSPRD`, the
+  map for the requested UTC day and the day after). Final GIMs lag one to three
+  weeks; the rapid and predicted maps resolve same-day / before-the-day over the
+  AIUB CODE archive, so a near-real-time ionosphere map is now fetchable through
+  the same path as the final IONEX. Rapid and predicted lines carry a
+  latest-available-day candidate fallback, mirroring the SP3 ultra-rapid pattern.
+  Single-product fetch only (no merge/combine). IGS rapid IONEX has no verified
+  open mirror and remains in the no-open-mirrors set.
+
 ## [0.27.0] - 2026-06-14
 
 ### Fixed
