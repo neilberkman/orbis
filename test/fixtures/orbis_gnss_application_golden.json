@@ -6,7 +6,7 @@
     "note": "Generated in the pinned parity virtualenv; floats are stored as Python float.hex()."
   },
   "generator": {
-    "python": "3.14.4",
+    "python": "3.14.6",
     "executable": "/Volumes/ExternalSSD/orbis-gnss-workspace/parity/.venv/bin/python",
     "numpy": "2.4.6",
     "scipy": "1.17.1"
@@ -441,8 +441,8 @@
     "visible_gps_mask10": [
       {
         "satellite_id": "G21",
-        "elevation_deg": "0x1.4591189670ac1p+6",
-        "azimuth_deg": "0x1.45fceda657bdbp+7"
+        "elevation_deg": "0x1.4591189670abep+6",
+        "azimuth_deg": "0x1.45fceda657bddp+7"
       },
       {
         "satellite_id": "G16",
@@ -452,7 +452,7 @@
       {
         "satellite_id": "G18",
         "elevation_deg": "0x1.a84efe5e0530ep+5",
-        "azimuth_deg": "0x1.171c40258d5d8p+6"
+        "azimuth_deg": "0x1.171c40258d5d7p+6"
       },
       {
         "satellite_id": "G27",
@@ -461,7 +461,7 @@
       },
       {
         "satellite_id": "G20",
-        "elevation_deg": "0x1.7bf8cd086700cp+5",
+        "elevation_deg": "0x1.7bf8cd0867010p+5",
         "azimuth_deg": "0x1.09b4d5d4ca89ep+7"
       },
       {
@@ -476,18 +476,18 @@
       },
       {
         "satellite_id": "G08",
-        "elevation_deg": "0x1.1c7949caef4f0p+4",
+        "elevation_deg": "0x1.1c7949caef4f1p+4",
         "azimuth_deg": "0x1.1d431e8cd0776p+8"
       },
       {
         "satellite_id": "G07",
-        "elevation_deg": "0x1.b92ae7017af2ep+3",
+        "elevation_deg": "0x1.b92ae7017af30p+3",
         "azimuth_deg": "0x1.4a8c320af855ap+8"
       },
       {
         "satellite_id": "G15",
-        "elevation_deg": "0x1.4eff63f977db8p+3",
-        "azimuth_deg": "0x1.190562c4119dbp+6"
+        "elevation_deg": "0x1.4eff63f977dbbp+3",
+        "azimuth_deg": "0x1.190562c4119dap+6"
       }
     ],
     "dop_weighted": {
@@ -500,11 +500,11 @@
         "G26",
         "G10"
       ],
-      "gdop": "0x1.7a3e59e60c164p+2",
-      "pdop": "0x1.2ae5c34b64e98p+2",
-      "hdop": "0x1.110f349980ad4p+1",
-      "vdop": "0x1.09e4bdb1f2f07p+2",
-      "tdop": "0x1.cf9689d8436d2p+1"
+      "gdop": "0x1.7a3e59e5fd85dp+2",
+      "pdop": "0x1.2ae5c34b5a8bdp+2",
+      "hdop": "0x1.110f34998dcb8p+1",
+      "vdop": "0x1.09e4bdb1e3eb3p+2",
+      "tdop": "0x1.cf9689d82ea0fp+1"
     },
     "velocity": {
       "receiver_ecef_m": [
@@ -521,39 +521,39 @@
       "observations": [
         {
           "sat": "G21",
-          "rho_dot_m_s": "0x1.3a9680328bb22p+7"
+          "rho_dot_m_s": "0x1.3a9470c18c1a7p+7"
         },
         {
           "sat": "G16",
-          "rho_dot_m_s": "-0x1.5ec02b65d83e1p+5"
+          "rho_dot_m_s": "-0x1.5eb58a1b7b54ep+5"
         },
         {
           "sat": "G26",
-          "rho_dot_m_s": "0x1.9ef6a5653bb2ap+8"
+          "rho_dot_m_s": "0x1.9ef7d9618f6b0p+8"
         },
         {
           "sat": "G20",
-          "rho_dot_m_s": "-0x1.89ed87ede6d7cp+7"
+          "rho_dot_m_s": "-0x1.89f0e9e24fbc3p+7"
         },
         {
           "sat": "G27",
-          "rho_dot_m_s": "-0x1.7521ab3a33211p+8"
+          "rho_dot_m_s": "-0x1.75231a845d789p+8"
         },
         {
           "sat": "G18",
-          "rho_dot_m_s": "0x1.ec071977de5a8p+8"
+          "rho_dot_m_s": "0x1.ec07dd774b2f8p+8"
         },
         {
           "sat": "G10",
-          "rho_dot_m_s": "-0x1.1c9af689ad5a8p+9"
+          "rho_dot_m_s": "-0x1.1c9b51570e844p+9"
         }
       ],
       "solution_velocity_m_s": [
-        "0x1.8000000000000p+3",
-        "-0x1.c0000000000b0p+2",
-        "0x1.7fffffffffe80p+1"
+        "0x1.7ffffffffffa0p+3",
+        "-0x1.bffffffffffc0p+2",
+        "0x1.8000000000000p+1"
       ],
-      "solution_clock_drift_s_s": "0x1.12e0be826d3d3p-30"
+      "solution_clock_drift_s_s": "0x1.12e0be826d03ep-30"
     },
     "dgnss": {
       "base_ecef_m": [
@@ -569,61 +569,61 @@
       "base_observations": [
         {
           "sat": "G21",
-          "pseudorange_m": "0x1.3ce3195b6110fp+24"
+          "pseudorange_m": "0x1.3ce3195b756f1p+24"
         },
         {
           "sat": "G16",
-          "pseudorange_m": "0x1.3bd5b9d4d7f18p+24"
+          "pseudorange_m": "0x1.3bd5b9d4bdd3ep+24"
         },
         {
           "sat": "G18",
-          "pseudorange_m": "0x1.424f54d6a4985p+24"
+          "pseudorange_m": "0x1.424f54d69869ap+24"
         },
         {
           "sat": "G27",
-          "pseudorange_m": "0x1.449189913a89fp+24"
+          "pseudorange_m": "0x1.4491899155e41p+24"
         },
         {
           "sat": "G20",
-          "pseudorange_m": "0x1.46c24809ac07fp+24"
+          "pseudorange_m": "0x1.46c24809cbb4ap+24"
         },
         {
           "sat": "G26",
-          "pseudorange_m": "0x1.4e19c5a752969p+24"
+          "pseudorange_m": "0x1.4e19c5a73a18bp+24"
         },
         {
           "sat": "G10",
-          "pseudorange_m": "0x1.66e37b919e098p+24"
+          "pseudorange_m": "0x1.66e37b91ab19ep+24"
         }
       ],
       "rover_observations": [
         {
           "sat": "G21",
-          "pseudorange_m": "0x1.3cd575530315ap+24"
+          "pseudorange_m": "0x1.3cd5755317734p+24"
         },
         {
           "sat": "G16",
-          "pseudorange_m": "0x1.3bc9956f38a32p+24"
+          "pseudorange_m": "0x1.3bc9956f1e864p+24"
         },
         {
           "sat": "G18",
-          "pseudorange_m": "0x1.4243b651dbc86p+24"
+          "pseudorange_m": "0x1.4243b651cf993p+24"
         },
         {
           "sat": "G27",
-          "pseudorange_m": "0x1.4488806de3ee5p+24"
+          "pseudorange_m": "0x1.4488806dff492p+24"
         },
         {
           "sat": "G20",
-          "pseudorange_m": "0x1.46b4eddca574ep+24"
+          "pseudorange_m": "0x1.46b4eddcc5211p+24"
         },
         {
           "sat": "G26",
-          "pseudorange_m": "0x1.4e0d498c69aadp+24"
+          "pseudorange_m": "0x1.4e0d498c512d0p+24"
         },
         {
           "sat": "G10",
-          "pseudorange_m": "0x1.66d83142b5f7fp+24"
+          "pseudorange_m": "0x1.66d83142c3088p+24"
         }
       ],
       "corrections_m": {
@@ -638,31 +638,31 @@
       "corrected_rover": [
         {
           "sat": "G21",
-          "pseudorange_m": "0x1.3cd46008248eap+24"
+          "pseudorange_m": "0x1.3cd4600838ec4p+24"
         },
         {
           "sat": "G16",
-          "pseudorange_m": "0x1.3bc873645a1c1p+24"
+          "pseudorange_m": "0x1.3bc873643fff3p+24"
         },
         {
           "sat": "G18",
-          "pseudorange_m": "0x1.42428786fd415p+24"
+          "pseudorange_m": "0x1.42428786f1122p+24"
         },
         {
           "sat": "G27",
-          "pseudorange_m": "0x1.448744e305675p+24"
+          "pseudorange_m": "0x1.448744e320c22p+24"
         },
         {
           "sat": "G20",
-          "pseudorange_m": "0x1.46b3d351c6edep+24"
+          "pseudorange_m": "0x1.46b3d351e69a1p+24"
         },
         {
           "sat": "G26",
-          "pseudorange_m": "0x1.4e0c22418b23dp+24"
+          "pseudorange_m": "0x1.4e0c224172a60p+24"
         },
         {
           "sat": "G10",
-          "pseudorange_m": "0x1.66d6fd37d770fp+24"
+          "pseudorange_m": "0x1.66d6fd37e4818p+24"
         }
       ]
     },
@@ -696,38 +696,38 @@
       "sky": [
         {
           "sat": "G21",
-          "elevation_deg": "0x1.4590eed87ea38p+6",
-          "azimuth_deg": "0x1.45ff5a08c0afcp+7"
+          "elevation_deg": "0x1.4590eed870f52p+6",
+          "azimuth_deg": "0x1.45ff5a090a131p+7"
         },
         {
           "sat": "G16",
-          "elevation_deg": "0x1.02d08fe49e2c2p+6",
-          "azimuth_deg": "0x1.e45cb9c032ec0p+7"
+          "elevation_deg": "0x1.02d08fe4b2270p+6",
+          "azimuth_deg": "0x1.e45cb9c04fe5ap+7"
         },
         {
           "sat": "G18",
-          "elevation_deg": "0x1.a850706f6ad3fp+5",
-          "azimuth_deg": "0x1.171c971a44669p+6"
+          "elevation_deg": "0x1.a850706fadb05p+5",
+          "azimuth_deg": "0x1.171c971a4e603p+6"
         },
         {
           "sat": "G27",
-          "elevation_deg": "0x1.92b71c6cf1532p+5",
-          "azimuth_deg": "0x1.1bcbca105a91dp+8"
+          "elevation_deg": "0x1.92b71c6cb3b55p+5",
+          "azimuth_deg": "0x1.1bcbca10560efp+8"
         },
         {
           "sat": "G20",
-          "elevation_deg": "0x1.7bf84f6cc01f4p+5",
-          "azimuth_deg": "0x1.09b55d2447ea4p+7"
+          "elevation_deg": "0x1.7bf84f6c8b470p+5",
+          "azimuth_deg": "0x1.09b55d24466dep+7"
         },
         {
           "sat": "G26",
-          "elevation_deg": "0x1.5089b60bf5fe3p+5",
-          "azimuth_deg": "0x1.76743d12877dcp+7"
+          "elevation_deg": "0x1.5089b60c1cc89p+5",
+          "azimuth_deg": "0x1.76743d1276ed9p+7"
         },
         {
           "sat": "G10",
-          "elevation_deg": "0x1.88359c7764e07p+4",
-          "azimuth_deg": "0x1.45ddc4b3fea8ep+7"
+          "elevation_deg": "0x1.88359c7714d31p+4",
+          "azimuth_deg": "0x1.45ddc4b3ee4e9p+7"
         }
       ],
       "residual_rms_m": "0x1.8e2d3cc4d824bp-3"
@@ -748,103 +748,103 @@
       "observations": [
         {
           "sat": "G21",
-          "code_m": "0x1.3ce210908289fp+24",
-          "phase_m": "0x1.3d1ca8908289fp+24",
+          "code_m": "0x1.3ce2109096e81p+24",
+          "phase_m": "0x1.3d1ca89096e81p+24",
           "ambiguity_m": "0x1.d4c0000000000p+13"
         },
         {
           "sat": "G16",
-          "code_m": "0x1.3bd4a449f96a7p+24",
-          "phase_m": "0x1.3c0f4d89f96a7p+24",
+          "code_m": "0x1.3bd4a449df4cdp+24",
+          "phase_m": "0x1.3c0f4d89df4cdp+24",
           "ambiguity_m": "0x1.d54a000000000p+13"
         },
         {
           "sat": "G18",
-          "code_m": "0x1.424e328bc6114p+24",
-          "phase_m": "0x1.4288ed0bc6114p+24",
+          "code_m": "0x1.424e328bb9e29p+24",
+          "phase_m": "0x1.4288ed0bb9e29p+24",
           "ambiguity_m": "0x1.d5d4000000000p+13"
         },
         {
           "sat": "G27",
-          "code_m": "0x1.44905a865c02fp+24",
-          "phase_m": "0x1.44cb26465c02fp+24",
+          "code_m": "0x1.44905a86775d1p+24",
+          "phase_m": "0x1.44cb2646775d1p+24",
           "ambiguity_m": "0x1.d65e000000000p+13"
         },
         {
           "sat": "G20",
-          "code_m": "0x1.46c139fecd80fp+24",
-          "phase_m": "0x1.46fc16fecd80fp+24",
+          "code_m": "0x1.46c139feed2dap+24",
+          "phase_m": "0x1.46fc16feed2dap+24",
           "ambiguity_m": "0x1.d6e8000000000p+13"
         },
         {
           "sat": "G26",
-          "code_m": "0x1.4e18aadc740f9p+24",
-          "phase_m": "0x1.4e53991c740f9p+24",
+          "code_m": "0x1.4e18aadc5b91bp+24",
+          "phase_m": "0x1.4e53991c5b91bp+24",
           "ambiguity_m": "0x1.d772000000000p+13"
         },
         {
           "sat": "G10",
-          "code_m": "0x1.66e25406bf828p+24",
-          "phase_m": "0x1.671d5386bf828p+24",
+          "code_m": "0x1.66e25406cc92ep+24",
+          "phase_m": "0x1.671d5386cc92ep+24",
           "ambiguity_m": "0x1.d7fc000000000p+13"
         },
         {
           "sat": "G08",
-          "code_m": "0x1.6ba1cc4fb1d4ap+24",
-          "phase_m": "0x1.6bdcdd0fb1d4ap+24",
+          "code_m": "0x1.6ba1cc4fd7f88p+24",
+          "phase_m": "0x1.6bdcdd0fd7f88p+24",
           "ambiguity_m": "0x1.d886000000000p+13"
         }
       ],
       "solution": {
         "position_m": [
-          "0x1.acd21fffffffcp+21",
-          "0x1.7d1a800000007p+19",
-          "0x1.405aefffffffdp+22"
+          "0x1.acd21ffffffffp+21",
+          "0x1.7d1a800000006p+19",
+          "0x1.405af00000001p+22"
         ],
-        "clock_m": "0x1.9000000026422p+3",
-        "clock_s": "0x1.6629667b7cf4ep-25",
+        "clock_m": "0x1.9000000142bf7p+3",
+        "clock_s": "0x1.6629667c7bb09p-25",
         "ambiguities_m": {
-          "G08": "0x1.d886000000294p+13",
-          "G10": "0x1.d7fbffffffd35p+13",
-          "G16": "0x1.d549ffffffa15p+13",
-          "G18": "0x1.d5d4000000647p+13",
-          "G20": "0x1.d6e7ffffffb61p+13",
-          "G21": "0x1.d4c0000000417p+13",
-          "G26": "0x1.d77200000085ep+13",
-          "G27": "0x1.d65dffffffe17p+13"
+          "G08": "0x1.d885fffffffcdp+13",
+          "G10": "0x1.d7fbffffffe04p+13",
+          "G16": "0x1.d54a0000004d7p+13",
+          "G18": "0x1.d5d3fffffff79p+13",
+          "G20": "0x1.d6e800000039ep+13",
+          "G21": "0x1.d4c00000001b5p+13",
+          "G26": "0x1.d7720000000a0p+13",
+          "G27": "0x1.d65dffffff892p+13"
         },
         "residuals_m": {
           "G08": {
+            "code_m": "0x0.0p+0",
+            "phase_m": "0x0.0p+0"
+          },
+          "G10": {
             "code_m": "-0x1.0000000000000p-28",
             "phase_m": "-0x1.0000000000000p-28"
           },
-          "G10": {
-            "code_m": "0x0.0p+0",
-            "phase_m": "0x0.0p+0"
-          },
           "G16": {
             "code_m": "-0x1.0000000000000p-28",
-            "phase_m": "0x0.0p+0"
+            "phase_m": "-0x1.0000000000000p-27"
           },
           "G18": {
             "code_m": "-0x1.0000000000000p-28",
-            "phase_m": "-0x1.0000000000000p-27"
+            "phase_m": "-0x1.0000000000000p-28"
           },
           "G20": {
             "code_m": "-0x1.0000000000000p-28",
-            "phase_m": "0x0.0p+0"
+            "phase_m": "-0x1.0000000000000p-28"
           },
           "G21": {
             "code_m": "-0x1.0000000000000p-28",
-            "phase_m": "-0x1.0000000000000p-27"
+            "phase_m": "-0x1.0000000000000p-28"
           },
           "G26": {
-            "code_m": "0x0.0p+0",
+            "code_m": "-0x1.0000000000000p-28",
             "phase_m": "-0x1.0000000000000p-28"
           },
           "G27": {
             "code_m": "-0x1.0000000000000p-28",
-            "phase_m": "-0x1.0000000000000p-28"
+            "phase_m": "0x0.0p+0"
           }
         },
         "used_sats": [
@@ -861,9 +861,9 @@
           "iterations": 3,
           "converged": true,
           "status": "position_tolerance",
-          "code_rms_m": "0x1.bb67ae8584caap-29",
-          "phase_rms_m": "0x1.2c2fc595456a7p-28",
-          "weighted_rms_m": "0x1.4babe9036f1bfp-22"
+          "code_rms_m": "0x1.deeea11683f49p-29",
+          "phase_rms_m": "0x1.0f876ccdf6cd9p-28",
+          "weighted_rms_m": "0x1.2c02fc926180dp-22"
         }
       }
     },
@@ -891,50 +891,50 @@
           "observations": [
             {
               "sat": "G21",
-              "code_m": "0x1.3ce210908289fp+24",
-              "phase_m": "0x1.3d1ca8908289fp+24",
+              "code_m": "0x1.3ce2109096e81p+24",
+              "phase_m": "0x1.3d1ca89096e81p+24",
               "ambiguity_m": "0x1.d4c0000000000p+13"
             },
             {
               "sat": "G16",
-              "code_m": "0x1.3bd4a449f96a7p+24",
-              "phase_m": "0x1.3c0f4d89f96a7p+24",
+              "code_m": "0x1.3bd4a449df4cdp+24",
+              "phase_m": "0x1.3c0f4d89df4cdp+24",
               "ambiguity_m": "0x1.d54a000000000p+13"
             },
             {
               "sat": "G18",
-              "code_m": "0x1.424e328bc6114p+24",
-              "phase_m": "0x1.4288ed0bc6114p+24",
+              "code_m": "0x1.424e328bb9e29p+24",
+              "phase_m": "0x1.4288ed0bb9e29p+24",
               "ambiguity_m": "0x1.d5d4000000000p+13"
             },
             {
               "sat": "G27",
-              "code_m": "0x1.44905a865c02fp+24",
-              "phase_m": "0x1.44cb26465c02fp+24",
+              "code_m": "0x1.44905a86775d1p+24",
+              "phase_m": "0x1.44cb2646775d1p+24",
               "ambiguity_m": "0x1.d65e000000000p+13"
             },
             {
               "sat": "G20",
-              "code_m": "0x1.46c139fecd80fp+24",
-              "phase_m": "0x1.46fc16fecd80fp+24",
+              "code_m": "0x1.46c139feed2dap+24",
+              "phase_m": "0x1.46fc16feed2dap+24",
               "ambiguity_m": "0x1.d6e8000000000p+13"
             },
             {
               "sat": "G26",
-              "code_m": "0x1.4e18aadc740f9p+24",
-              "phase_m": "0x1.4e53991c740f9p+24",
+              "code_m": "0x1.4e18aadc5b91bp+24",
+              "phase_m": "0x1.4e53991c5b91bp+24",
               "ambiguity_m": "0x1.d772000000000p+13"
             },
             {
               "sat": "G10",
-              "code_m": "0x1.66e25406bf828p+24",
-              "phase_m": "0x1.671d5386bf828p+24",
+              "code_m": "0x1.66e25406cc92ep+24",
+              "phase_m": "0x1.671d5386cc92ep+24",
               "ambiguity_m": "0x1.d7fc000000000p+13"
             },
             {
               "sat": "G08",
-              "code_m": "0x1.6ba1cc4fb1d4ap+24",
-              "phase_m": "0x1.6bdcdd0fb1d4ap+24",
+              "code_m": "0x1.6ba1cc4fd7f88p+24",
+              "phase_m": "0x1.6bdcdd0fd7f88p+24",
               "ambiguity_m": "0x1.d886000000000p+13"
             }
           ]
@@ -945,50 +945,50 @@
           "observations": [
             {
               "sat": "G21",
-              "code_m": "0x1.3d992976d053bp+24",
-              "phase_m": "0x1.3dd3c176d053bp+24",
+              "code_m": "0x1.3d992976ddaf8p+24",
+              "phase_m": "0x1.3dd3c176ddaf8p+24",
               "ambiguity_m": "0x1.d4c0000000000p+13"
             },
             {
               "sat": "G16",
-              "code_m": "0x1.3e268fcba4d18p+24",
-              "phase_m": "0x1.3e61390ba4d18p+24",
+              "code_m": "0x1.3e268fcb872f8p+24",
+              "phase_m": "0x1.3e61390b872f8p+24",
               "ambiguity_m": "0x1.d54a000000000p+13"
             },
             {
               "sat": "G18",
-              "code_m": "0x1.4824eed235359p+24",
-              "phase_m": "0x1.485fa95235359p+24",
+              "code_m": "0x1.4824eed220c9fp+24",
+              "phase_m": "0x1.485fa95220c9fp+24",
               "ambiguity_m": "0x1.d5d4000000000p+13"
             },
             {
               "sat": "G27",
-              "code_m": "0x1.3f4972b048e60p+24",
-              "phase_m": "0x1.3f843e7048e60p+24",
+              "code_m": "0x1.3f4972b05cf3dp+24",
+              "phase_m": "0x1.3f843e705cf3dp+24",
               "ambiguity_m": "0x1.d65e000000000p+13"
             },
             {
               "sat": "G20",
-              "code_m": "0x1.42a0c1af75ad7p+24",
-              "phase_m": "0x1.42db9eaf75ad7p+24",
+              "code_m": "0x1.42a0c1af9524ep+24",
+              "phase_m": "0x1.42db9eaf9524ep+24",
               "ambiguity_m": "0x1.d6e8000000000p+13"
             },
             {
               "sat": "G26",
-              "code_m": "0x1.55f96f39e4892p+24",
-              "phase_m": "0x1.56345d79e4892p+24",
+              "code_m": "0x1.55f96f39d16bcp+24",
+              "phase_m": "0x1.56345d79d16bcp+24",
               "ambiguity_m": "0x1.d772000000000p+13"
             },
             {
               "sat": "G10",
-              "code_m": "0x1.5e26426e7a6a4p+24",
-              "phase_m": "0x1.5e6141ee7a6a4p+24",
+              "code_m": "0x1.5e26426e8e370p+24",
+              "phase_m": "0x1.5e6141ee8e370p+24",
               "ambiguity_m": "0x1.d7fc000000000p+13"
             },
             {
               "sat": "G08",
-              "code_m": "0x1.6315415ff003dp+24",
-              "phase_m": "0x1.6350521ff003dp+24",
+              "code_m": "0x1.6315416016b8bp+24",
+              "phase_m": "0x1.6350522016b8bp+24",
               "ambiguity_m": "0x1.d886000000000p+13"
             }
           ]
@@ -999,50 +999,50 @@
           "observations": [
             {
               "sat": "G21",
-              "code_m": "0x1.3f4bc6a8afa12p+24",
-              "phase_m": "0x1.3f865ea8afa12p+24",
+              "code_m": "0x1.3f4bc6a8b5523p+24",
+              "phase_m": "0x1.3f865ea8b5523p+24",
               "ambiguity_m": "0x1.d4c0000000000p+13"
             },
             {
               "sat": "G16",
-              "code_m": "0x1.4202d546f763cp+24",
-              "phase_m": "0x1.423d7e86f763cp+24",
+              "code_m": "0x1.4202d546d87fap+24",
+              "phase_m": "0x1.423d7e86d87fap+24",
               "ambiguity_m": "0x1.d54a000000000p+13"
             },
             {
               "sat": "G18",
-              "code_m": "0x1.4edd94cc79f69p+24",
-              "phase_m": "0x1.4f184f4c79f69p+24",
+              "code_m": "0x1.4edd94cc5e847p+24",
+              "phase_m": "0x1.4f184f4c5e847p+24",
               "ambiguity_m": "0x1.d5d4000000000p+13"
             },
             {
               "sat": "G27",
-              "code_m": "0x1.3b099b0119a38p+24",
-              "phase_m": "0x1.3b4466c119a38p+24",
+              "code_m": "0x1.3b099b0125405p+24",
+              "phase_m": "0x1.3b4466c125405p+24",
               "ambiguity_m": "0x1.d65e000000000p+13"
             },
             {
               "sat": "G20",
-              "code_m": "0x1.3ff6bc79531a5p+24",
-              "phase_m": "0x1.40319979531a5p+24",
+              "code_m": "0x1.3ff6bc797031dp+24",
+              "phase_m": "0x1.403199797031dp+24",
               "ambiguity_m": "0x1.d6e8000000000p+13"
             },
             {
               "sat": "G26",
-              "code_m": "0x1.5ea9489bd5525p+24",
-              "phase_m": "0x1.5ee436dbd5525p+24",
+              "code_m": "0x1.5ea9489bc8aefp+24",
+              "phase_m": "0x1.5ee436dbc8aefp+24",
               "ambiguity_m": "0x1.d772000000000p+13"
             },
             {
               "sat": "G10",
-              "code_m": "0x1.562c604605fc7p+24",
-              "phase_m": "0x1.56675fc605fc7p+24",
+              "code_m": "0x1.562c60461f7fap+24",
+              "phase_m": "0x1.56675fc61f7fap+24",
               "ambiguity_m": "0x1.d7fc000000000p+13"
             },
             {
               "sat": "G08",
-              "code_m": "0x1.5af35c735b7b1p+24",
-              "phase_m": "0x1.5b2e6d335b7b1p+24",
+              "code_m": "0x1.5af35c7380465p+24",
+              "phase_m": "0x1.5b2e6d3380465p+24",
               "ambiguity_m": "0x1.d886000000000p+13"
             }
           ]
@@ -1050,180 +1050,180 @@
       ],
       "solution": {
         "position_m": [
-          "0x1.acd21fffffffbp+21",
-          "0x1.7d1a8000000cfp+19",
-          "0x1.405af00000004p+22"
+          "0x1.acd21ffffffe0p+21",
+          "0x1.7d1a7fffffff9p+19",
+          "0x1.405af00000008p+22"
         ],
         "epoch_clocks": [
           {
             "epoch": "2020-06-24T12:00:00",
-            "clock_m": "0x1.9000000108c40p+3",
-            "clock_s": "0x1.6629667c47c5bp-25"
+            "clock_m": "0x1.8ffffffd68ae2p+3",
+            "clock_s": "0x1.6629667908c2bp-25"
           },
           {
             "epoch": "2020-06-24T12:15:00",
-            "clock_m": "-0x1.07fffffe840f6p+3",
-            "clock_s": "-0x1.d8c602254a345p-26"
+            "clock_m": "-0x1.080000035568dp+3",
+            "clock_s": "-0x1.d8c6022deae5ap-26"
           },
           {
             "epoch": "2020-06-24T12:30:00",
-            "clock_m": "0x1.0000000540416p+2",
-            "clock_s": "0x1.ca726ebbc6eb9p-27"
+            "clock_m": "0x1.fffffff6c11cdp+1",
+            "clock_s": "0x1.ca726eaa184b8p-27"
           }
         ],
         "ambiguities_m": {
-          "G08": "0x1.d885fffffce12p+13",
-          "G10": "0x1.d7fc000000c6fp+13",
-          "G16": "0x1.d549ffffff3c5p+13",
-          "G18": "0x1.d5d40000020f9p+13",
-          "G20": "0x1.d6e8000001a32p+13",
-          "G21": "0x1.d4c00000005ebp+13",
-          "G26": "0x1.d77200000016ap+13",
-          "G27": "0x1.d65dfffffeb08p+13"
+          "G08": "0x1.d886000000cc0p+13",
+          "G10": "0x1.d7fbfffffed8dp+13",
+          "G16": "0x1.d54a0000000e3p+13",
+          "G18": "0x1.d5d4000001567p+13",
+          "G20": "0x1.d6e7ffffff68fp+13",
+          "G21": "0x1.d4bfffffffe69p+13",
+          "G26": "0x1.d771fffffee85p+13",
+          "G27": "0x1.d65e0000006c1p+13"
         },
         "residuals_m": [
           {
             "epoch": "2020-06-24T12:00:00",
             "sat": "G08",
-            "code_m": "-0x1.8000000000000p-26",
+            "code_m": "0x1.0000000000000p-27",
             "phase_m": "0x0.0p+0"
           },
           {
             "epoch": "2020-06-24T12:00:00",
             "sat": "G10",
-            "code_m": "0x1.0000000000000p-28",
-            "phase_m": "-0x1.0000000000000p-28"
-          },
-          {
-            "epoch": "2020-06-24T12:00:00",
-            "sat": "G16",
             "code_m": "-0x1.0000000000000p-27",
             "phase_m": "0x0.0p+0"
           },
           {
             "epoch": "2020-06-24T12:00:00",
-            "sat": "G18",
-            "code_m": "0x1.0000000000000p-26",
+            "sat": "G16",
+            "code_m": "0x0.0p+0",
             "phase_m": "0x0.0p+0"
           },
           {
             "epoch": "2020-06-24T12:00:00",
+            "sat": "G18",
+            "code_m": "0x1.0000000000000p-27",
+            "phase_m": "-0x1.0000000000000p-28"
+          },
+          {
+            "epoch": "2020-06-24T12:00:00",
             "sat": "G20",
-            "code_m": "0x1.8000000000000p-27",
+            "code_m": "-0x1.0000000000000p-28",
             "phase_m": "0x0.0p+0"
           },
           {
             "epoch": "2020-06-24T12:00:00",
             "sat": "G21",
-            "code_m": "0x1.0000000000000p-28",
-            "phase_m": "0x0.0p+0"
-          },
-          {
-            "epoch": "2020-06-24T12:00:00",
-            "sat": "G26",
             "code_m": "-0x1.0000000000000p-28",
             "phase_m": "-0x1.0000000000000p-28"
           },
           {
             "epoch": "2020-06-24T12:00:00",
+            "sat": "G26",
+            "code_m": "-0x1.0000000000000p-27",
+            "phase_m": "0x0.0p+0"
+          },
+          {
+            "epoch": "2020-06-24T12:00:00",
             "sat": "G27",
-            "code_m": "-0x1.0000000000000p-26",
-            "phase_m": "-0x1.0000000000000p-28"
+            "code_m": "0x1.0000000000000p-28",
+            "phase_m": "0x0.0p+0"
           },
           {
             "epoch": "2020-06-24T12:15:00",
             "sat": "G08",
-            "code_m": "-0x1.4000000000000p-26",
-            "phase_m": "0x1.0000000000000p-28"
+            "code_m": "0x1.0000000000000p-27",
+            "phase_m": "0x0.0p+0"
           },
           {
             "epoch": "2020-06-24T12:15:00",
             "sat": "G10",
-            "code_m": "0x1.0000000000000p-28",
-            "phase_m": "-0x1.0000000000000p-28"
+            "code_m": "-0x1.0000000000000p-27",
+            "phase_m": "0x0.0p+0"
           },
           {
             "epoch": "2020-06-24T12:15:00",
             "sat": "G16",
-            "code_m": "-0x1.0000000000000p-27",
+            "code_m": "0x0.0p+0",
             "phase_m": "0x0.0p+0"
           },
           {
             "epoch": "2020-06-24T12:15:00",
             "sat": "G18",
             "code_m": "0x1.0000000000000p-26",
-            "phase_m": "0x0.0p+0"
+            "phase_m": "0x1.0000000000000p-28"
           },
           {
             "epoch": "2020-06-24T12:15:00",
             "sat": "G20",
-            "code_m": "0x1.0000000000000p-26",
+            "code_m": "0x0.0p+0",
             "phase_m": "0x1.0000000000000p-28"
           },
           {
             "epoch": "2020-06-24T12:15:00",
             "sat": "G21",
             "code_m": "0x1.0000000000000p-28",
-            "phase_m": "0x0.0p+0"
+            "phase_m": "0x1.0000000000000p-28"
           },
           {
             "epoch": "2020-06-24T12:15:00",
             "sat": "G26",
             "code_m": "-0x1.0000000000000p-28",
-            "phase_m": "-0x1.0000000000000p-28"
+            "phase_m": "0x1.0000000000000p-28"
           },
           {
             "epoch": "2020-06-24T12:15:00",
             "sat": "G27",
-            "code_m": "-0x1.0000000000000p-27",
+            "code_m": "0x1.0000000000000p-27",
             "phase_m": "0x1.0000000000000p-28"
           },
           {
             "epoch": "2020-06-24T12:30:00",
             "sat": "G08",
-            "code_m": "-0x1.8000000000000p-26",
-            "phase_m": "0x0.0p+0"
-          },
-          {
-            "epoch": "2020-06-24T12:30:00",
-            "sat": "G10",
             "code_m": "0x1.0000000000000p-28",
             "phase_m": "-0x1.0000000000000p-28"
           },
           {
             "epoch": "2020-06-24T12:30:00",
-            "sat": "G16",
+            "sat": "G10",
             "code_m": "-0x1.0000000000000p-27",
             "phase_m": "0x0.0p+0"
           },
           {
             "epoch": "2020-06-24T12:30:00",
-            "sat": "G18",
-            "code_m": "0x1.0000000000000p-26",
-            "phase_m": "0x0.0p+0"
+            "sat": "G16",
+            "code_m": "-0x1.0000000000000p-28",
+            "phase_m": "-0x1.0000000000000p-28"
           },
           {
             "epoch": "2020-06-24T12:30:00",
-            "sat": "G20",
+            "sat": "G18",
             "code_m": "0x1.8000000000000p-27",
             "phase_m": "0x0.0p+0"
           },
           {
             "epoch": "2020-06-24T12:30:00",
+            "sat": "G20",
+            "code_m": "0x0.0p+0",
+            "phase_m": "0x1.0000000000000p-28"
+          },
+          {
+            "epoch": "2020-06-24T12:30:00",
             "sat": "G21",
             "code_m": "0x1.0000000000000p-28",
-            "phase_m": "0x0.0p+0"
+            "phase_m": "0x1.0000000000000p-28"
           },
           {
             "epoch": "2020-06-24T12:30:00",
             "sat": "G26",
-            "code_m": "-0x1.0000000000000p-28",
-            "phase_m": "-0x1.0000000000000p-28"
-          },
-          {
-            "epoch": "2020-06-24T12:30:00",
-            "sat": "G27",
             "code_m": "-0x1.8000000000000p-27",
+            "phase_m": "-0x1.0000000000000p-28"
+          },
+          {
+            "epoch": "2020-06-24T12:30:00",
+            "sat": "G27",
+            "code_m": "0x1.0000000000000p-28",
             "phase_m": "0x0.0p+0"
           }
         ],
@@ -1248,9 +1248,9 @@
           "status": "state_tolerance",
           "n_epochs": 3,
           "n_observations": 24,
-          "code_rms_m": "0x1.8b6300c55ea06p-27",
-          "phase_rms_m": "0x1.4a7e9cb8a3491p-29",
-          "weighted_rms_m": "0x1.6d90f44891db9p-23"
+          "code_rms_m": "0x1.c48c6001f0ac0p-28",
+          "phase_rms_m": "0x1.6a09e667f3bcdp-29",
+          "weighted_rms_m": "0x1.901ffeb86c1fdp-23"
         }
       }
     },
@@ -1279,57 +1279,57 @@
           "observations": [
             {
               "sat": "G21",
-              "code_m": "0x1.3ce210908289fp+24",
-              "phase_m": "0x1.3d1d880eedc7bp+24",
+              "code_m": "0x1.3ce2109096e81p+24",
+              "phase_m": "0x1.3d1d880f0225dp+24",
               "ambiguity_cycles": 80000,
               "ambiguity_m": "0x1.dbbbf359edc14p+13"
             },
             {
               "sat": "G16",
-              "code_m": "0x1.3bd4a449f96a7p+24",
-              "phase_m": "0x1.3c1022d2dad81p+24",
+              "code_m": "0x1.3bd4a449df4cdp+24",
+              "phase_m": "0x1.3c1022d2c0ba7p+24",
               "ambiguity_cycles": 80037,
               "ambiguity_m": "0x1.dbf4470b6d237p+13"
             },
             {
               "sat": "G18",
-              "code_m": "0x1.424e328bc6114p+24",
-              "phase_m": "0x1.4289b81f1daedp+24",
+              "code_m": "0x1.424e328bb9e29p+24",
+              "phase_m": "0x1.4289b81f11802p+24",
               "ambiguity_cycles": 80074,
               "ambiguity_m": "0x1.dc2c9abcec85ap+13"
             },
             {
               "sat": "G27",
-              "code_m": "0x1.44905a865c02fp+24",
-              "phase_m": "0x1.44cbe72429d07p+24",
+              "code_m": "0x1.44905a86775d1p+24",
+              "phase_m": "0x1.44cbe724452a9p+24",
               "ambiguity_cycles": 80111,
               "ambiguity_m": "0x1.dc64ee6e6be7dp+13"
             },
             {
               "sat": "G20",
-              "code_m": "0x1.46c139fecd80fp+24",
-              "phase_m": "0x1.46fccda7117e6p+24",
+              "code_m": "0x1.46c139feed2dap+24",
+              "phase_m": "0x1.46fccda7312b1p+24",
               "ambiguity_cycles": 80148,
               "ambiguity_m": "0x1.dc9d421feb4a0p+13"
             },
             {
               "sat": "G26",
-              "code_m": "0x1.4e18aadc740f9p+24",
-              "phase_m": "0x1.4e54458f2e3cep+24",
+              "code_m": "0x1.4e18aadc5b91bp+24",
+              "phase_m": "0x1.4e54458f15bf0p+24",
               "ambiguity_cycles": 80185,
               "ambiguity_m": "0x1.dcd595d16aac3p+13"
             },
             {
               "sat": "G10",
-              "code_m": "0x1.66e25406bf828p+24",
-              "phase_m": "0x1.671df5c3efdfcp+24",
+              "code_m": "0x1.66e25406cc92ep+24",
+              "phase_m": "0x1.671df5c3fcf02p+24",
               "ambiguity_cycles": 80222,
               "ambiguity_m": "0x1.dd0de982ea0e6p+13"
             },
             {
               "sat": "G08",
-              "code_m": "0x1.6ba1cc4fb1d4ap+24",
-              "phase_m": "0x1.6bdd75175861dp+24",
+              "code_m": "0x1.6ba1cc4fd7f88p+24",
+              "phase_m": "0x1.6bdd75177e85bp+24",
               "ambiguity_cycles": 80259,
               "ambiguity_m": "0x1.dd463d3469709p+13"
             }
@@ -1341,57 +1341,57 @@
           "observations": [
             {
               "sat": "G21",
-              "code_m": "0x1.3d992976d053bp+24",
-              "phase_m": "0x1.3dd4a0f53b917p+24",
+              "code_m": "0x1.3d992976ddaf8p+24",
+              "phase_m": "0x1.3dd4a0f548ed4p+24",
               "ambiguity_cycles": 80000,
               "ambiguity_m": "0x1.dbbbf359edc14p+13"
             },
             {
               "sat": "G16",
-              "code_m": "0x1.3e268fcba4d18p+24",
-              "phase_m": "0x1.3e620e54863f2p+24",
+              "code_m": "0x1.3e268fcb872f8p+24",
+              "phase_m": "0x1.3e620e54689d2p+24",
               "ambiguity_cycles": 80037,
               "ambiguity_m": "0x1.dbf4470b6d237p+13"
             },
             {
               "sat": "G18",
-              "code_m": "0x1.4824eed235359p+24",
-              "phase_m": "0x1.486074658cd32p+24",
+              "code_m": "0x1.4824eed220c9fp+24",
+              "phase_m": "0x1.4860746578678p+24",
               "ambiguity_cycles": 80074,
               "ambiguity_m": "0x1.dc2c9abcec85ap+13"
             },
             {
               "sat": "G27",
-              "code_m": "0x1.3f4972b048e60p+24",
-              "phase_m": "0x1.3f84ff4e16b38p+24",
+              "code_m": "0x1.3f4972b05cf3dp+24",
+              "phase_m": "0x1.3f84ff4e2ac15p+24",
               "ambiguity_cycles": 80111,
               "ambiguity_m": "0x1.dc64ee6e6be7dp+13"
             },
             {
               "sat": "G20",
-              "code_m": "0x1.42a0c1af75ad7p+24",
-              "phase_m": "0x1.42dc5557b9aaep+24",
+              "code_m": "0x1.42a0c1af9524ep+24",
+              "phase_m": "0x1.42dc5557d9225p+24",
               "ambiguity_cycles": 80148,
               "ambiguity_m": "0x1.dc9d421feb4a0p+13"
             },
             {
               "sat": "G26",
-              "code_m": "0x1.55f96f39e4892p+24",
-              "phase_m": "0x1.563509ec9eb67p+24",
+              "code_m": "0x1.55f96f39d16bcp+24",
+              "phase_m": "0x1.563509ec8b991p+24",
               "ambiguity_cycles": 80185,
               "ambiguity_m": "0x1.dcd595d16aac3p+13"
             },
             {
               "sat": "G10",
-              "code_m": "0x1.5e26426e7a6a4p+24",
-              "phase_m": "0x1.5e61e42baac78p+24",
+              "code_m": "0x1.5e26426e8e370p+24",
+              "phase_m": "0x1.5e61e42bbe944p+24",
               "ambiguity_cycles": 80222,
               "ambiguity_m": "0x1.dd0de982ea0e6p+13"
             },
             {
               "sat": "G08",
-              "code_m": "0x1.6315415ff003dp+24",
-              "phase_m": "0x1.6350ea2796910p+24",
+              "code_m": "0x1.6315416016b8bp+24",
+              "phase_m": "0x1.6350ea27bd45ep+24",
               "ambiguity_cycles": 80259,
               "ambiguity_m": "0x1.dd463d3469709p+13"
             }
@@ -1403,57 +1403,57 @@
           "observations": [
             {
               "sat": "G21",
-              "code_m": "0x1.3f4bc6a8afa12p+24",
-              "phase_m": "0x1.3f873e271adeep+24",
+              "code_m": "0x1.3f4bc6a8b5523p+24",
+              "phase_m": "0x1.3f873e27208ffp+24",
               "ambiguity_cycles": 80000,
               "ambiguity_m": "0x1.dbbbf359edc14p+13"
             },
             {
               "sat": "G16",
-              "code_m": "0x1.4202d546f763cp+24",
-              "phase_m": "0x1.423e53cfd8d16p+24",
+              "code_m": "0x1.4202d546d87fap+24",
+              "phase_m": "0x1.423e53cfb9ed4p+24",
               "ambiguity_cycles": 80037,
               "ambiguity_m": "0x1.dbf4470b6d237p+13"
             },
             {
               "sat": "G18",
-              "code_m": "0x1.4edd94cc79f69p+24",
-              "phase_m": "0x1.4f191a5fd1942p+24",
+              "code_m": "0x1.4edd94cc5e847p+24",
+              "phase_m": "0x1.4f191a5fb6220p+24",
               "ambiguity_cycles": 80074,
               "ambiguity_m": "0x1.dc2c9abcec85ap+13"
             },
             {
               "sat": "G27",
-              "code_m": "0x1.3b099b0119a38p+24",
-              "phase_m": "0x1.3b45279ee7710p+24",
+              "code_m": "0x1.3b099b0125405p+24",
+              "phase_m": "0x1.3b45279ef30ddp+24",
               "ambiguity_cycles": 80111,
               "ambiguity_m": "0x1.dc64ee6e6be7dp+13"
             },
             {
               "sat": "G20",
-              "code_m": "0x1.3ff6bc79531a5p+24",
-              "phase_m": "0x1.403250219717cp+24",
+              "code_m": "0x1.3ff6bc797031dp+24",
+              "phase_m": "0x1.40325021b42f4p+24",
               "ambiguity_cycles": 80148,
               "ambiguity_m": "0x1.dc9d421feb4a0p+13"
             },
             {
               "sat": "G26",
-              "code_m": "0x1.5ea9489bd5525p+24",
-              "phase_m": "0x1.5ee4e34e8f7fap+24",
+              "code_m": "0x1.5ea9489bc8aefp+24",
+              "phase_m": "0x1.5ee4e34e82dc4p+24",
               "ambiguity_cycles": 80185,
               "ambiguity_m": "0x1.dcd595d16aac3p+13"
             },
             {
               "sat": "G10",
-              "code_m": "0x1.562c604605fc7p+24",
-              "phase_m": "0x1.566802033659bp+24",
+              "code_m": "0x1.562c60461f7fap+24",
+              "phase_m": "0x1.566802034fdcep+24",
               "ambiguity_cycles": 80222,
               "ambiguity_m": "0x1.dd0de982ea0e6p+13"
             },
             {
               "sat": "G08",
-              "code_m": "0x1.5af35c735b7b1p+24",
-              "phase_m": "0x1.5b2f053b02084p+24",
+              "code_m": "0x1.5af35c7380465p+24",
+              "phase_m": "0x1.5b2f053b26d38p+24",
               "ambiguity_cycles": 80259,
               "ambiguity_m": "0x1.dd463d3469709p+13"
             }
@@ -1462,25 +1462,25 @@
       ],
       "solution": {
         "position_m": [
-          "0x1.acd2200000002p+21",
-          "0x1.7d1a80000000cp+19",
-          "0x1.405aeffffffffp+22"
+          "0x1.acd2200000001p+21",
+          "0x1.7d1a7fffffffdp+19",
+          "0x1.405af00000002p+22"
         ],
         "epoch_clocks": [
           {
             "epoch": "2020-06-24T12:00:00",
-            "clock_m": "0x1.8fffffff5d9b0p+3",
-            "clock_s": "0x1.6629667ac94a9p-25"
+            "clock_m": "0x1.90000000973dep+3",
+            "clock_s": "0x1.6629667be21f6p-25"
           },
           {
             "epoch": "2020-06-24T12:15:00",
-            "clock_m": "-0x1.07ffffffd62f5p+3",
-            "clock_s": "-0x1.d8c60227a7b89p-26"
+            "clock_m": "-0x1.07fffffe8f767p+3",
+            "clock_s": "-0x1.d8c602255e9fdp-26"
           },
           {
             "epoch": "2020-06-24T12:30:00",
-            "clock_m": "0x1.ffffffffae823p+1",
-            "clock_s": "0x1.ca726eb216a5fp-27"
+            "clock_m": "0x1.000000019b369p+2",
+            "clock_s": "0x1.ca726eb540052p-27"
           }
         ],
         "fixed_ambiguities_cycles": {
@@ -1507,8 +1507,8 @@
           {
             "epoch": "2020-06-24T12:00:00",
             "sat": "G08",
-            "code_m": "0x0.0p+0",
-            "phase_m": "0x0.0p+0"
+            "code_m": "0x1.0000000000000p-28",
+            "phase_m": "0x1.0000000000000p-28"
           },
           {
             "epoch": "2020-06-24T12:00:00",
@@ -1519,20 +1519,20 @@
           {
             "epoch": "2020-06-24T12:00:00",
             "sat": "G16",
-            "code_m": "0x0.0p+0",
-            "phase_m": "0x0.0p+0"
-          },
-          {
-            "epoch": "2020-06-24T12:00:00",
-            "sat": "G18",
             "code_m": "0x1.0000000000000p-28",
             "phase_m": "0x1.0000000000000p-28"
           },
           {
             "epoch": "2020-06-24T12:00:00",
-            "sat": "G20",
+            "sat": "G18",
             "code_m": "0x0.0p+0",
             "phase_m": "0x0.0p+0"
+          },
+          {
+            "epoch": "2020-06-24T12:00:00",
+            "sat": "G20",
+            "code_m": "0x1.0000000000000p-28",
+            "phase_m": "0x1.0000000000000p-28"
           },
           {
             "epoch": "2020-06-24T12:00:00",
@@ -1555,56 +1555,56 @@
           {
             "epoch": "2020-06-24T12:15:00",
             "sat": "G08",
-            "code_m": "0x0.0p+0",
-            "phase_m": "0x0.0p+0"
+            "code_m": "-0x1.0000000000000p-28",
+            "phase_m": "-0x1.0000000000000p-28"
           },
           {
             "epoch": "2020-06-24T12:15:00",
             "sat": "G10",
-            "code_m": "0x0.0p+0",
-            "phase_m": "0x0.0p+0"
+            "code_m": "-0x1.0000000000000p-28",
+            "phase_m": "-0x1.0000000000000p-28"
           },
           {
             "epoch": "2020-06-24T12:15:00",
             "sat": "G16",
-            "code_m": "0x0.0p+0",
-            "phase_m": "0x0.0p+0"
+            "code_m": "-0x1.0000000000000p-28",
+            "phase_m": "-0x1.0000000000000p-28"
           },
           {
             "epoch": "2020-06-24T12:15:00",
             "sat": "G18",
-            "code_m": "0x1.0000000000000p-28",
-            "phase_m": "0x1.0000000000000p-28"
+            "code_m": "0x0.0p+0",
+            "phase_m": "0x0.0p+0"
           },
           {
             "epoch": "2020-06-24T12:15:00",
             "sat": "G20",
-            "code_m": "0x1.0000000000000p-28",
-            "phase_m": "0x1.0000000000000p-28"
+            "code_m": "-0x1.0000000000000p-28",
+            "phase_m": "-0x1.0000000000000p-28"
           },
           {
             "epoch": "2020-06-24T12:15:00",
             "sat": "G21",
-            "code_m": "0x0.0p+0",
-            "phase_m": "0x0.0p+0"
+            "code_m": "-0x1.0000000000000p-28",
+            "phase_m": "-0x1.0000000000000p-28"
           },
           {
             "epoch": "2020-06-24T12:15:00",
             "sat": "G26",
-            "code_m": "0x1.0000000000000p-28",
-            "phase_m": "0x1.0000000000000p-28"
+            "code_m": "-0x1.0000000000000p-28",
+            "phase_m": "-0x1.0000000000000p-28"
           },
           {
             "epoch": "2020-06-24T12:15:00",
             "sat": "G27",
-            "code_m": "0x1.0000000000000p-28",
-            "phase_m": "0x1.0000000000000p-28"
+            "code_m": "0x0.0p+0",
+            "phase_m": "0x0.0p+0"
           },
           {
             "epoch": "2020-06-24T12:30:00",
             "sat": "G08",
-            "code_m": "0x0.0p+0",
-            "phase_m": "0x0.0p+0"
+            "code_m": "0x1.0000000000000p-28",
+            "phase_m": "0x1.0000000000000p-28"
           },
           {
             "epoch": "2020-06-24T12:30:00",
@@ -1621,8 +1621,8 @@
           {
             "epoch": "2020-06-24T12:30:00",
             "sat": "G18",
-            "code_m": "0x0.0p+0",
-            "phase_m": "0x0.0p+0"
+            "code_m": "0x1.0000000000000p-28",
+            "phase_m": "0x1.0000000000000p-28"
           },
           {
             "epoch": "2020-06-24T12:30:00",
@@ -1633,8 +1633,8 @@
           {
             "epoch": "2020-06-24T12:30:00",
             "sat": "G21",
-            "code_m": "0x0.0p+0",
-            "phase_m": "0x0.0p+0"
+            "code_m": "0x1.0000000000000p-28",
+            "phase_m": "0x1.0000000000000p-28"
           },
           {
             "epoch": "2020-06-24T12:30:00",
@@ -1670,15 +1670,15 @@
           "status": "state_tolerance",
           "n_epochs": 3,
           "n_observations": 24,
-          "code_rms_m": "0x1.d363d1848dcbfp-30",
-          "phase_rms_m": "0x1.d363d1848dcbfp-30",
-          "weighted_rms_m": "0x1.0236387bc2cecp-23",
+          "code_rms_m": "0x1.6a09e667f3bcdp-29",
+          "phase_rms_m": "0x1.6a09e667f3bcdp-29",
+          "weighted_rms_m": "0x1.90051eafee8b3p-23",
           "integer_status": "fixed",
           "integer_method": "lambda",
-          "integer_ratio": "0x1.2013ce5f6f79ep+41",
-          "integer_best_score": "0x1.8b61e2d078040p-42",
-          "integer_second_best_score": "0x1.bcecb62a86800p-1",
-          "integer_candidates": 2
+          "integer_ratio": "0x1.a1c08086d6127p+40",
+          "integer_best_score": "0x1.10a6cab16fbf2p-41",
+          "integer_second_best_score": "0x1.bcecb6260cc00p-1",
+          "integer_candidates": 6
         }
       }
     }

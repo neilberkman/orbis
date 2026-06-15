@@ -6,6 +6,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-06-14
+
+### Fixed
+
+- SP3 satellite-orbit interpolation (via `astrodynamics-gnss` 0.16.0): the
+  position channel was a global cubic spline that erred ~200 m at the day
+  boundary and across coverage gaps, invisible in double-differenced RTK (it
+  cancels) but corrupting undifferenced precise positioning. Replaced with the
+  IGS/RTKLIB-standard sliding-window Lagrange. Anyone using SP3-based
+  undifferenced positioning should upgrade.
+
+### Added
+
+- A-priori Saastamoinen troposphere in the dual-frequency RTK path (matching
+  RTKLIB `tropopt=saas`), improving short/medium-baseline fixes; default on,
+  `troposphere: false` to disable.
+- Precise-positioning foundation toward static-arc PPP: cycle-slip arc-splitting
+  in the iono-free float solve, a RINEX clock (`.CLK`) reader, receiver-antenna
+  PCO/PCV and SP3 satellite-clock relativity applied through a single
+  per-one-way-range correction point, a configurable data-gap arc reset, and a
+  post-fit residual screen. The ratio-test threshold now rejects values below
+  1.0 (which would silently disable ambiguity validation).
+
+### Changed
+
+- Rides `astrodynamics-gnss` 0.16.0.
+
 ## [0.26.0] - 2026-06-14
 
 ### Added

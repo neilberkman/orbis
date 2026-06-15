@@ -6,7 +6,7 @@
     "note": "Generated in the pinned parity virtualenv; floats are stored as Python float.hex()."
   },
   "generator": {
-    "python": "3.14.4",
+    "python": "3.14.6",
     "executable": "/Volumes/ExternalSSD/orbis-gnss-workspace/parity/.venv/bin/python",
     "numpy": "2.4.6",
     "scipy": "1.17.1"
@@ -261,17 +261,17 @@
           "0x1.405af00000000p+22"
         ],
         "transmit_time": "2020-06-24T11:59:59.930712",
-        "tau_s": "0x1.1bcd4da6238c3p-4",
-        "geometric_range_m": "0x1.3cf438ba42d76p+24",
-        "range_rate_m_s": "0x1.d801fbc186d80p+3",
-        "doppler_hz": "-0x1.360d5bcc4ec17p+6",
+        "tau_s": "0x1.1bcd4da635c8fp-4",
+        "geometric_range_m": "0x1.3cf438ba57358p+24",
+        "range_rate_m_s": "0x1.d7dd36f6b8980p+3",
+        "doppler_hz": "-0x1.35f534ba7c77dp+6",
         "sat_clock_s": "0x1.04d2d8279460cp-16",
-        "elevation_deg": "0x1.4590eed87ea38p+6",
-        "azimuth_deg": "0x1.45ff5a08c0afcp+7",
+        "elevation_deg": "0x1.4590eed870f52p+6",
+        "azimuth_deg": "0x1.45ff5a090a131p+7",
         "los_unit": [
-          "0x1.4c70da9f7e682p-1",
-          "0x1.834429ae2ab7fp-3",
-          "0x1.792a4f5819eb9p-1"
+          "0x1.4c70da9fa70ddp-1",
+          "0x1.834429adb2baep-3",
+          "0x1.792a4f57fdcb1p-1"
         ]
       },
       {
@@ -287,15 +287,15 @@
         "transmit_time": "2020-06-24T12:00:00.000000",
         "tau_s": "0x0.0p+0",
         "geometric_range_m": "0x1.3cf43a8bb3445p+24",
-        "range_rate_m_s": "0x1.d840736fa8d80p+3",
-        "doppler_hz": "-0x1.3636646766cefp+6",
+        "range_rate_m_s": "0x1.d81bbae10bc40p+3",
+        "doppler_hz": "-0x1.361e455f0d7eep+6",
         "sat_clock_s": "0x1.04d2d884f63ebp-16",
-        "elevation_deg": "0x1.4591189670ac1p+6",
-        "azimuth_deg": "0x1.45fceda657bdbp+7",
+        "elevation_deg": "0x1.4591189670abep+6",
+        "azimuth_deg": "0x1.45fceda657bddp+7",
         "los_unit": [
-          "0x1.4c6fe90c5ea24p-1",
+          "0x1.4c6fe90c5ea25p-1",
           "0x1.83493e40de1b5p-3",
-          "0x1.792ad0ce6f943p-1"
+          "0x1.792ad0ce6f941p-1"
         ]
       },
       {
@@ -309,17 +309,17 @@
           "0x1.405af00000000p+22"
         ],
         "transmit_time": "2020-06-24T11:59:59.930712",
-        "tau_s": "0x1.1bcd4e5c8cf72p-4",
-        "geometric_range_m": "0x1.3cf43985fb2b0p+24",
-        "range_rate_m_s": "0x1.d810777d7d600p+3",
-        "doppler_hz": "-0x1.3616df551aa64p+6",
+        "tau_s": "0x1.1bcd4e5c9f33ep-4",
+        "geometric_range_m": "0x1.3cf439860f892p+24",
+        "range_rate_m_s": "0x1.d7ebb2b522b00p+3",
+        "doppler_hz": "-0x1.35feb844e4985p+6",
         "sat_clock_s": "0x1.04d2d8279460cp-16",
-        "elevation_deg": "0x1.4590de8de4e75p+6",
-        "azimuth_deg": "0x1.45fe89c25d59ep+7",
+        "elevation_deg": "0x1.4590de8dd7394p+6",
+        "azimuth_deg": "0x1.45fe89c2a6bd5p+7",
         "los_unit": [
-          "0x1.4c70b35c0f9e2p-1",
-          "0x1.834653b537a96p-3",
-          "0x1.792a4e65ae4b9p-1"
+          "0x1.4c70b35c38440p-1",
+          "0x1.834653b4bfacbp-3",
+          "0x1.792a4e65922b1p-1"
         ]
       }
     ]

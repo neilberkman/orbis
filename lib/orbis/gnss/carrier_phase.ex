@@ -102,11 +102,17 @@ defmodule Orbis.GNSS.CarrierPhase do
   @default_gf_threshold_m 0.05
   @default_mw_threshold_cycles 4.0
 
+  # Default maximum tolerated gap between consecutive arc samples (seconds).
+  # A jump larger than this forces a `:data_gap` slip so the arc (and its
+  # wide-lane average) resets, matching RTKLIB's MAXGAP behaviour: continuity of
+  # the float ambiguity cannot be trusted across a multi-minute outage.
+  @default_min_arc_gap_s 300.0
+
   # Default Hatch smoothing window cap (epochs).
   @default_hatch_window_cap 100
 
   @type epoch_map :: %{optional(atom()) => term()}
-  @type slip_reason :: :lli | :geometry_free | :melbourne_wubbena
+  @type slip_reason :: :lli | :geometry_free | :melbourne_wubbena | :data_gap
   @type slip_result :: %{
           epoch: term(),
           slip: boolean(),
@@ -256,15 +262,18 @@ defmodule Orbis.GNSS.CarrierPhase do
       %{epoch: term(), slip: boolean(), reasons: [reason],
         gf: float | nil, mw: float | nil, skipped: boolean()}
 
-  with `reason in [:lli, :geometry_free, :melbourne_wubbena]`. A slip at epoch
-  `k` is flagged when **any** of:
+  with `reason in [:lli, :geometry_free, :melbourne_wubbena, :data_gap]`. A slip
+  at epoch `k` is flagged when **any** of:
 
     * an LLI loss-of-lock bit is set — bit 0 of `lli1` or `lli2`
       (`:lli`, parameter-free);
     * the epoch-to-epoch geometry-free step exceeds `:gf_threshold_m`
       (`:geometry_free`);
     * the epoch-to-epoch Melbourne-Wubbena step, expressed in wide-lane cycles,
-      exceeds `:mw_threshold_cycles` (`:melbourne_wubbena`).
+      exceeds `:mw_threshold_cycles` (`:melbourne_wubbena`);
+    * the time gap to the previous usable epoch exceeds `:min_arc_gap_s`
+      (`:data_gap`), so the arc and its wide-lane average reset across the
+      outage. Only applies when epochs are `NaiveDateTime` or numeric seconds.
 
   The GF and MW steps require a usable predecessor; the first epoch (and any
   epoch whose predecessor lacked the needed observations) cannot flag `:gf` /
@@ -286,20 +295,27 @@ defmodule Orbis.GNSS.CarrierPhase do
       `abs(MW(k) - MW(k-1)) / lambda_WL > mw_threshold_cycles`. MW noise is
       dominated by code noise (~0.3-0.5 wide-lane cycles 1-sigma on raw code), so
       4 wide-lane cycles is a robust gate.
+    * `:min_arc_gap_s` (default `#{@default_min_arc_gap_s}` s): flags `:data_gap`
+      when the gap to the previous usable epoch exceeds this many seconds.
 
-  Both thresholds must be non-negative numbers (a negative threshold would flag
-  every epoch); any other value raises `ArgumentError`.
+  All three thresholds must be non-negative numbers (a negative threshold would
+  flag every epoch); any other value raises `ArgumentError`.
   """
   @spec detect_cycle_slips([epoch_map()], keyword()) :: [slip_result()]
   def detect_cycle_slips(arc, opts \\ []) when is_list(arc) do
-    {gf_threshold_m, mw_threshold_cycles} = validate_slip_opts!(opts)
+    {gf_threshold_m, mw_threshold_cycles, min_arc_gap_s} = validate_slip_opts!(opts)
 
     {results, _prev} =
       Enum.map_reduce(arc, nil, fn ep, prev ->
-        result = classify_epoch(ep, prev, gf_threshold_m, mw_threshold_cycles)
+        result = classify_epoch(ep, prev, gf_threshold_m, mw_threshold_cycles, min_arc_gap_s)
         # Carry forward only usable (non-skipped) epochs as the predecessor for
-        # GF/MW continuity; a skipped epoch leaves the previous good one in place.
-        next_prev = if result.skipped, do: prev, else: %{gf: result.gf, mw: result.mw}
+        # GF/MW continuity and gap timing; a skipped epoch leaves the previous
+        # good one in place.
+        next_prev =
+          if result.skipped,
+            do: prev,
+            else: %{gf: result.gf, mw: result.mw, epoch: result.epoch}
+
         {result, next_prev}
       end)
 
@@ -403,7 +419,10 @@ defmodule Orbis.GNSS.CarrierPhase do
   defp validate_slip_opts!(opts) do
     gf = Keyword.get(opts, :gf_threshold_m, @default_gf_threshold_m)
     mw = Keyword.get(opts, :mw_threshold_cycles, @default_mw_threshold_cycles)
-    {non_negative!(:gf_threshold_m, gf), non_negative!(:mw_threshold_cycles, mw)}
+    gap = Keyword.get(opts, :min_arc_gap_s, @default_min_arc_gap_s)
+
+    {non_negative!(:gf_threshold_m, gf), non_negative!(:mw_threshold_cycles, mw),
+     non_negative!(:min_arc_gap_s, gap)}
   end
 
   defp non_negative!(_name, value) when is_number(value) and value >= 0.0, do: value
@@ -426,7 +445,7 @@ defmodule Orbis.GNSS.CarrierPhase do
 
   # --- cycle-slip classification ------------------------------------------
 
-  defp classify_epoch(ep, prev, gf_threshold_m, mw_threshold_cycles) do
+  defp classify_epoch(ep, prev, gf_threshold_m, mw_threshold_cycles, min_arc_gap_s) do
     f1 = Map.get(ep, :f1)
     f2 = Map.get(ep, :f2)
     epoch = Map.get(ep, :epoch)
@@ -449,8 +468,9 @@ defmodule Orbis.GNSS.CarrierPhase do
       lli_reason = if loss_of_lock?(ep), do: [:lli], else: []
       gf_reason = gf_reason(gf, prev, gf_threshold_m)
       mw_reason = mw_reason(mw, prev, f1, f2, mw_threshold_cycles)
+      gap_reason = gap_reason(epoch, prev, min_arc_gap_s)
 
-      reasons = lli_reason ++ gf_reason ++ mw_reason
+      reasons = lli_reason ++ gap_reason ++ gf_reason ++ mw_reason
 
       %{
         epoch: epoch,
@@ -509,6 +529,27 @@ defmodule Orbis.GNSS.CarrierPhase do
   end
 
   defp mw_reason(_mw, _prev, _f1, _f2, _threshold_cycles), do: []
+
+  # A data gap larger than `min_arc_gap_s` between this usable epoch and the
+  # previous usable one breaks the arc (`:data_gap`): the float ambiguity is not
+  # trustworthy across a multi-minute outage, so the consumer's `:split_arc`
+  # logic resets the arc and its wide-lane average. The check only applies when
+  # both epochs are time-like (NaiveDateTime or numeric seconds); for opaque
+  # epoch terms the gap is not computable and no `:data_gap` is flagged.
+  defp gap_reason(epoch, %{epoch: prev_epoch}, min_arc_gap_s) do
+    case epoch_delta_seconds(prev_epoch, epoch) do
+      {:ok, dt} when dt > min_arc_gap_s -> [:data_gap]
+      _ -> []
+    end
+  end
+
+  defp gap_reason(_epoch, _prev, _min_arc_gap_s), do: []
+
+  defp epoch_delta_seconds(%NaiveDateTime{} = a, %NaiveDateTime{} = b),
+    do: {:ok, abs(NaiveDateTime.diff(b, a, :microsecond) / 1_000_000.0)}
+
+  defp epoch_delta_seconds(a, b) when is_number(a) and is_number(b), do: {:ok, abs(b - a)}
+  defp epoch_delta_seconds(_a, _b), do: :error
 
   defp loss_of_lock?(ep) do
     lli_set?(Map.get(ep, :lli1)) or lli_set?(Map.get(ep, :lli2))

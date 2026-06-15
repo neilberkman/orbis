@@ -11,4 +11,4 @@ crate-type = ["cdylib"]
 rustler = "0.37.3"
 chrono = "0.4"
 astrodynamics = "0.10.0"
-astrodynamics-gnss = "0.15.0"
+astrodynamics-gnss = "0.16.0"

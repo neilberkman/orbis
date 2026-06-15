@@ -87,6 +87,22 @@ defmodule Orbis.GNSS.CarrierPhaseTest do
 
   defp seed, do: :rand.seed(:exsss, {101, 202, 303})
 
+  # A clean, continuous dual-frequency epoch at `base + offset_s`, used by the
+  # data-gap tests (no GF/MW/LLI slip so only the gap can flag).
+  defp gap_epoch(base, offset_s) do
+    %{
+      epoch: NaiveDateTime.add(base, offset_s, :second),
+      phi1: 1000.0,
+      phi2: 800.0,
+      p1: 20_000.0,
+      p2: 20_001.0,
+      f1: @f_l1,
+      f2: @f_l2,
+      lli1: 0,
+      lli2: 0
+    }
+  end
+
   describe "wide_lane_wavelength/2" do
     test "GPS L1/L2 wide-lane wavelength is about 0.8619 m" do
       assert {:ok, lambda_wl} = CarrierPhase.wide_lane_wavelength(@f_l1, @f_l2)
@@ -268,6 +284,92 @@ defmodule Orbis.GNSS.CarrierPhaseTest do
       # No other epoch flags :lli.
       others = results |> List.delete_at(lli_idx)
       assert Enum.all?(others, &(:lli not in &1.reasons))
+    end
+  end
+
+  describe "detect_cycle_slips/2 data gap" do
+    test "a gap larger than min_arc_gap_s flags :data_gap (NaiveDateTime epochs)" do
+      base = ~N[2026-05-13 00:00:00]
+      # Three clean 30 s samples, then a 6-minute jump (> 300 s) to a fourth.
+      arc =
+        [0, 30, 60, 60 + 360]
+        |> Enum.map(fn s ->
+          %{
+            epoch: NaiveDateTime.add(base, s, :second),
+            phi1: 1000.0 + s,
+            phi2: 800.0 + s,
+            p1: 20_000.0 + s,
+            p2: 20_001.0 + s,
+            f1: @f_l1,
+            f2: @f_l2,
+            lli1: 0,
+            lli2: 0
+          }
+        end)
+
+      results = CarrierPhase.detect_cycle_slips(arc)
+
+      # The within-cadence epochs do not flag :data_gap.
+      assert Enum.take(results, 3) |> Enum.all?(&(:data_gap not in &1.reasons))
+
+      gapped = List.last(results)
+      assert :data_gap in gapped.reasons
+      assert gapped.slip
+    end
+
+    test "the default gap threshold is 300 s: 300 s is fine, 301 s flags" do
+      base = ~N[2026-05-13 00:00:00]
+
+      ok =
+        [0, 300]
+        |> Enum.map(&gap_epoch(base, &1))
+        |> CarrierPhase.detect_cycle_slips()
+        |> List.last()
+
+      refute :data_gap in ok.reasons
+
+      flagged =
+        [0, 301]
+        |> Enum.map(&gap_epoch(base, &1))
+        |> CarrierPhase.detect_cycle_slips()
+        |> List.last()
+
+      assert :data_gap in flagged.reasons
+    end
+
+    test "min_arc_gap_s option overrides the default" do
+      base = ~N[2026-05-13 00:00:00]
+      arc = [0, 120] |> Enum.map(&gap_epoch(base, &1))
+
+      # 120 s is below the 300 s default but above a 60 s override.
+      refute :data_gap in (CarrierPhase.detect_cycle_slips(arc) |> List.last()).reasons
+
+      flagged = CarrierPhase.detect_cycle_slips(arc, min_arc_gap_s: 60.0) |> List.last()
+      assert :data_gap in flagged.reasons
+    end
+
+    test "numeric epochs (seconds) also support the gap check" do
+      arc = [
+        %{epoch: 0, phi1: 1.0, phi2: 1.0, p1: 1.0, p2: 1.0, f1: @f_l1, f2: @f_l2},
+        %{epoch: 400, phi1: 1.0, phi2: 1.0, p1: 1.0, p2: 1.0, f1: @f_l1, f2: @f_l2}
+      ]
+
+      assert :data_gap in (CarrierPhase.detect_cycle_slips(arc) |> List.last()).reasons
+    end
+
+    test "opaque (non-time) epochs never flag :data_gap" do
+      arc = [
+        %{epoch: :a, phi1: 1.0, phi2: 1.0, p1: 1.0, p2: 1.0, f1: @f_l1, f2: @f_l2},
+        %{epoch: :b, phi1: 1.0, phi2: 1.0, p1: 1.0, p2: 1.0, f1: @f_l1, f2: @f_l2}
+      ]
+
+      assert Enum.all?(CarrierPhase.detect_cycle_slips(arc), &(:data_gap not in &1.reasons))
+    end
+
+    test "a negative min_arc_gap_s raises ArgumentError" do
+      assert_raise ArgumentError, fn ->
+        CarrierPhase.detect_cycle_slips([], min_arc_gap_s: -1.0)
+      end
     end
   end
 

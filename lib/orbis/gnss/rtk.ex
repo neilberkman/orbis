@@ -2984,7 +2984,10 @@ defmodule Orbis.GNSS.RTK do
       not is_integer(radius) or radius < 0 ->
         {:error, {:invalid_option, :integer_search_radius_cycles}}
 
-      not is_number(ratio) or ratio < 0.0 ->
+      # RTKLIB rejects thresar[0] < 1.0: the ratio test compares the
+      # second-best to best residual, which is structurally >= 1, so a
+      # threshold below 1.0 can never discriminate and is invalid.
+      not is_number(ratio) or ratio < 1.0 ->
         {:error, {:invalid_option, :integer_ratio_threshold}}
 
       not is_integer(limit) or limit < 1 ->

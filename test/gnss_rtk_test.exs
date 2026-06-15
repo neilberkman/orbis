@@ -904,6 +904,13 @@ defmodule Orbis.GNSS.RTKTest do
                integer_ratio_threshold: -1.0
              ) == {:error, {:invalid_option, :integer_ratio_threshold}}
 
+      # RTKLIB rejects thresar[0] < 1.0: a sub-1.0 ratio threshold can never
+      # discriminate the second-best from the best candidate.
+      assert RTK.solve_fixed_baseline_epochs(@base, [epoch],
+               ambiguity_wavelength_m: @l1_wavelength_m,
+               integer_ratio_threshold: 0.5
+             ) == {:error, {:invalid_option, :integer_ratio_threshold}}
+
       assert RTK.solve_fixed_baseline_epochs(@base, [epoch],
                ambiguity_wavelength_m: @l1_wavelength_m,
                partial_ambiguity_resolution: :bad

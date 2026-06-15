@@ -58,6 +58,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
     ]
 
   alias Orbis.Coordinates
+  alias Orbis.GNSS.Antex
   alias Orbis.GNSS.CarrierPhase
   alias Orbis.GNSS.Core.Constants
   alias Orbis.GNSS.Core.IntegerLeastSquares
@@ -81,6 +82,20 @@ defmodule Orbis.GNSS.PrecisePositioning do
   @default_integer_candidate_limit 200_000
   @default_cycle_slip_policy :error
   @min_elevation_weight_scale 1.0e-3
+
+  # res_ppp post-fit residual screen (RTKLIB-style). After a converged solve,
+  # residuals are normalized by sqrt(var) (= residual * sqrt(weight)); if the
+  # largest normalized residual exceeds @residual_screen_threshold the single
+  # worst observation is excluded and the solve is repeated, up to
+  # @residual_screen_max_passes exclusion passes.
+  @residual_screen_threshold 4.0
+  @residual_screen_max_passes 8
+  # The screened solution is accepted only when its post-fit weighted RMS is at
+  # least this many times smaller than the unscreened solution's: a genuine
+  # isolated blunder, once removed, collapses the fit by orders of magnitude,
+  # while honest data removal under a mis-specified model only nudges it. Two is
+  # the conservative "the fit must at least halve" bar.
+  @residual_screen_accept_factor 2.0
 
   defmodule Solution do
     @moduledoc """
@@ -419,14 +434,16 @@ defmodule Orbis.GNSS.PrecisePositioning do
   def solve_float_epochs(%SP3{} = sp3, epoch_observations, opts)
       when is_list(epoch_observations) do
     with {:ok, epochs} <- normalize_epoch_observations(epoch_observations),
+         {:ok, cycle_slip_policy} <- float_cycle_slip_policy(opts),
+         {:ok, epochs} <- split_float_arcs_on_cycle_slips(epochs, cycle_slip_policy, opts),
          {:ok, tropo} <- troposphere_options(opts),
          :ok <- ensure_multi_enough(epochs, tropo),
          {:ok, weights} <- weights(opts),
          {:ok, solve_opts} <- solve_options(opts),
-         {:ok, state} <- initial_multi_state(sp3, epochs, opts) do
-      sat_ids = multi_satellite_ids(epochs)
+         {:ok, state} <- initial_multi_state(sp3, epochs, opts),
+         {:ok, screen?} <- residual_screen_option(opts) do
       state = state_with_ztd(state, tropo)
-      iterate_multi(sp3, epochs, sat_ids, state, weights, tropo, solve_opts, 1)
+      solve_float_multi_screened(sp3, epochs, state, weights, tropo, solve_opts, screen?, 0)
     end
   end
 
@@ -921,7 +938,10 @@ defmodule Orbis.GNSS.PrecisePositioning do
       not is_integer(radius) or radius < 0 ->
         {:error, {:invalid_option, :integer_search_radius_cycles}}
 
-      not is_number(ratio) or ratio < 0.0 ->
+      # RTKLIB rejects thresar[0] < 1.0: the ratio test compares the
+      # second-best to best residual, which is structurally >= 1, so a
+      # threshold below 1.0 can never discriminate and is invalid.
+      not is_number(ratio) or ratio < 1.0 ->
         {:error, {:invalid_option, :integer_ratio_threshold}}
 
       not is_integer(limit) or limit < 1 ->
@@ -937,7 +957,18 @@ defmodule Orbis.GNSS.PrecisePositioning do
     end
   end
 
+  # Parse the troposphere config and fold in the per-one-way-range correction
+  # config under `:corrections`, so the single bundle threads to every
+  # build/residual site (all of which already carry `tropo`) and into the shared
+  # `range_corrections_m/7` chokepoint.
   defp troposphere_options(opts) do
+    with {:ok, tropo} <- base_troposphere_options(opts),
+         {:ok, corrections} <- corrections_options(opts) do
+      {:ok, Map.put(tropo, :corrections, corrections)}
+    end
+  end
+
+  defp base_troposphere_options(opts) do
     estimate_ztd = Keyword.get(opts, :estimate_ztd, false)
 
     case Keyword.get(opts, :troposphere, false) do
@@ -981,6 +1012,79 @@ defmodule Orbis.GNSS.PrecisePositioning do
 
       _other ->
         {:error, {:invalid_option, :troposphere}}
+    end
+  end
+
+  # Per-one-way-range correction configuration, parsed once per solve and
+  # threaded alongside the troposphere config to every build/residual site that
+  # calls `range_corrections_m/7`.
+  #
+  #   * `:receiver_antenna` - `%{antenna: %Antex.Antenna{}, freq1: "G01",
+  #     freq2: "G02"}` applies the receiver PCO/PCV as the ionosphere-free
+  #     combination of the two single-frequency corrections. `nil` (default)
+  #     applies no antenna correction.
+  #   * `:satellite_clock_relativity` - `true` adds the eccentricity
+  #     -2*dot(r_sat, v_sat)/c^2 term to the satellite clock. IGS final SP3/CLK
+  #     products EXCLUDE this term, so it must be applied here in the forward
+  #     model; broadcast ephemeris already carries it (do not double-apply).
+  #     Default `false`.
+  defp corrections_options(opts) do
+    with {:ok, receiver_antenna} <- receiver_antenna_option(opts),
+         {:ok, sat_clock_relativity?} <- sat_clock_relativity_option(opts),
+         {:ok, satellite_clock} <- satellite_clock_option(opts) do
+      {:ok,
+       %{
+         receiver_antenna: receiver_antenna,
+         sat_clock_relativity?: sat_clock_relativity?,
+         satellite_clock: satellite_clock
+       }}
+    end
+  end
+
+  defp receiver_antenna_option(opts) do
+    case Keyword.get(opts, :receiver_antenna) do
+      nil ->
+        {:ok, nil}
+
+      %{antenna: %Antex.Antenna{} = antenna, freq1: f1, freq2: f2}
+      when is_binary(f1) and is_binary(f2) ->
+        with {:ok, hz1} <- antex_band_hz(f1),
+             {:ok, hz2} <- antex_band_hz(f2),
+             {:ok, gamma} <- IonosphereFree.gamma(hz1, hz2) do
+          {:ok, %{antenna: antenna, freq1: f1, freq2: f2, gamma: gamma}}
+        else
+          _ -> {:error, {:invalid_option, :receiver_antenna}}
+        end
+
+      _ ->
+        {:error, {:invalid_option, :receiver_antenna}}
+    end
+  end
+
+  # Map an ANTEX frequency label (e.g. "G01") to its carrier frequency in Hz.
+  defp antex_band_hz(<<sys::binary-size(1), band::binary>>) do
+    case {sys, band} do
+      {"G", "01"} -> {:ok, Constants.gps_l1_hz()}
+      {"G", "02"} -> {:ok, Constants.gps_l2_hz()}
+      _ -> {:error, {:unsupported_antex_band, sys <> band}}
+    end
+  end
+
+  defp sat_clock_relativity_option(opts) do
+    case Keyword.get(opts, :satellite_clock_relativity, false) do
+      v when is_boolean(v) -> {:ok, v}
+      _ -> {:error, {:invalid_option, :satellite_clock_relativity}}
+    end
+  end
+
+  # A precise RINEX clock product (`Orbis.GNSS.RINEX.Clock`) whose finer-cadence
+  # satellite clocks are preferred over the SP3-interpolated clock through the
+  # shared range-corrections chokepoint. `nil` (default) keeps the SP3 clock.
+  defp satellite_clock_option(opts) do
+    case Keyword.get(opts, :satellite_clock) do
+      nil -> {:ok, nil}
+      %Orbis.GNSS.RINEX.Clock{} = clock -> {:ok, clock}
+      _ -> {:error, {:invalid_option, :satellite_clock}}
     end
   end
 
@@ -1097,6 +1201,177 @@ defmodule Orbis.GNSS.PrecisePositioning do
       :split_arc -> {:ok, :split_arc}
       _other -> {:error, {:invalid_option, :on_cycle_slip}}
     end
+  end
+
+  # The float multi-epoch entry holds one ambiguity per (sat, arc). A satellite's
+  # ambiguity is constant only within a slip-free arc, so a detected cycle slip
+  # must START A NEW float ambiguity from that epoch. `:cycle_slip` selects the
+  # behaviour:
+  #
+  #   * `:off` (default) - one ambiguity per satellite over the whole arc, no slip
+  #     handling. Preserves the historical model (and byte-identical synthetic
+  #     tests that never carry the dual-frequency slip inputs).
+  #   * `:split_arc` - run `CarrierPhase.detect_cycle_slips/2` per satellite over
+  #     the arc and start a new float ambiguity (a new `ambiguity_id` arc tag,
+  #     e.g. "G21#2") after every slip, exactly as `solve_widelane_fixed_epochs`
+  #     splits its wide-lane arcs. Slip detection (LLI bit0 / geometry-free / MW /
+  #     300s data-gap) needs the raw dual-frequency observation carried on each
+  #     iono-free row; rows missing it cannot be slip-checked and keep their
+  #     per-satellite ambiguity unchanged.
+  defp float_cycle_slip_policy(opts) do
+    case Keyword.get(opts, :cycle_slip, :off) do
+      :off -> {:ok, :off}
+      :split_arc -> {:ok, :split_arc}
+      _other -> {:error, {:invalid_option, :cycle_slip}}
+    end
+  end
+
+  defp split_float_arcs_on_cycle_slips(epochs, :off, _opts), do: {:ok, epochs}
+
+  defp split_float_arcs_on_cycle_slips(epochs, :split_arc, opts) do
+    # Build a per-satellite, time-ordered arc of {epoch, obs}, run the shared slip
+    # detector, and rewrite each observation's `ambiguity_id` to the split tag of
+    # the slip-free segment it falls in. Satellites whose rows lack the raw
+    # dual-frequency fields cannot be slip-checked, so they keep one ambiguity.
+    tags =
+      epochs
+      |> Enum.flat_map(fn epoch_row ->
+        Enum.map(epoch_row.observations, &{&1.satellite_id, epoch_row.epoch, &1})
+      end)
+      |> Enum.group_by(fn {sat, _epoch, _obs} -> sat end)
+      |> Enum.flat_map(fn {sat, arc} ->
+        arc
+        |> Enum.sort_by(fn {_sat, epoch, _obs} -> NaiveDateTime.to_iso8601(epoch) end)
+        |> float_arc_tags(sat, opts)
+      end)
+      |> Map.new()
+
+    rewritten =
+      Enum.map(epochs, fn epoch_row ->
+        observations =
+          Enum.map(epoch_row.observations, fn o ->
+            case Map.fetch(tags, {o.satellite_id, epoch_row.epoch}) do
+              {:ok, ambiguity_id} -> %{o | ambiguity_id: ambiguity_id}
+              :error -> o
+            end
+          end)
+
+        %{
+          epoch_row
+          | observations: Enum.sort_by(observations, &{&1.satellite_id, ambiguity_id(&1)})
+        }
+      end)
+
+    {:ok, rewritten}
+  end
+
+  # Map each {sat, epoch} in one satellite arc to its slip-free-segment ambiguity
+  # id. The slip detector consumes the raw dual-frequency fields preserved on each
+  # iono-free observation; if any row lacks them the arc is left untagged (one
+  # ambiguity per satellite). A segment with no slips keeps the bare satellite id
+  # so the no-slip case is byte-identical to the unsplit model.
+  defp float_arc_tags(arc, sat, opts) do
+    case float_carrier_phase_arc(arc) do
+      {:ok, cp_arc} ->
+        slip_epochs =
+          cp_arc
+          |> CarrierPhase.detect_cycle_slips(opts)
+          |> Enum.filter(& &1.slip)
+          |> MapSet.new(& &1.epoch)
+
+        if MapSet.size(slip_epochs) == 0 do
+          []
+        else
+          arc
+          |> split_float_arc(slip_epochs)
+          |> Enum.flat_map(fn {segment_idx, segment} ->
+            ambiguity_id = split_ambiguity_id(sat, segment_idx)
+            Enum.map(segment, fn {_sat, epoch, _obs} -> {{sat, epoch}, ambiguity_id} end)
+          end)
+        end
+
+      :error ->
+        []
+    end
+  end
+
+  # Turn one satellite's iono-free arc into the slip detector's per-epoch shape,
+  # reading the raw dual-frequency observation each row preserves under `:raw`.
+  # Returns `:error` if any row lacks the dual-frequency inputs, so a partially
+  # described arc is never silently slip-split on incomplete data.
+  defp float_carrier_phase_arc(arc) do
+    Enum.reduce_while(arc, {:ok, []}, fn {_sat, epoch, obs}, {:ok, acc} ->
+      case dual_frequency_raw(obs) do
+        {:ok, raw} ->
+          row = %{
+            epoch: epoch,
+            phi1: raw.phi1_cyc,
+            phi2: raw.phi2_cyc,
+            p1: raw.p1_m,
+            p2: raw.p2_m,
+            f1: raw.f1_hz,
+            f2: raw.f2_hz,
+            lli1: Map.get(raw, :lli1),
+            lli2: Map.get(raw, :lli2)
+          }
+
+          {:cont, {:ok, [row | acc]}}
+
+        :error ->
+          {:halt, :error}
+      end
+    end)
+    |> case do
+      {:ok, rows} -> {:ok, Enum.reverse(rows)}
+      :error -> :error
+    end
+  end
+
+  defp dual_frequency_raw(obs) do
+    raw = Map.get(obs, :raw, %{})
+
+    with phi1 when is_number(phi1) <- Map.get(raw, :phi1_cyc),
+         phi2 when is_number(phi2) <- Map.get(raw, :phi2_cyc),
+         p1 when is_number(p1) <- Map.get(raw, :p1_m),
+         p2 when is_number(p2) <- Map.get(raw, :p2_m),
+         f1 when is_number(f1) <- Map.get(raw, :f1_hz),
+         f2 when is_number(f2) <- Map.get(raw, :f2_hz) do
+      {:ok,
+       %{
+         phi1_cyc: phi1,
+         phi2_cyc: phi2,
+         p1_m: p1,
+         p2_m: p2,
+         f1_hz: f1,
+         f2_hz: f2,
+         lli1: Map.get(raw, :lli1),
+         lli2: Map.get(raw, :lli2)
+       }}
+    else
+      _ -> :error
+    end
+  end
+
+  # Split one satellite's {sat, epoch, obs} arc into {segment_idx, segment}
+  # fragments at the slip epochs (the slip epoch starts the new segment), reusing
+  # the same segmentation rule as the wide-lane `split_wide_lane_arc/2`.
+  defp split_float_arc(arc, slip_epochs) do
+    {segments, current, current_idx} =
+      Enum.reduce(arc, {[], [], 1}, fn {_sat, epoch, _obs} = row, {segments, current, idx} ->
+        if MapSet.member?(slip_epochs, epoch) do
+          segments =
+            if current == [], do: segments, else: [{idx, Enum.reverse(current)} | segments]
+
+          {segments, [row], idx + 1}
+        else
+          {segments, [row | current], idx}
+        end
+      end)
+
+    segments =
+      if current == [], do: segments, else: [{current_idx, Enum.reverse(current)} | segments]
+
+    Enum.reverse(segments)
   end
 
   defp prepare_wide_lane_arc(sat, arc, opts, wl_opts, :split_arc) do
@@ -1563,6 +1838,205 @@ defmodule Orbis.GNSS.PrecisePositioning do
     end
   end
 
+  # res_ppp post-fit residual screen. Solves the static multi-epoch float, then
+  # (when enabled) normalizes the post-fit residuals by sqrt(weight); if the
+  # largest exceeds the fixed 4-sigma threshold the single worst observation is
+  # excluded and the solve repeats, bounded by @residual_screen_max_passes
+  # (single-worst-per-pass, MAX_ITER 8).
+  #
+  # CONSERVATIVE BLUNDER-ONLY GATE. A bare single-worst-per-pass cut over-prunes a
+  # healthy arc: the iono-free code sigma is metre-scale, so on real data honest
+  # code residuals routinely exceed 4-sigma without being blunders, and dropping
+  # satellite-epochs only weakens geometry. Measured on the real ZIM2 arc the bare
+  # screen RAISED the 3D error (94.8 m -> 104.2 m): that error is systemic
+  # low-elevation mismodeling, not isolated blunders, so no exclusion helps and
+  # the screen must end up a no-op.
+  #
+  # Residual-variance gates (retained-set RMS, reduced chi-square) cannot fix this
+  # because removing honest data under a mis-specified model still lowers residual
+  # variance while degrading position. The distinguishing physical fact is the
+  # MAGNITUDE of the improvement: removing a genuine isolated blunder makes the
+  # remaining fit dramatically more consistent (its weighted RMS collapses by
+  # orders of magnitude), whereas removing honest data only nudges it. So the gate
+  # runs the bounded exclusion loop and ACCEPTS the screened solution only when its
+  # weighted RMS is at least @residual_screen_accept_factor times smaller than the
+  # unscreened solution's. A real arc with no blunder never clears that bar, so the
+  # unscreened solution is returned unchanged (never worse).
+  defp solve_float_multi_screened(sp3, epochs, state, weights, tropo, opts, screen?, _pass) do
+    sat_ids = multi_satellite_ids(epochs)
+
+    with {:ok, solution} <- iterate_multi(sp3, epochs, sat_ids, state, weights, tropo, opts, 1) do
+      if screen? do
+        unscreened_wrms = solution_weighted_rms(sp3, epochs, solution, state, tropo, weights)
+
+        case run_residual_screen(sp3, epochs, state, weights, tropo, opts, solution, 1) do
+          {:ok, screened, retained_epochs} ->
+            screened_wrms =
+              solution_weighted_rms(sp3, retained_epochs, screened, state, tropo, weights)
+
+            if is_number(screened_wrms) and is_number(unscreened_wrms) and
+                 screened_wrms * @residual_screen_accept_factor < unscreened_wrms do
+              {:ok, screened}
+            else
+              {:ok, solution}
+            end
+
+          :clean ->
+            {:ok, solution}
+
+          {:error, _} = err ->
+            err
+        end
+      else
+        {:ok, solution}
+      end
+    end
+  end
+
+  # Bounded single-worst-per-pass exclusion loop. Returns the final screened
+  # solution and its retained observation set, or `:clean` when no residual
+  # crosses the 4-sigma threshold (the arc was untouched). The accept/reject
+  # decision (whether the exclusions improved the fit enough to be a real blunder
+  # removal) is made by the caller on the returned solution.
+  defp run_residual_screen(sp3, epochs, state, weights, tropo, opts, solution, pass) do
+    if pass > @residual_screen_max_passes do
+      {:ok, solution, epochs}
+    else
+      case worst_multi_residual(
+             sp3,
+             epochs,
+             state_from_solution(solution, state),
+             tropo,
+             weights
+           ) do
+        {:exclude, epoch, sat} ->
+          pruned = exclude_observation(epochs, epoch, sat)
+
+          if multi_enough_after_prune?(pruned, tropo) do
+            sat_ids = multi_satellite_ids(pruned)
+
+            with {:ok, candidate} <-
+                   iterate_multi(
+                     sp3,
+                     pruned,
+                     sat_ids,
+                     reseed_state(state, pruned),
+                     weights,
+                     tropo,
+                     opts,
+                     1
+                   ) do
+              run_residual_screen(sp3, pruned, state, weights, tropo, opts, candidate, pass + 1)
+            end
+          else
+            {:ok, solution, epochs}
+          end
+
+        :clean ->
+          if pass == 1, do: :clean, else: {:ok, solution, epochs}
+
+        {:error, _} = err ->
+          err
+      end
+    end
+  end
+
+  # Post-fit weighted RMS of `solution` re-evaluated on `epochs` at its own solved
+  # state. `:infinity` when the residuals cannot be formed, so such a solution is
+  # never preferred by the accept gate.
+  defp solution_weighted_rms(sp3, epochs, solution, seed_state, tropo, weights) do
+    state = state_from_solution(solution, seed_state)
+
+    case multi_residual_rows(sp3, epochs, state, tropo, weights) do
+      {:ok, rows} -> weighted_rms(rows, weights)
+      {:error, _} -> :infinity
+    end
+  end
+
+  # The largest-normalized-residual exclusion candidate over all (epoch, sat,
+  # code|phase) post-fit residuals. Returns `{:exclude, epoch, sat}` when the max
+  # normalized residual exceeds the fixed 4-sigma threshold, `:clean` otherwise.
+  # Over-pruning is prevented downstream by the accept-only-if-better gate, not
+  # here, so the per-pass candidate stays the plain res_ppp worst residual.
+  defp worst_multi_residual(sp3, epochs, state, tropo, weights) do
+    with {:ok, rows} <- multi_residual_rows(sp3, epochs, state, tropo, weights) do
+      candidate =
+        rows
+        |> Enum.flat_map(fn r ->
+          [
+            {abs(r.code_m) * :math.sqrt(r.code_weight), r.epoch, r.satellite_id},
+            {abs(r.phase_m) * :math.sqrt(r.phase_weight), r.epoch, r.satellite_id}
+          ]
+        end)
+        |> Enum.max_by(fn {normalized, _epoch, _sat} -> normalized end, fn -> nil end)
+
+      case candidate do
+        {normalized, epoch, sat} when normalized > @residual_screen_threshold ->
+          {:exclude, epoch, sat}
+
+        _ ->
+          :clean
+      end
+    end
+  end
+
+  # Drop a single satellite's observation at one epoch, then drop any epoch left
+  # empty so downstream solves never see a zero-observation epoch.
+  defp exclude_observation(epochs, drop_epoch, drop_sat) do
+    epochs
+    |> Enum.map(fn epoch_row ->
+      if epoch_row.epoch == drop_epoch do
+        observations =
+          Enum.reject(epoch_row.observations, fn o -> o.satellite_id == drop_sat end)
+
+        %{epoch_row | observations: observations}
+      else
+        epoch_row
+      end
+    end)
+    |> Enum.reject(fn epoch_row -> epoch_row.observations == [] end)
+  end
+
+  defp multi_enough_after_prune?(epochs, tropo) do
+    case ensure_multi_enough(epochs, tropo) do
+      :ok -> true
+      _ -> false
+    end
+  end
+
+  # Carry the converged position/clocks/ZTD into the residual recompute so the
+  # screen measures post-fit residuals at the solved state, not the seed.
+  defp state_from_solution(%MultiEpochSolution{} = solution, prior) do
+    %{x_m: x, y_m: y, z_m: z} = solution.position
+
+    %{
+      position: {x, y, z},
+      clocks_m: Enum.map(solution.epoch_clocks, & &1.rx_clock_m),
+      ambiguities: solution.ambiguities_m,
+      ztd_m: solution.ztd_residual_m || Map.get(prior, :ztd_m, 0.0)
+    }
+  end
+
+  # Reseed the iteration from the prior position/clock with ambiguities rebuilt
+  # for the (possibly reduced) satellite set after a prune.
+  defp reseed_state(state, epochs) do
+    %{
+      position: state.position,
+      clocks_m: List.duplicate(hd(state.clocks_m), length(epochs)),
+      ambiguities: initial_ambiguities(epochs)
+    }
+    |> then(fn s ->
+      if Map.has_key?(state, :ztd_m), do: Map.put(s, :ztd_m, state.ztd_m), else: s
+    end)
+  end
+
+  defp residual_screen_option(opts) do
+    case Keyword.get(opts, :residual_screen, false) do
+      v when is_boolean(v) -> {:ok, v}
+      _ -> {:error, {:invalid_option, :residual_screen}}
+    end
+  end
+
   defp iterate_multi(sp3, epochs, sat_ids, state, weights, tropo, opts, iter) do
     with {:ok, rows} <- build_multi_rows(sp3, epochs, sat_ids, state, weights, tropo),
          {:ok, dx} <-
@@ -1632,8 +2106,11 @@ defmodule Orbis.GNSS.PrecisePositioning do
             {:ok, tropo_model} ->
               {ex, ey, ez} = pred.los_unit
               sat_clock_m = Constants.speed_of_light_m_s() * (pred.sat_clock_s || 0.0)
-              tropo_m = applied_troposphere_m(tropo_model, state)
-              model_code = pred.geometric_range_m + state.clock_m - sat_clock_m + tropo_m
+
+              corrections_m =
+                range_corrections_m(pred, {rx, ry, rz}, epoch, o, tropo_model, state, tropo)
+
+              model_code = pred.geometric_range_m + state.clock_m - sat_clock_m + corrections_m
               arc_id = ambiguity_id(o)
               ambiguity = Map.fetch!(state.ambiguities, arc_id)
 
@@ -1694,8 +2171,19 @@ defmodule Orbis.GNSS.PrecisePositioning do
               {:ok, tropo_model} ->
                 {ex, ey, ez} = pred.los_unit
                 sat_clock_m = Constants.speed_of_light_m_s() * (pred.sat_clock_s || 0.0)
-                tropo_m = applied_troposphere_m(tropo_model, state)
-                model_code = pred.geometric_range_m + clock_m - sat_clock_m + tropo_m
+
+                corrections_m =
+                  range_corrections_m(
+                    pred,
+                    {rx, ry, rz},
+                    epoch_row.epoch,
+                    o,
+                    tropo_model,
+                    state,
+                    tropo
+                  )
+
+                model_code = pred.geometric_range_m + clock_m - sat_clock_m + corrections_m
                 arc_id = ambiguity_id(o)
                 ambiguity = Map.fetch!(state.ambiguities, arc_id)
                 base = {-ex, -ey, -ez}
@@ -1773,8 +2261,19 @@ defmodule Orbis.GNSS.PrecisePositioning do
               {:ok, tropo_model} ->
                 {ex, ey, ez} = pred.los_unit
                 sat_clock_m = Constants.speed_of_light_m_s() * (pred.sat_clock_s || 0.0)
-                tropo_m = applied_troposphere_m(tropo_model, state)
-                model_code = pred.geometric_range_m + clock_m - sat_clock_m + tropo_m
+
+                corrections_m =
+                  range_corrections_m(
+                    pred,
+                    {rx, ry, rz},
+                    epoch_row.epoch,
+                    o,
+                    tropo_model,
+                    state,
+                    tropo
+                  )
+
+                model_code = pred.geometric_range_m + clock_m - sat_clock_m + corrections_m
                 ambiguity = Map.fetch!(fixed_m, ambiguity_id(o))
 
                 h =
@@ -1882,6 +2381,183 @@ defmodule Orbis.GNSS.PrecisePositioning do
 
   defp applied_troposphere_m(tropo_model, state) do
     tropo_model.slant_m + Map.get(state, :ztd_m, 0.0) * tropo_model.ztd_mapping
+  end
+
+  # Single shared per-one-way-range correction chokepoint.
+  #
+  # Returns the TOTAL additive metres layered on top of the geometric range,
+  # receiver clock, and satellite clock terms in `model_code`. Every current
+  # and future per-range correction (troposphere today; antenna PCO/PCV,
+  # relativity, phase windup, solid-earth tide, etc. in future) is summed here
+  # and ONLY here, so the three solve-row builders (`build_rows`,
+  # `build_multi_rows`, `build_fixed_multi_rows`) and the three residual-row
+  # finalizers (`residual_rows`, `multi_residual_rows`,
+  # `fixed_multi_residual_rows`) apply byte-identical corrections. Splitting a
+  # correction across only some of the six sites makes post-fit residuals lie,
+  # so all six call this and nothing else.
+  #
+  # Inputs (per the lockstep contract): the prediction `pred` (carries
+  # `los_unit`, `sat_clock_s`, `sat_pos_ecef_m`, `sat_velocity_m_s`,
+  # `geometric_range_m`, `elevation_deg`), the receiver ECEF `rx_pos`, the
+  # `epoch`, the observation `o` (carries satellite/system/frequency identity),
+  # the already-modeled `tropo_model`, the solver `state` (carries the estimated
+  # residual ZTD), and the per-solve correction config `corr` (receiver antenna,
+  # satellite-clock relativity flag).
+  defp range_corrections_m(pred, rx_pos, _epoch, o, tropo_model, state, tropo) do
+    corr = Map.get(tropo, :corrections, %{})
+
+    applied_troposphere_m(tropo_model, state) +
+      receiver_antenna_correction_m(pred, rx_pos, corr) +
+      sat_clock_relativity_correction_m(pred, corr) +
+      satellite_clock_correction_m(pred, o, corr)
+  end
+
+  # Prefer the precise 30s RINEX satellite clock over the SP3-interpolated clock.
+  # `model_code` subtracts `c * pred.sat_clock_s` (the 15-min SP3 clock); to
+  # subtract `c * rinex_clock` instead, add `+c * (pred.sat_clock_s -
+  # rinex_clock)`. The RINEX clock is read at the satellite transmit time, the
+  # same instant the SP3 clock estimate is valid for. When no RINEX clock is
+  # configured, or the satellite/epoch is not covered, the SP3 clock is kept (zero
+  # correction) so the forward model never silently drops the satellite clock.
+  defp satellite_clock_correction_m(pred, o, %{satellite_clock: %Orbis.GNSS.RINEX.Clock{} = clock}) do
+    case Orbis.GNSS.RINEX.Clock.clock_s(clock, o.satellite_id, pred.transmit_time) do
+      {:ok, rinex_clock_s} ->
+        Constants.speed_of_light_m_s() * ((pred.sat_clock_s || 0.0) - rinex_clock_s)
+
+      {:error, :no_clock} ->
+        0.0
+    end
+  end
+
+  defp satellite_clock_correction_m(_pred, _o, _corr), do: 0.0
+
+  # Receiver ANTEX PCO/PCV applied to the modeled range. The modeled path from
+  # the marker is corrected to the antenna phase center by SUBTRACTING the
+  # marker->phase-center projection onto the receiver->satellite line of sight
+  # (RTK sign rule rtk.ex:3559: moving the marker by +dr changes range by
+  # -dr.u). For the ionosphere-free observable the correction is the IF
+  # combination of the two single-frequency corrections.
+  defp receiver_antenna_correction_m(pred, rx_pos, %{
+         receiver_antenna: %{antenna: antenna, freq1: f1, freq2: f2, gamma: gamma}
+       }) do
+    c1 = single_freq_receiver_antenna_m(pred, rx_pos, antenna, f1)
+    c2 = single_freq_receiver_antenna_m(pred, rx_pos, antenna, f2)
+    # IF combination of the per-band corrections, then negate to subtract the
+    # marker->phase-center projection from the modeled range.
+    -(gamma * c1 - (gamma - 1.0) * c2)
+  end
+
+  defp receiver_antenna_correction_m(_pred, _rx_pos, _corr), do: 0.0
+
+  # Single-frequency receiver PCO projection + PCV, lifted from
+  # rtk.ex:receiver_antenna_correction/3 (the single-receiver path). `pco` and
+  # `pcv` are in metres; `los` is receiver->satellite.
+  defp single_freq_receiver_antenna_m(pred, rx_pos, antenna, frequency) do
+    pco = Antex.pco(antenna, frequency)
+
+    with {:ok, los} <- unit3(sub3(pred.sat_pos_ecef_m, rx_pos)),
+         {:ok, north, east, up} <- local_neu_basis(rx_pos) do
+      pco_projection = los_projection(pco, north, east, up, los)
+      {zenith_deg, azimuth_deg} = los_zenith_azimuth_deg(los, up, north, east)
+
+      pcv =
+        try do
+          Antex.pcv(antenna, frequency, zenith_deg, azimuth_deg)
+        rescue
+          _ -> 0.0
+        end
+
+      pco_projection + pcv
+    else
+      :zero -> 0.0
+    end
+  end
+
+  # Satellite-clock relativity (eccentricity) term. The true satellite clock is
+  # `sat_clock_s + dt_rel` with `dt_rel = -2*dot(r_sat, v_sat)/c^2`. `model_code`
+  # subtracts `c*sat_clock_s`; to subtract `c*(sat_clock_s + dt_rel)` instead we
+  # add `-c*dt_rel = +2*dot(r_sat, v_sat)/c` to the corrections. IGS final
+  # SP3/CLK products EXCLUDE this term, so it belongs in the forward model;
+  # broadcast ephemeris already carries it (do not double-apply).
+  defp sat_clock_relativity_correction_m(pred, %{sat_clock_relativity?: true}) do
+    {rx, ry, rz} = pred.sat_pos_ecef_m
+    {vx, vy, vz} = pred.sat_velocity_m_s
+    c = Constants.speed_of_light_m_s()
+    2.0 * (rx * vx + ry * vy + rz * vz) / c
+  end
+
+  defp sat_clock_relativity_correction_m(_pred, _corr), do: 0.0
+
+  # --- vector / local-frame helpers (lifted from rtk.ex) -------------------
+
+  defp local_neu_basis(receiver_pos) do
+    {:ok, up} = local_up(receiver_pos)
+    east = east_unit_from_up(up)
+    {:ok, north} = north_unit_from_east_and_up(east, up)
+    {:ok, north, east, up}
+  end
+
+  defp local_up(base) do
+    case norm(base) do
+      n when n > 0.0 -> {:ok, scale3(base, 1.0 / n)}
+      _zero -> {:ok, {0.0, 0.0, 1.0}}
+    end
+  end
+
+  defp east_unit_from_up(up) do
+    z_axis = {0.0, 0.0, 1.0}
+    cross = cross3(z_axis, up)
+
+    if cross == {0.0, 0.0, 0.0} do
+      {1.0, 0.0, 0.0}
+    else
+      case norm(cross) do
+        n when n > 0.0 -> scale3(cross, 1.0 / n)
+        _ -> {1.0, 0.0, 0.0}
+      end
+    end
+  end
+
+  defp north_unit_from_east_and_up(east, up) do
+    case unit3(cross3(east, up)) do
+      :zero -> {:ok, {0.0, 0.0, 1.0}}
+      {:ok, north} -> {:ok, north}
+    end
+  end
+
+  defp los_projection({north_offset, east_offset, up_offset}, north_unit, east_unit, up_unit, los) do
+    pco_ecef = add3(scale3(north_unit, north_offset), scale3(east_unit, east_offset))
+    pco_ecef = add3(pco_ecef, scale3(up_unit, up_offset))
+    dot3(pco_ecef, los)
+  end
+
+  defp los_zenith_azimuth_deg(los, up, north, east) do
+    elevation_sin = dot3(los, up)
+    elevation_sin = max(-1.0, min(1.0, elevation_sin))
+    zenith_deg = :math.acos(elevation_sin) * 180.0 / :math.pi()
+
+    azimuth_rad = :math.atan2(dot3(los, east), dot3(los, north))
+    azimuth_deg = azimuth_rad * 180.0 / :math.pi()
+    azimuth_deg = if azimuth_deg < 0.0, do: azimuth_deg + 360.0, else: azimuth_deg
+
+    {zenith_deg, azimuth_deg}
+  end
+
+  defp unit3(v) do
+    case norm(v) do
+      n when n > 0.0 -> {:ok, scale3(v, 1.0 / n)}
+      _zero -> :zero
+    end
+  end
+
+  defp add3({ax, ay, az}, {bx, by, bz}), do: {ax + bx, ay + by, az + bz}
+  defp sub3({ax, ay, az}, {bx, by, bz}), do: {ax - bx, ay - by, az - bz}
+  defp scale3({x, y, z}, s), do: {x * s, y * s, z * s}
+  defp dot3({ax, ay, az}, {bx, by, bz}), do: ax * bx + ay * by + az * bz
+  defp norm({x, y, z}), do: :math.sqrt(x * x + y * y + z * z)
+
+  defp cross3({ax, ay, az}, {bx, by, bz}) do
+    {ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx}
   end
 
   defp apply_delta(state, obs, dx) do
@@ -2214,8 +2890,11 @@ defmodule Orbis.GNSS.PrecisePositioning do
           case model_troposphere(pred, {rx, ry, rz}, epoch, tropo) do
             {:ok, tropo_model} ->
               sat_clock_m = Constants.speed_of_light_m_s() * (pred.sat_clock_s || 0.0)
-              tropo_m = applied_troposphere_m(tropo_model, state)
-              model_code = pred.geometric_range_m + state.clock_m - sat_clock_m + tropo_m
+
+              corrections_m =
+                range_corrections_m(pred, {rx, ry, rz}, epoch, o, tropo_model, state, tropo)
+
+              model_code = pred.geometric_range_m + state.clock_m - sat_clock_m + corrections_m
               ambiguity = Map.fetch!(state.ambiguities, ambiguity_id(o))
 
               row = %{
@@ -2257,8 +2936,19 @@ defmodule Orbis.GNSS.PrecisePositioning do
             case model_troposphere(pred, {rx, ry, rz}, epoch_row.epoch, tropo) do
               {:ok, tropo_model} ->
                 sat_clock_m = Constants.speed_of_light_m_s() * (pred.sat_clock_s || 0.0)
-                tropo_m = applied_troposphere_m(tropo_model, state)
-                model_code = pred.geometric_range_m + clock_m - sat_clock_m + tropo_m
+
+                corrections_m =
+                  range_corrections_m(
+                    pred,
+                    {rx, ry, rz},
+                    epoch_row.epoch,
+                    o,
+                    tropo_model,
+                    state,
+                    tropo
+                  )
+
+                model_code = pred.geometric_range_m + clock_m - sat_clock_m + corrections_m
                 ambiguity = Map.fetch!(state.ambiguities, ambiguity_id(o))
 
                 row = %{
@@ -2306,8 +2996,19 @@ defmodule Orbis.GNSS.PrecisePositioning do
             case model_troposphere(pred, {rx, ry, rz}, epoch_row.epoch, tropo) do
               {:ok, tropo_model} ->
                 sat_clock_m = Constants.speed_of_light_m_s() * (pred.sat_clock_s || 0.0)
-                tropo_m = applied_troposphere_m(tropo_model, state)
-                model_code = pred.geometric_range_m + clock_m - sat_clock_m + tropo_m
+
+                corrections_m =
+                  range_corrections_m(
+                    pred,
+                    {rx, ry, rz},
+                    epoch_row.epoch,
+                    o,
+                    tropo_model,
+                    state,
+                    tropo
+                  )
+
+                model_code = pred.geometric_range_m + clock_m - sat_clock_m + corrections_m
                 ambiguity = Map.fetch!(fixed_m, ambiguity_id(o))
 
                 row = %{

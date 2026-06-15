@@ -57,7 +57,9 @@ defmodule Orbis.GNSS.Observables do
         elevation_deg:     float(),    # topocentric elevation
         azimuth_deg:       float(),    # topocentric azimuth, [0, 360)
         transmit_time:     NaiveDateTime.t(),  # t_tx
-        los_unit:          {float(), float(), float()}  # receiver -> satellite, ECEF unit
+        los_unit:          {float(), float(), float()},  # receiver -> satellite, ECEF unit
+        sat_pos_ecef_m:    {float(), float(), float()},  # Sagnac-rotated sat position
+        sat_velocity_m_s:  {float(), float(), float()}   # Sagnac-rotated sat velocity
       }
   """
 
@@ -78,7 +80,9 @@ defmodule Orbis.GNSS.Observables do
           elevation_deg: float(),
           azimuth_deg: float(),
           transmit_time: NaiveDateTime.t(),
-          los_unit: vec3()
+          los_unit: vec3(),
+          sat_pos_ecef_m: vec3(),
+          sat_velocity_m_s: vec3()
         }
 
   @doc """
@@ -160,7 +164,13 @@ defmodule Orbis.GNSS.Observables do
          elevation_deg: elevation_deg,
          azimuth_deg: azimuth_deg,
          transmit_time: t_tx,
-         los_unit: los
+         los_unit: los,
+         # Sagnac-rotated satellite position and velocity in the receive-epoch
+         # ECEF frame (same frame as `los_unit`). Exposed for downstream
+         # corrections: antenna PCO/PCV needs `sat_pos`, the satellite-clock
+         # relativity term needs both `sat_pos` and `sat_velocity`.
+         sat_pos_ecef_m: r_sat_rot,
+         sat_velocity_m_s: {vx, vy, vz}
        }}
     end
   end

@@ -4,6 +4,8 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
   use ExUnit.Case, async: true
 
   alias Orbis.Coordinates
+  alias Orbis.GNSS.Antex
+  alias Orbis.GNSS.IonosphereFree
   alias Orbis.GNSS.Observables
   alias Orbis.GNSS.PrecisePositioning
   alias Orbis.GNSS.PrecisePositioning.FixedSolution
@@ -463,6 +465,14 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
                  ambiguity_wavelength_m: @l1_wavelength_m,
                  elevation_weighting: :yes
                )
+
+      # RTKLIB rejects thresar[0] < 1.0; a sub-1.0 ratio threshold is invalid.
+      assert {:error, {:invalid_option, :integer_ratio_threshold}} =
+               PrecisePositioning.solve_fixed_epochs(ctx.sp3, ctx.fixed_epoch_observations,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 ambiguity_wavelength_m: @l1_wavelength_m,
+                 integer_ratio_threshold: 0.5
+               )
     end
   end
 
@@ -473,6 +483,7 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
                  ctx.sp3,
                  ctx.dual_frequency_epoch_observations,
                  initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 min_arc_gap_s: 1_000.0,
                  wide_lane_tolerance_cycles: 0.01
                )
 
@@ -514,6 +525,7 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
       assert {:error, {:wide_lane_not_integer, ^bad_sat, _mean, _fixed}} =
                PrecisePositioning.solve_widelane_fixed_epochs(ctx.sp3, biased,
                  initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 min_arc_gap_s: 1_000.0,
                  wide_lane_tolerance_cycles: 0.01
                )
     end
@@ -535,6 +547,7 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
       assert {:error, {:wide_lane_failed, ^bad_sat, :equal_frequencies}} =
                PrecisePositioning.solve_widelane_fixed_epochs(ctx.sp3, malformed,
                  initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 min_arc_gap_s: 1_000.0,
                  gf_threshold_m: 1.0e12
                )
     end
@@ -548,7 +561,8 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
 
       assert {:error, {:cycle_slip_detected, ^bad_sat, ^slip_epoch, reasons}} =
                PrecisePositioning.solve_widelane_fixed_epochs(ctx.sp3, slipped,
-                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0}
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 min_arc_gap_s: 1_000.0
                )
 
       assert :geometry_free in reasons or :melbourne_wubbena in reasons
@@ -564,6 +578,7 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
       assert {:ok, %FixedSolution{} = sol} =
                PrecisePositioning.solve_widelane_fixed_epochs(ctx.sp3, slipped,
                  initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 min_arc_gap_s: 1_000.0,
                  on_cycle_slip: :drop_satellite,
                  wide_lane_tolerance_cycles: 0.01
                )
@@ -588,6 +603,7 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
       assert {:ok, %FixedSolution{} = sol} =
                PrecisePositioning.solve_widelane_fixed_epochs(ctx.sp3, slipped,
                  initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 min_arc_gap_s: 1_000.0,
                  on_cycle_slip: :split_arc,
                  wide_lane_tolerance_cycles: 0.01
                )
@@ -623,7 +639,79 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
                  ctx.sp3,
                  ctx.dual_frequency_epoch_observations,
                  initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 min_arc_gap_s: 1_000.0,
                  on_cycle_slip: :bogus
+               )
+    end
+  end
+
+  describe "solve_float_epochs/3 cycle-slip arc-splitting (INCR 0)" do
+    test "starts a fresh float ambiguity arc after a detected slip", ctx do
+      [{bad_sat, _predictions} | _] = ctx.multi_sats
+      slip_epoch = @epoch2
+      split_arc = "#{bad_sat}#2"
+
+      # Iono-free rows carrying the raw dual-frequency observation, with an LLI
+      # loss-of-lock bit set on the slipped satellite from the slip epoch on.
+      slipped =
+        iono_free_with_lli_slip(ctx.dual_frequency_epoch_observations, bad_sat, slip_epoch)
+
+      base = [initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0}, min_arc_gap_s: 1_000.0]
+
+      # Without slip handling the single-per-sat ambiguity cannot absorb the
+      # mid-arc jump; with :split_arc the slipped satellite gets a fresh arc id.
+      {:ok, off} = PrecisePositioning.solve_float_epochs(ctx.sp3, slipped, base)
+      refute split_arc in off.used_sats
+
+      assert {:ok, split} =
+               PrecisePositioning.solve_float_epochs(
+                 ctx.sp3,
+                 slipped,
+                 Keyword.put(base, :cycle_slip, :split_arc)
+               )
+
+      # The slipped satellite is split into a pre-slip arc ("G07#1") and a
+      # post-slip arc ("G07#2"); the bare physical id no longer carries a single
+      # whole-arc ambiguity.
+      assert "#{bad_sat}#1" in split.used_sats
+      assert split_arc in split.used_sats
+      refute bad_sat in split.used_sats
+      assert position_error(split.position, @truth) < position_error(off.position, @truth)
+    end
+
+    test "is a no-op on a slip-free arc (default :off)", ctx do
+      with_raw = iono_free_with_lli_slip(ctx.dual_frequency_epoch_observations, nil, nil)
+      base = [initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0}, min_arc_gap_s: 1_000.0]
+
+      {:ok, plain} = PrecisePositioning.solve_float_epochs(ctx.sp3, with_raw, base)
+
+      {:ok, split} =
+        PrecisePositioning.solve_float_epochs(
+          ctx.sp3,
+          with_raw,
+          Keyword.put(base, :cycle_slip, :split_arc)
+        )
+
+      # No slips -> no new arc ids -> byte-identical satellite set and position.
+      assert split.used_sats == plain.used_sats
+      assert position_error(split.position, position_tuple(plain.position)) < 1.0e-9
+    end
+
+    test "rejects an unknown cycle_slip option", ctx do
+      assert {:error, {:invalid_option, :cycle_slip}} =
+               PrecisePositioning.solve_float_epochs(ctx.sp3, ctx.epoch_observations,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 cycle_slip: :bogus
+               )
+    end
+  end
+
+  describe "solve_float_epochs/3 precise satellite clock (RINEX 30s)" do
+    test "rejects a non-clock satellite_clock option", ctx do
+      assert {:error, {:invalid_option, :satellite_clock}} =
+               PrecisePositioning.solve_float_epochs(ctx.sp3, ctx.epoch_observations,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 satellite_clock: :not_a_clock
                )
     end
   end
@@ -698,6 +786,163 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
                  initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
                  troposphere: true,
                  relative_humidity: 1.5
+               )
+    end
+  end
+
+  describe "range corrections: receiver ANTEX (INCR 1)" do
+    @atx_small Path.join(__DIR__, "fixtures/antex/igs20_mmet_usal_gps.atx")
+
+    setup do
+      antex = Antex.load!(@atx_small)
+      rx = Antex.antenna(antex, "LEIAR20         NONE") || raise "ANTEX missing LEIAR20"
+      {:ok, receiver_antenna: %{antenna: rx, freq1: "G01", freq2: "G02"}}
+    end
+
+    test "applying the receiver antenna shifts the recovered position", ctx do
+      # Observations are synthesized WITHOUT any antenna correction. Solving with
+      # the receiver antenna applies the marker->phase-center projection, so the
+      # recovered position must move by the (cm-scale) PCO/PCV magnitude.
+      base = [initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0}]
+
+      {:ok, plain} = PrecisePositioning.solve_float_epochs(ctx.sp3, ctx.epoch_observations, base)
+
+      {:ok, corrected} =
+        PrecisePositioning.solve_float_epochs(
+          ctx.sp3,
+          ctx.epoch_observations,
+          Keyword.put(base, :receiver_antenna, ctx.receiver_antenna)
+        )
+
+      shift = position_error(corrected.position, position_tuple(plain.position))
+
+      # LEIAR20 GPS PCO is dominated by a ~10 cm up offset; the IF combination is
+      # a few cm to ~0.1 m. The shift must be nonzero and physically small.
+      assert shift > 0.005
+      assert shift < 0.5
+    end
+
+    test "rejects a malformed receiver_antenna option", ctx do
+      assert {:error, {:invalid_option, :receiver_antenna}} =
+               PrecisePositioning.solve_float_epochs(
+                 ctx.sp3,
+                 ctx.epoch_observations,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 receiver_antenna: %{antenna: :not_an_antenna, freq1: "G01", freq2: "G02"}
+               )
+    end
+  end
+
+  describe "range corrections: SP3-clock relativity (INCR 2)" do
+    test "the eccentricity term equals 2*dot(r_sat, v_sat)/c and is meter-scale" do
+      # Direct check of the exposed satellite position/velocity and the relativity
+      # magnitude on a real SP3 satellite.
+      {:ok, pred} = @sp3_path |> SP3.load!() |> Observables.predict("G07", @truth, @epoch)
+
+      {rx, ry, rz} = pred.sat_pos_ecef_m
+      {vx, vy, vz} = pred.sat_velocity_m_s
+      expected = 2.0 * (rx * vx + ry * vy + rz * vz) / @c
+
+      # GPS eccentricity relativity is bounded by ~|2*sqrt(a)*e*... | -> tens of
+      # nanoseconds, i.e. a few metres of range; assert it is in that band.
+      assert abs(expected) < 25.0
+    end
+
+    test "applying relativity shifts the recovered position", ctx do
+      base = [initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0}]
+
+      {:ok, plain} = PrecisePositioning.solve_float_epochs(ctx.sp3, ctx.epoch_observations, base)
+
+      {:ok, corrected} =
+        PrecisePositioning.solve_float_epochs(
+          ctx.sp3,
+          ctx.epoch_observations,
+          Keyword.put(base, :satellite_clock_relativity, true)
+        )
+
+      shift = position_error(corrected.position, position_tuple(plain.position))
+      assert shift > 0.0
+    end
+
+    test "rejects a non-boolean satellite_clock_relativity option", ctx do
+      assert {:error, {:invalid_option, :satellite_clock_relativity}} =
+               PrecisePositioning.solve_float_epochs(
+                 ctx.sp3,
+                 ctx.epoch_observations,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 satellite_clock_relativity: :yes
+               )
+    end
+  end
+
+  describe "res_ppp post-fit residual screen (INCR 3)" do
+    test "excludes a single injected outlier and recovers the clean position", ctx do
+      [{bad_sat, _} | _] = ctx.multi_sats
+      base = [initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0}]
+
+      # Inject a large code+phase outlier on one satellite at the first epoch.
+      outlier_epoch = @epoch
+
+      contaminated =
+        Enum.map(ctx.epoch_observations, fn epoch_row ->
+          if epoch_row.epoch == outlier_epoch do
+            observations =
+              Enum.map(epoch_row.observations, fn
+                %{satellite_id: ^bad_sat} = o ->
+                  %{o | code_m: o.code_m + 50.0, phase_m: o.phase_m + 50.0}
+
+                o ->
+                  o
+              end)
+
+            %{epoch_row | observations: observations}
+          else
+            epoch_row
+          end
+        end)
+
+      # Without the screen the outlier corrupts the static position.
+      {:ok, unscreened} =
+        PrecisePositioning.solve_float_epochs(ctx.sp3, contaminated, base)
+
+      # With the screen the worst observation is excluded and the position
+      # recovers close to truth.
+      {:ok, screened} =
+        PrecisePositioning.solve_float_epochs(
+          ctx.sp3,
+          contaminated,
+          Keyword.put(base, :residual_screen, true)
+        )
+
+      assert position_error(screened.position, @truth) <
+               position_error(unscreened.position, @truth)
+
+      assert position_error(screened.position, @truth) < 1.0e-2
+    end
+
+    test "a clean arc is unchanged by the screen", ctx do
+      base = [initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0}]
+
+      {:ok, plain} = PrecisePositioning.solve_float_epochs(ctx.sp3, ctx.epoch_observations, base)
+
+      {:ok, screened} =
+        PrecisePositioning.solve_float_epochs(
+          ctx.sp3,
+          ctx.epoch_observations,
+          Keyword.put(base, :residual_screen, true)
+        )
+
+      assert position_error(screened.position, position_tuple(plain.position)) < 1.0e-9
+      assert screened.used_sats == plain.used_sats
+    end
+
+    test "rejects a non-boolean residual_screen option", ctx do
+      assert {:error, {:invalid_option, :residual_screen}} =
+               PrecisePositioning.solve_float_epochs(
+                 ctx.sp3,
+                 ctx.epoch_observations,
+                 initial_guess: {3_513_400.0, 780_100.0, 5_249_000.0, -20.0},
+                 residual_screen: :yes
                )
     end
   end
@@ -953,7 +1198,57 @@ defmodule Orbis.GNSS.PrecisePositioningTest do
     end)
   end
 
+  # Build iono-free %{code_m, phase_m, + raw dual-frequency fields} rows from the
+  # dual-frequency fixture. On `sat` from `slip_epoch` onward an integer L1 carrier
+  # slip is injected (band-1 phase jumps by `slip_cycles`) and the LLI
+  # loss-of-lock bit is flagged AT the slip epoch, so the float-path cycle-slip
+  # detector starts a fresh ambiguity arc there. `sat`/`slip_epoch` nil leaves a
+  # clean (slip-free) arc.
+  defp iono_free_with_lli_slip(epoch_observations, sat, slip_epoch, slip_cycles \\ 8.0) do
+    Enum.map(epoch_observations, fn epoch_row ->
+      at_or_after? =
+        not is_nil(slip_epoch) and
+          NaiveDateTime.compare(epoch_row.epoch, slip_epoch) in [:eq, :gt]
+
+      # Loss-of-lock is a one-time event: the LLI bit is set only AT the slip
+      # epoch (the first epoch of the new arc), not on every later epoch.
+      at_slip? =
+        not is_nil(slip_epoch) and NaiveDateTime.compare(epoch_row.epoch, slip_epoch) == :eq
+
+      observations =
+        Enum.map(epoch_row.observations, fn obs ->
+          slipped_sat? = obs.satellite_id == sat
+
+          phi1_cyc =
+            if slipped_sat? and at_or_after?, do: obs.phi1_cyc + slip_cycles, else: obs.phi1_cyc
+
+          {:ok, code_m} = IonosphereFree.iono_free(obs.p1_m, obs.p2_m, obs.f1_hz, obs.f2_hz)
+
+          {:ok, phase_m} =
+            IonosphereFree.iono_free_phase_cycles(phi1_cyc, obs.phi2_cyc, obs.f1_hz, obs.f2_hz)
+
+          %{
+            satellite_id: obs.satellite_id,
+            code_m: code_m,
+            phase_m: phase_m,
+            phi1_cyc: phi1_cyc,
+            phi2_cyc: obs.phi2_cyc,
+            p1_m: obs.p1_m,
+            p2_m: obs.p2_m,
+            f1_hz: obs.f1_hz,
+            f2_hz: obs.f2_hz,
+            lli1: if(slipped_sat? and at_slip?, do: 1, else: 0),
+            lli2: 0
+          }
+        end)
+
+      %{epoch: epoch_row.epoch, observations: observations}
+    end)
+  end
+
   defp position_error(%{x_m: x, y_m: y, z_m: z}, {tx, ty, tz}) do
     :math.sqrt((x - tx) * (x - tx) + (y - ty) * (y - ty) + (z - tz) * (z - tz))
   end
+
+  defp position_tuple(%{x_m: x, y_m: y, z_m: z}), do: {x, y, z}
 end
