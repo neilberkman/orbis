@@ -6,6 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Documentation
+
+- Clarified the IONEX rapid/predicted fetch story. The latest-available-day
+  candidate fallback described in 0.28.0 is delivered by `fetch_ionex/3` (which
+  walks candidate days newest-first), not by `fetch/2` on a single product, which
+  is single-shot by design. The `mgex_ionex/3`, `rapid_ionex/2`, and
+  `predicted_ionex/3` docs now point to `fetch_ionex/3` for fallback fetching.
+- Documented that the CODE rapid GIM (`:cod_rap`) is a rolling-recent window on
+  the AIUB `/CODE` root (current day not yet published; files older than roughly
+  three days roll off), and that the predicted map (`:cod_prd1`) is preferred for
+  same-day use.
+
 ## [0.28.0] - 2026-06-14
 
 ### Added

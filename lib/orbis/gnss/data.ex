@@ -237,6 +237,11 @@ defmodule Orbis.GNSS.Data do
   Served by `:esa` (`ESA0OPSFIN`). IONEX maps are sub-daily, so the catalog
   sampling defaults to `02H`; pass `sample:` to override.
 
+  `fetch/2` on the returned product is a single-shot fetch of that exact day. For
+  the lower-latency CODE rapid (`:cod_rap`) and predicted (`:cod_prd1`,
+  `:cod_prd2`) maps, whose availability is time-sensitive, use `fetch_ionex/3` to
+  fetch with a latest-available-day candidate fallback.
+
   ## Examples
 
       iex> p = Orbis.GNSS.Data.mgex_ionex(:esa, ~D[2024-06-24])
@@ -254,6 +259,13 @@ defmodule Orbis.GNSS.Data do
   The rapid global ionosphere map is the low-latency CODE GIM; the final
   `COD0OPSFIN` map lags one to three weeks. It resolves on the AIUB `/CODE` root
   over plain HTTP and defaults to `01H` sampling.
+
+  The rapid map is a **rolling-recent window** on AIUB: the current day is not
+  yet published and files older than roughly three days roll off the `/CODE`
+  root, so `fetch/2` on a single day can `:file_not_found` on either edge. For
+  the freshest available map prefer `fetch_ionex/3`, which walks candidate days
+  newest-first; for same-day use prefer the predicted map (`:cod_prd1`), which is
+  published before its day starts.
 
   ## Examples
 
@@ -280,6 +292,9 @@ defmodule Orbis.GNSS.Data do
   Predicted maps are published before their target day starts, so a predicted
   product is resolvable for the current/near-future UTC day. Resolves on the
   AIUB `/CODE` root over plain HTTP and defaults to `01H` sampling.
+
+  To fetch with a latest-available-day fallback (walking candidate days
+  newest-first), use `fetch_ionex/3` rather than `fetch/2` on a single product.
 
   ## Examples
 
