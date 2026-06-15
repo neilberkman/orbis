@@ -14,7 +14,7 @@ defmodule Orbis.GNSS.PPPCorrections do
   so the state-independent precomputation is exact at solve precision.
 
   Crate-backed pieces (Sun/Moon ECEF and the IERS DEHANTTIDEINEL kernel) come
-  through `Orbis.NIF`. The wind-up and satellite-PCO vector algebra is here in
+  through the Rust NIF. The wind-up and satellite-PCO vector algebra is here in
   Elixir against the crate Sun direction and the SP3 satellite geometry, where it
   is short dot/cross algebra and directly checkable against RTKLIB ppp.c /
   preceph.c.
