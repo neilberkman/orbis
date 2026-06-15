@@ -6,6 +6,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.29.1] - 2026-06-15
+
+### Changed
+
+- `Orbis.GNSS.SP3.merge/2` and `Orbis.GNSS.Data.fetch_merged_sp3/3` now combine
+  source products with different native epoch intervals by decimating the finer
+  ones onto a common coarser grid (exact subset selection, no positional
+  interpolation), instead of rejecting the merge. This lets ultra-rapid products
+  published at different cadences be consensus-merged across the full center set
+  (e.g. `fetch_merged_sp3(target, [:igs_ult, :cod_ult, :esa_ult, :gfz_ult],
+  combine: :precedence, systems: [:gps], epoch_interval_s: 900)` — IGS/ESA at
+  15 min, CODE/GFZ at 5 min — now returns `{:ok, %SP3{}, provenance}`). Inputs
+  whose interval does not evenly divide the common grid are still rejected;
+  same-interval merges are unchanged. Rides astrodynamics-gnss 0.18.0.
+
 ## [0.29.0] - 2026-06-15
 
 ### Added

@@ -163,17 +163,25 @@ defmodule Orbis.GNSS.SP3MergeTest do
       assert {:error, _} = SP3.merge([a, b])
     end
 
-    test "rejects mixed epoch intervals and honors a requested target interval" do
+    test "decimates mixed epoch intervals onto a common grid, rejecting non-divisible ones" do
       {:ok, a} =
         SP3.parse(sp3_bytes([{"G01", [15000.0, -20000.0, 5000.0], 100.0}], "IGS14", 900.0))
 
       {:ok, b} =
         SP3.parse(sp3_bytes([{"G01", [15000.0, -20000.0, 5000.0], 100.0}], "IGS14", 300.0))
 
-      assert {:error, reason} = SP3.merge([a, b])
+      # 15-min + 5-min is now decimated onto the 900 s common grid, not rejected.
+      assert {:ok, _merged, _report} = SP3.merge([a, b], min_agree: 1)
+
+      # A target finer than an input is unsatisfiable (no upsampling/interpolation).
+      assert {:error, reason} = SP3.merge([a], epoch_interval_s: 300.0)
       assert to_string(reason) =~ "mismatched epoch intervals"
 
-      assert {:error, reason} = SP3.merge([a], epoch_interval_s: 300.0)
+      # A non-divisible cadence (900 vs 400) is still rejected.
+      {:ok, d} =
+        SP3.parse(sp3_bytes([{"G01", [15000.0, -20000.0, 5000.0], 100.0}], "IGS14", 400.0))
+
+      assert {:error, reason} = SP3.merge([a, d])
       assert to_string(reason) =~ "mismatched epoch intervals"
     end
 
@@ -343,12 +351,13 @@ defmodule Orbis.GNSS.SP3MergeTest do
       assert info.reason != nil
     end
 
-    test "mixed source cadence surfaces a tagged reason instead of unioning grids", %{
+    test "merges mixed source cadence by decimating onto the common grid", %{
       cache_dir: cache_dir
     } do
       igs = Data.ops_ultra_sp3(:igs_ult, ~D[2024-09-03], issue: "0600")
       gfz = Data.ops_ultra_sp3(:gfz_ult, ~D[2024-09-03], issue: "0600")
 
+      # IGS ultra at 15 min, GFZ ultra at 5 min.
       seed(
         cache_dir,
         igs,
@@ -361,16 +370,18 @@ defmodule Orbis.GNSS.SP3MergeTest do
         sp3_bytes([{"G01", [15000.0, -20000.0, 5000.0], 100.0}], "IGS14", 300.0)
       )
 
-      assert {:error, {:incompatible_sources, info}} =
+      # The mixed-cadence ultra-rapid set now consensus-merges onto the requested
+      # 15-min grid (GFZ decimated) instead of returning :incompatible_sources.
+      assert {:ok, %SP3{}, _provenance} =
                Data.fetch_merged_sp3(~D[2024-09-03], [:igs_ult, :gfz_ult],
                  issue: "0600",
+                 combine: :precedence,
+                 min_agree: 1,
+                 systems: [:gps],
                  offline: true,
                  cache_dir: cache_dir,
                  epoch_interval_s: 900.0
                )
-
-      assert info.centers == [:igs_ult, :gfz_ult]
-      assert to_string(info.reason) =~ "mismatched epoch intervals"
     end
   end
 
