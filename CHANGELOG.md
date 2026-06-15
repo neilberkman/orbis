@@ -6,6 +6,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-06-15
+
+### Added
+
+- PPP per-range correction stack for the static float/fixed precise-positioning
+  solve, all opt-in (no change to default behaviour):
+  - `solid_earth_tide`: IERS DEHANTTIDEINEL station displacement.
+  - `phase_windup`: demo5/RTKLIB carrier-phase wind-up (nominal yaw attitude),
+    applied to the phase observable only.
+  - `satellite_antenna`: satellite antenna PCO/PCV from an ANTEX file, iono-free
+    combined, projected onto the line of sight.
+  These ride `astrodynamics` 0.11.0 (analytic Sun/Moon in ITRS, corrected for an
+  of-date precession double-count) and `astrodynamics-gnss` 0.17.0 (solid-earth
+  tide kernel). The Sun/Moon and tide kernels are validated through the NIF
+  against Skyfield/DE440 and IERS golden vectors.
+- RINEX `SYS / PHASE SHIFT`: the parsed `correction_cycles` are now applied to
+  the carrier-phase observable (previously parsed but never applied).
+- GLONASS FDMA: `Orbis.GNSS.Velocity` accepts a per-satellite carrier
+  (`:carrier_hz_by_sat`) so a GLONASS Doppler is converted to range rate with its
+  own slot frequency instead of a single global GPS L1 carrier.
+
 ### Documentation
 
 - Clarified the IONEX rapid/predicted fetch story. The latest-available-day

@@ -10,6 +10,13 @@ defmodule Orbis.CrinexTest do
   @crx_v1_path Path.join(__DIR__, "fixtures/obs/algo0010_2015001_v1_trim.crx")
   @rnx_v1_path Path.join(__DIR__, "fixtures/obs/algo0010_2015001_v1_trim.rnx")
 
+  # Same as @rnx_path but with the `G L1C` SYS / PHASE SHIFT record set to a
+  # non-zero 0.25000-cycle correction (every other record stays 0.0).
+  @phase_shift_path Path.join(
+                      __DIR__,
+                      "fixtures/obs/ESBC00DNK_phase_shift_nonzero_trim.rnx"
+                    )
+
   describe "decode_crinex/1" do
     test "reproduces the crx2rnx reference decode byte-for-byte" do
       crx = File.read!(@crx_path)
@@ -111,6 +118,15 @@ defmodule Orbis.CrinexTest do
              end)
     end
 
+    test "phases/3 leaves value_cycles uncorrected when every shift is 0.0", %{obs: obs} do
+      {:ok, by_sat} = Observations.phases(obs, 0, codes: %{"G" => ["L1C"]})
+      g05 = Enum.find(Map.fetch!(by_sat, "G05"), &(&1.code == "L1C"))
+
+      assert g05.phase_shift_cycles == 0.0
+      assert_in_delta g05.value_cycles, 110_078_836.389, 1.0e-3
+      assert_in_delta g05.value_m, g05.value_cycles * g05.wavelength_m, 1.0e-6
+    end
+
     test "observation_codes/1 returns per-system code lists in order", %{obs: obs} do
       codes = Observations.observation_codes(obs)
       assert hd(codes["G"]) == "C1C"
@@ -123,6 +139,44 @@ defmodule Orbis.CrinexTest do
       assert length(epochs) == 2
       assert [%{index: 0, flag: 0, sat_count: 43} | _] = epochs
       assert {{2020, 6, 25}, {0, 0, _}} = hd(epochs).epoch
+    end
+  end
+
+  describe "phases/3 applies SYS / PHASE SHIFT correction_cycles" do
+    setup do
+      baseline = Observations.load!(@rnx_path)
+      shifted = Observations.load!(@phase_shift_path)
+      {:ok, baseline: baseline, shifted: shifted}
+    end
+
+    test "a non-zero G L1C shift is added to value_cycles and folded into value_m",
+         %{baseline: baseline, shifted: shifted} do
+      {:ok, base_by_sat} = Observations.phases(baseline, 0, codes: %{"G" => ["L1C"]})
+      {:ok, shift_by_sat} = Observations.phases(shifted, 0, codes: %{"G" => ["L1C"]})
+
+      base = Enum.find(Map.fetch!(base_by_sat, "G05"), &(&1.code == "L1C"))
+      shift = Enum.find(Map.fetch!(shift_by_sat, "G05"), &(&1.code == "L1C"))
+
+      # The fixture sets G L1C to +0.25 cycles for the whole system.
+      assert base.phase_shift_cycles == 0.0
+      assert shift.phase_shift_cycles == 0.25
+
+      assert_in_delta shift.value_cycles, base.value_cycles + 0.25, 1.0e-9
+      assert_in_delta shift.value_m, shift.value_cycles * shift.wavelength_m, 1.0e-6
+      assert_in_delta shift.value_m, base.value_m + 0.25 * base.wavelength_m, 1.0e-6
+    end
+
+    test "the correction only touches the matching system/code, not others",
+         %{baseline: baseline, shifted: shifted} do
+      # L2W has a 0.0 shift in both files; it must be untouched.
+      {:ok, base_by_sat} = Observations.phases(baseline, 0, codes: %{"G" => ["L2W"]})
+      {:ok, shift_by_sat} = Observations.phases(shifted, 0, codes: %{"G" => ["L2W"]})
+
+      base = Enum.find(Map.fetch!(base_by_sat, "G05"), &(&1.code == "L2W"))
+      shift = Enum.find(Map.fetch!(shift_by_sat, "G05"), &(&1.code == "L2W"))
+
+      assert shift.phase_shift_cycles == 0.0
+      assert shift.value_cycles == base.value_cycles
     end
   end
 end

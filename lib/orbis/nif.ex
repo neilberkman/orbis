@@ -71,6 +71,11 @@ defmodule Orbis.NIF do
         _datetime_tuple
       ), do: :erlang.nif_error(:nif_not_loaded)
 
+  def sun_moon_ecef(_datetime_tuple), do: :erlang.nif_error(:nif_not_loaded)
+
+  def solid_earth_tide(_sta_x, _sta_y, _sta_z, _year, _month, _day, _fhr, _sun, _moon),
+    do: :erlang.nif_error(:nif_not_loaded)
+
   def iod_gibbs(_r1, _r2, _r3), do: :erlang.nif_error(:nif_not_loaded)
   def iod_hgibbs(_r1, _r2, _r3, _jd1, _jd2, _jd3), do: :erlang.nif_error(:nif_not_loaded)
 

@@ -65,6 +65,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
   alias Orbis.GNSS.IonosphereFree
   alias Orbis.GNSS.Observables
   alias Orbis.GNSS.Positioning
+  alias Orbis.GNSS.PPPCorrections
   alias Orbis.GNSS.SP3
   alias Orbis.GNSS.Troposphere
 
@@ -443,11 +444,41 @@ defmodule Orbis.GNSS.PrecisePositioning do
          {:ok, state} <- initial_multi_state(sp3, epochs, opts),
          {:ok, screen?} <- residual_screen_option(opts) do
       state = state_with_ztd(state, tropo)
+      tropo = with_precomputed_corrections(tropo, sp3, epochs, state.position)
       solve_float_multi_screened(sp3, epochs, state, weights, tropo, solve_opts, screen?, 0)
     end
   end
 
   def solve_float_epochs(%SP3{}, _epoch_observations, _opts), do: {:error, :no_epochs}
+
+  # Precompute the state-independent PPP corrections (solid-earth tide,
+  # carrier-phase wind-up, satellite antenna PCO/PCV) ONCE at the seed position,
+  # before the Gauss-Newton loop. Stored under `corrections.precomputed` and
+  # consumed by the shared `range_corrections_m` chokepoint (tide, sat-PCO) and
+  # the phase-row builders (wind-up).
+  defp position_tuple3(%{x_m: x, y_m: y, z_m: z}), do: {x, y, z}
+  defp position_tuple3({x, y, z}), do: {x, y, z}
+
+  defp with_precomputed_corrections(tropo, sp3, epochs, ref_pos) do
+    corr = Map.get(tropo, :corrections, %{})
+
+    needs? =
+      Map.get(corr, :solid_earth_tide?, false) or Map.get(corr, :phase_windup?, false) or
+        not is_nil(Map.get(corr, :satellite_antenna))
+
+    if needs? do
+      config = %{
+        solid_earth_tide: Map.get(corr, :solid_earth_tide?, false),
+        phase_windup: Map.get(corr, :phase_windup?, false),
+        satellite_antenna: Map.get(corr, :satellite_antenna)
+      }
+
+      precomputed = PPPCorrections.build(sp3, epochs, ref_pos, config)
+      put_in(tropo, [:corrections, :precomputed], precomputed)
+    else
+      tropo
+    end
+  end
 
   @doc """
   Solve a static multi-epoch position with integer-fixed ambiguities.
@@ -494,6 +525,8 @@ defmodule Orbis.GNSS.PrecisePositioning do
          {:ok, solve_opts} <- solve_options(opts),
          {:ok, integer_opts} <- integer_options(opts),
          {:ok, float_sol} <- solve_float_epochs(sp3, epochs, opts),
+         tropo =
+           with_precomputed_corrections(tropo, sp3, epochs, position_tuple3(float_sol.position)),
          {:ok, wavelengths} <- ambiguity_wavelengths(float_sol.used_sats, opts),
          {:ok, offsets} <- ambiguity_offsets(float_sol.used_sats, opts),
          {:ok, fixed_cycles, fixed_meta} <-
@@ -1031,13 +1064,52 @@ defmodule Orbis.GNSS.PrecisePositioning do
   defp corrections_options(opts) do
     with {:ok, receiver_antenna} <- receiver_antenna_option(opts),
          {:ok, sat_clock_relativity?} <- sat_clock_relativity_option(opts),
-         {:ok, satellite_clock} <- satellite_clock_option(opts) do
+         {:ok, satellite_clock} <- satellite_clock_option(opts),
+         {:ok, solid_earth_tide?} <- solid_earth_tide_option(opts),
+         {:ok, phase_windup?} <- phase_windup_option(opts),
+         {:ok, satellite_antenna} <- satellite_antenna_option(opts) do
       {:ok,
        %{
          receiver_antenna: receiver_antenna,
          sat_clock_relativity?: sat_clock_relativity?,
-         satellite_clock: satellite_clock
+         satellite_clock: satellite_clock,
+         solid_earth_tide?: solid_earth_tide?,
+         phase_windup?: phase_windup?,
+         satellite_antenna: satellite_antenna,
+         # Filled in by the solve entry after the arc + seed are known.
+         precomputed: nil
        }}
+    end
+  end
+
+  defp solid_earth_tide_option(opts) do
+    case Keyword.get(opts, :solid_earth_tide, false) do
+      v when is_boolean(v) -> {:ok, v}
+      _ -> {:error, {:invalid_option, :solid_earth_tide}}
+    end
+  end
+
+  defp phase_windup_option(opts) do
+    case Keyword.get(opts, :phase_windup, false) do
+      v when is_boolean(v) -> {:ok, v}
+      _ -> {:error, {:invalid_option, :phase_windup}}
+    end
+  end
+
+  # Satellite antenna PCO/PCV source: %{antex: %Antex{}, freq1: "G01", freq2:
+  # "G02"}. The PCO is projected onto the satellite->receiver line of sight,
+  # iono-free-combined, plus the nadir PCV, through the shared chokepoint.
+  defp satellite_antenna_option(opts) do
+    case Keyword.get(opts, :satellite_antenna) do
+      nil ->
+        {:ok, nil}
+
+      %{antex: %Antex{} = antex, freq1: f1, freq2: f2}
+      when is_binary(f1) and is_binary(f2) ->
+        {:ok, %{antex: antex, freq1: f1, freq2: f2}}
+
+      _ ->
+        {:error, {:invalid_option, :satellite_antenna}}
     end
   end
 
@@ -2126,7 +2198,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
                 kind: :phase,
                 sat: o.satellite_id,
                 h: design_row({-ex, -ey, -ez, 1.0}, arc_id, obs),
-                y: o.phase_m - (model_code + ambiguity),
+                y: o.phase_m - phase_windup_m(o, epoch, tropo) - (model_code + ambiguity),
                 weight: measurement_weight(weights, :phase, pred.elevation_deg)
               }
 
@@ -2220,7 +2292,9 @@ defmodule Orbis.GNSS.PrecisePositioning do
                       tropo_model.ztd_mapping,
                       tropo
                     ),
-                  y: o.phase_m - (model_code + ambiguity),
+                  y:
+                    o.phase_m - phase_windup_m(o, epoch_row.epoch, tropo) -
+                      (model_code + ambiguity),
                   weight: measurement_weight(weights, :phase, pred.elevation_deg)
                 }
 
@@ -2299,7 +2373,9 @@ defmodule Orbis.GNSS.PrecisePositioning do
                   sat: o.satellite_id,
                   epoch: epoch_row.epoch,
                   h: h,
-                  y: o.phase_m - (model_code + ambiguity),
+                  y:
+                    o.phase_m - phase_windup_m(o, epoch_row.epoch, tropo) -
+                      (model_code + ambiguity),
                   weight: measurement_weight(weights, :phase, pred.elevation_deg)
                 }
 
@@ -2403,13 +2479,63 @@ defmodule Orbis.GNSS.PrecisePositioning do
   # the already-modeled `tropo_model`, the solver `state` (carries the estimated
   # residual ZTD), and the per-solve correction config `corr` (receiver antenna,
   # satellite-clock relativity flag).
-  defp range_corrections_m(pred, rx_pos, _epoch, o, tropo_model, state, tropo) do
+  defp range_corrections_m(pred, rx_pos, epoch, o, tropo_model, state, tropo) do
     corr = Map.get(tropo, :corrections, %{})
 
     applied_troposphere_m(tropo_model, state) +
       receiver_antenna_correction_m(pred, rx_pos, corr) +
       sat_clock_relativity_correction_m(pred, corr) +
-      satellite_clock_correction_m(pred, o, corr)
+      satellite_clock_correction_m(pred, o, corr) +
+      solid_earth_tide_correction_m(pred, epoch, corr) +
+      satellite_antenna_correction_m(pred, o, epoch, corr)
+  end
+
+  # Solid-earth tide receiver displacement (IERS DEHANTTIDEINEL), applied as a
+  # marker displacement: moving the marker by +d_tide changes the modeled range
+  # by -dot(d_tide, los_unit) (same RTK sign rule as the receiver-antenna term).
+  # The per-epoch displacement is precomputed at the seed position.
+  defp solid_earth_tide_correction_m(pred, epoch, %{precomputed: %{tide: tide}})
+       when is_map(tide) do
+    case Map.get(tide, epoch) do
+      nil -> 0.0
+      d_tide -> -dot3(d_tide, pred.los_unit)
+    end
+  end
+
+  defp solid_earth_tide_correction_m(_pred, _epoch, _corr), do: 0.0
+
+  # Satellite antenna PCO/PCV. The SP3 satellite position is the centre of mass;
+  # the antenna phase center is CoM + dant_pco (ECEF, iono-free-combined), so the
+  # modeled range grows by +dot(dant_pco, los_unit) (los = receiver->satellite).
+  # The nadir PCV is added on the same (model) side (RTKLIB subtracts it from the
+  # measurement, equivalent to adding it to the model). Both are precomputed at
+  # the seed geometry per (sat, epoch).
+  defp satellite_antenna_correction_m(pred, o, epoch, %{
+         precomputed: %{sat_pco_ecef: pco_map, sat_pcv_m: pcv_map}
+       })
+       when is_map(pco_map) do
+    key = {o.satellite_id, epoch}
+    pco = Map.get(pco_map, key)
+    pcv = Map.get(pcv_map, key, 0.0)
+
+    case pco do
+      nil -> 0.0
+      dant_ecef -> dot3(dant_ecef, pred.los_unit) + pcv
+    end
+  end
+
+  defp satellite_antenna_correction_m(_pred, _o, _epoch, _corr), do: 0.0
+
+  # Carrier-phase wind-up, PHASE ROWS ONLY. The iono-free phase measurement is
+  # corrected by `meas_phase -= windup_m`, so the phase residual `y = meas_phase
+  # - model` gains a `-windup_m` term. Precomputed per (sat, epoch) at the seed
+  # geometry (state-independent: geometry + nominal yaw + Sun only). Code rows are
+  # unaffected (wind-up is a carrier-phase-only effect).
+  defp phase_windup_m(o, epoch, tropo) do
+    case get_in(tropo, [:corrections, :precomputed, :windup_m]) do
+      m when is_map(m) -> Map.get(m, {o.satellite_id, epoch}, 0.0)
+      _ -> 0.0
+    end
   end
 
   # Prefer the precise 30s RINEX satellite clock over the SP3-interpolated clock.
@@ -2900,7 +3026,7 @@ defmodule Orbis.GNSS.PrecisePositioning do
               row = %{
                 sat: o.satellite_id,
                 code_m: o.code_m - model_code,
-                phase_m: o.phase_m - (model_code + ambiguity),
+                phase_m: o.phase_m - phase_windup_m(o, epoch, tropo) - (model_code + ambiguity),
                 code_weight: measurement_weight(weights, :code, pred.elevation_deg),
                 phase_weight: measurement_weight(weights, :phase, pred.elevation_deg)
               }
@@ -2955,7 +3081,9 @@ defmodule Orbis.GNSS.PrecisePositioning do
                   epoch: epoch_row.epoch,
                   satellite_id: o.satellite_id,
                   code_m: o.code_m - model_code,
-                  phase_m: o.phase_m - (model_code + ambiguity),
+                  phase_m:
+                    o.phase_m - phase_windup_m(o, epoch_row.epoch, tropo) -
+                      (model_code + ambiguity),
                   code_weight: measurement_weight(weights, :code, pred.elevation_deg),
                   phase_weight: measurement_weight(weights, :phase, pred.elevation_deg)
                 }
@@ -3015,7 +3143,9 @@ defmodule Orbis.GNSS.PrecisePositioning do
                   epoch: epoch_row.epoch,
                   satellite_id: o.satellite_id,
                   code_m: o.code_m - model_code,
-                  phase_m: o.phase_m - (model_code + ambiguity),
+                  phase_m:
+                    o.phase_m - phase_windup_m(o, epoch_row.epoch, tropo) -
+                      (model_code + ambiguity),
                   code_weight: measurement_weight(weights, :code, pred.elevation_deg),
                   phase_weight: measurement_weight(weights, :phase, pred.elevation_deg)
                 }

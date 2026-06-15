@@ -65,6 +65,17 @@ defmodule Orbis.GNSS.Velocity do
   each measurement is converted via `rho_dot = -doppler_hz * c / f` before the solve,
   with the carrier `f` taken from `opts[:carrier_hz]` (default L1, 1575.42 MHz).
 
+  The single `:carrier_hz` is correct for code-division systems (GPS, Galileo,
+  BeiDou L1) but **wrong for GLONASS**, whose FDMA carriers are per-satellite:
+  G1 is `1602 MHz + k * 562.5 kHz` for the satellite's frequency-channel number
+  `k`. Converting a GLONASS Doppler with the GPS L1 wavelength biases the
+  range-rate (and therefore the velocity) by the ~1.7% carrier mismatch plus the
+  slot offset. Supply the correct per-satellite carrier through
+  `opts[:carrier_hz_by_sat]`; the channel-dependent frequency for a GLONASS
+  satellite is `Orbis.GNSS.RINEX.Observations.band_frequency_hz("R", "1", k)`
+  using the FDMA channel `k` from the observation file's
+  `GLONASS SLOT / FRQ #` records.
+
   ## Result map
 
       %{
@@ -110,8 +121,17 @@ defmodule Orbis.GNSS.Velocity do
   ## Options
 
     * `:observable` - `:range_rate` (default) or `:doppler`.
-    * `:carrier_hz` - carrier frequency for the Doppler conversion, default the
-      L1 carrier `1575.42 MHz`.
+    * `:carrier_hz` - default carrier frequency for the Doppler conversion,
+      default the L1 carrier `1575.42 MHz`. Used for any satellite without a
+      `:carrier_hz_by_sat` entry.
+    * `:carrier_hz_by_sat` - per-satellite carrier frequency for the Doppler
+      conversion, as a `%{sat => hz}` map or a one-argument function of the
+      satellite id returning the carrier in Hz (or `nil` to fall back to
+      `:carrier_hz`). Required for correct GLONASS results, whose FDMA carriers
+      are per-satellite. A non-positive or non-finite resolved carrier surfaces
+      `{:error, {:invalid_carrier, sat}}` rather than producing a degenerate
+      range rate. Default: every satellite uses `:carrier_hz` (so existing
+      single-carrier callers are unchanged).
     * `:sat_clock_drift` - per-satellite clock drift in s/s, as a `%{sat => drift}`
       map or a one-argument function of the satellite id; default zero for every
       satellite (absorbed into the receiver clock drift; see the module docs).
@@ -126,8 +146,9 @@ defmodule Orbis.GNSS.Velocity do
   `:no_observations` (empty list), `{:too_few_satellites, used, 4}` (fewer than
   four usable satellites), `:singular_geometry` (rank-deficient normal matrix),
   `:invalid_receiver` (malformed receiver), `{:invalid_observation, entry}`
-  (malformed observation entry), or `{:duplicate_observation, sat}` (a satellite
-  appears more than once). Never raises.
+  (malformed observation entry), `{:duplicate_observation, sat}` (a satellite
+  appears more than once), or `{:invalid_carrier, sat}` (a resolved per-satellite
+  carrier frequency is non-positive or non-finite). Never raises.
   """
   @spec solve(SP3.t() | Broadcast.t(), [observation()], NaiveDateTime.t(), receiver(), keyword()) ::
           {:ok, result()} | {:error, term()}
@@ -158,6 +179,7 @@ defmodule Orbis.GNSS.Velocity do
   defp do_solve(source, observations, epoch, receiver_position, opts) do
     observable = Keyword.get(opts, :observable, :range_rate)
     carrier_hz = Keyword.get(opts, :carrier_hz, Constants.gps_l1_hz()) * 1.0
+    carrier_fun = carrier_hz_fun(Keyword.get(opts, :carrier_hz_by_sat), carrier_hz)
     sat_drift_fun = sat_clock_drift_fun(Keyword.get(opts, :sat_clock_drift))
 
     predict_opts = [
@@ -167,7 +189,7 @@ defmodule Orbis.GNSS.Velocity do
 
     with :ok <- ensure_nonempty(observations),
          {:ok, receiver} <- Types.normalize_ecef(receiver_position),
-         {:ok, normalized} <- normalize_observations(observations, observable, carrier_hz),
+         {:ok, normalized} <- normalize_observations(observations, observable, carrier_fun),
          {:ok, rows} <-
            build_rows(source, normalized, epoch, receiver, sat_drift_fun, predict_opts),
          :ok <- ensure_enough(rows),
@@ -205,10 +227,11 @@ defmodule Orbis.GNSS.Velocity do
   defp ensure_nonempty(_), do: :ok
 
   # Validate shape, convert Doppler -> range rate, and reject duplicate sats.
-  # Produces a list of {sat, rho_dot_m_s} in input order.
-  defp normalize_observations(observations, observable, carrier_hz) do
+  # Produces a list of {sat, rho_dot_m_s} in input order. `carrier_fun` resolves
+  # the per-satellite Doppler carrier (only consulted for the :doppler path).
+  defp normalize_observations(observations, observable, carrier_fun) do
     Enum.reduce_while(observations, {:ok, [], MapSet.new()}, fn entry, {:ok, acc, seen} ->
-      case normalize_one(entry, observable, carrier_hz) do
+      case normalize_one(entry, observable, carrier_fun) do
         {:ok, {sat, _} = pair} ->
           if MapSet.member?(seen, sat) do
             {:halt, {:error, {:duplicate_observation, sat}}}
@@ -226,13 +249,22 @@ defmodule Orbis.GNSS.Velocity do
     end
   end
 
-  defp normalize_one({sat, value}, :range_rate, _carrier_hz)
+  defp normalize_one({sat, value}, :range_rate, _carrier_fun)
        when is_binary(sat) and is_number(value), do: {:ok, {sat, value * 1.0}}
 
-  defp normalize_one({sat, value}, :doppler, carrier_hz) when is_binary(sat) and is_number(value),
-    do: {:ok, {sat, doppler_to_range_rate(value * 1.0, carrier_hz)}}
+  defp normalize_one({sat, value}, :doppler, carrier_fun)
+       when is_binary(sat) and is_number(value) do
+    case carrier_fun.(sat) do
+      carrier when is_number(carrier) and carrier > 0 ->
+        {:ok, {sat, doppler_to_range_rate(value * 1.0, carrier * 1.0)}}
 
-  defp normalize_one(entry, _observable, _carrier_hz), do: {:error, {:invalid_observation, entry}}
+      _invalid ->
+        {:error, {:invalid_carrier, sat}}
+    end
+  end
+
+  defp normalize_one(entry, _observable, _carrier_fun),
+    do: {:error, {:invalid_observation, entry}}
 
   # --- design-row construction ---------------------------------------------
 
@@ -337,6 +369,32 @@ defmodule Orbis.GNSS.Velocity do
   end
 
   defp hx({h0, h1, h2, h3}, {x0, x1, x2, x3}), do: h0 * x0 + h1 * x1 + h2 * x2 + h3 * x3
+
+  # --- per-satellite carrier lookup ----------------------------------------
+
+  # Resolve each satellite's Doppler carrier, falling back to `default_hz` when
+  # there is no per-satellite override (or it resolves to nil). The resolved
+  # value is validated downstream in normalize_one so a non-positive or
+  # non-finite carrier surfaces {:error, {:invalid_carrier, sat}}.
+  defp carrier_hz_fun(nil, default_hz), do: fn _sat -> default_hz end
+
+  defp carrier_hz_fun(map, default_hz) when is_map(map) do
+    fn sat ->
+      case Map.get(map, sat) do
+        nil -> default_hz
+        hz -> hz
+      end
+    end
+  end
+
+  defp carrier_hz_fun(fun, default_hz) when is_function(fun, 1) do
+    fn sat ->
+      case fun.(sat) do
+        nil -> default_hz
+        hz -> hz
+      end
+    end
+  end
 
   # --- satellite clock drift lookup ----------------------------------------
 

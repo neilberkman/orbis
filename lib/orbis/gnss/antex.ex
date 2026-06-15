@@ -45,6 +45,8 @@ defmodule Orbis.GNSS.Antex do
       :zenith_end_deg,
       :zenith_step_deg,
       :sinex_code,
+      :valid_from,
+      :valid_until,
       :frequencies
     ]
   end
@@ -110,6 +112,32 @@ defmodule Orbis.GNSS.Antex do
   @spec antenna(t(), String.t()) :: Antenna.t() | nil
   def antenna(%__MODULE__{antennas: antennas}, id) when is_binary(id) do
     Map.get(antennas, String.trim(id))
+  end
+
+  @doc """
+  Return the satellite antenna block for PRN `prn` (e.g. `"G05"`) valid at the
+  given epoch, or `nil` if none.
+
+  ANTEX carries one satellite-antenna block per spacecraft per validity window
+  (the same PRN is reused across spacecraft over time), so the block must be
+  selected by `VALID FROM`/`VALID UNTIL`. An unbounded `valid_until` (the active
+  spacecraft) is treated as open-ended.
+  """
+  @spec satellite_antenna(t(), String.t(), NaiveDateTime.t()) :: Antenna.t() | nil
+  def satellite_antenna(%__MODULE__{antennas: antennas}, prn, %NaiveDateTime{} = epoch)
+      when is_binary(prn) do
+    antennas
+    |> Map.values()
+    |> Enum.find(fn a ->
+      a.kind == :satellite and String.trim(a.serial) == String.trim(prn) and
+        valid_at?(a, epoch)
+    end)
+  end
+
+  defp valid_at?(%Antenna{valid_from: from, valid_until: until}, epoch) do
+    after_from? = is_nil(from) or NaiveDateTime.compare(epoch, from) != :lt
+    before_until? = is_nil(until) or NaiveDateTime.compare(epoch, until) != :gt
+    after_from? and before_until?
   end
 
   @doc """
@@ -188,6 +216,12 @@ defmodule Orbis.GNSS.Antex do
       "SINEX CODE" ->
         parse_sinex_code(line, state)
 
+      "VALID FROM" ->
+        parse_valid(line, state, :valid_from)
+
+      "VALID UNTIL" ->
+        parse_valid(line, state, :valid_until)
+
       "START OF FREQUENCY" ->
         begin_frequency(line, state)
 
@@ -252,6 +286,28 @@ defmodule Orbis.GNSS.Antex do
     end
   end
 
+  defp parse_valid(_line, %{current_antenna: nil} = state, _field), do: state
+
+  defp parse_valid(line, %{current_antenna: current} = state, field) do
+    case parse_floats_from_prefix(line) do
+      [y, mo, d, h, mi, s | _] ->
+        ndt =
+          NaiveDateTime.new!(
+            trunc(y),
+            trunc(mo),
+            trunc(d),
+            trunc(h),
+            trunc(mi),
+            trunc(s)
+          )
+
+        %{state | current_antenna: Map.put(current, field, ndt)}
+
+      _ ->
+        state
+    end
+  end
+
   defp begin_antenna(state), do: %{state | current_antenna: nil, current_frequency: nil}
 
   defp decode_antenna_header(line) do
@@ -276,6 +332,8 @@ defmodule Orbis.GNSS.Antex do
       zenith_end_deg: 0.0,
       zenith_step_deg: 0.0,
       sinex_code: nil,
+      valid_from: nil,
+      valid_until: nil,
       frequencies: %{}
     }
   end

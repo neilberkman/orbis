@@ -119,6 +119,140 @@ defmodule Orbis.GNSS.VelocityTest do
     end
   end
 
+  describe "solve/5 per-satellite Doppler carrier (GLONASS FDMA)" do
+    # Assign each satellite a distinct carrier the way GLONASS FDMA does:
+    # G1 = 1602 MHz + k * 562.5 kHz, sweeping k across [-7, 6].
+    defp per_sat_carriers(sats) do
+      sats
+      |> Enum.with_index()
+      |> Map.new(fn {sat, i} ->
+        k = rem(i, 14) - 7
+        {sat, 1_602_000_000.0 + k * 562_500.0}
+      end)
+    end
+
+    test "omitting :carrier_hz_by_sat reproduces the single-carrier result exactly", ctx do
+      v_true = {12.0, -7.0, 3.0}
+      drift_true = 1.0e-9
+      rr_obs = synth_observations(ctx.sp3, ctx.sats, v_true, drift_true)
+
+      doppler_obs =
+        Enum.map(rr_obs, fn {sat, rho_dot} ->
+          {sat, Velocity.range_rate_to_doppler(rho_dot, @f_l1)}
+        end)
+
+      assert {:ok, base} =
+               Velocity.solve(ctx.sp3, doppler_obs, @epoch, @receiver, observable: :doppler)
+
+      # Same solve, default carrier passed explicitly via an empty override map.
+      assert {:ok, same} =
+               Velocity.solve(ctx.sp3, doppler_obs, @epoch, @receiver,
+                 observable: :doppler,
+                 carrier_hz_by_sat: %{}
+               )
+
+      assert same.velocity_m_s == base.velocity_m_s
+      assert same.clock_drift_s_s == base.clock_drift_s_s
+    end
+
+    test "per-sat carriers recover the truth that the single-L1 path gets wrong", ctx do
+      v_true = {12.0, -7.0, 3.0}
+      drift_true = 1.0e-9
+      carriers = per_sat_carriers(ctx.sats)
+      rr_obs = synth_observations(ctx.sp3, ctx.sats, v_true, drift_true)
+
+      # Synthesize each Doppler with that satellite's OWN carrier.
+      doppler_obs =
+        Enum.map(rr_obs, fn {sat, rho_dot} ->
+          {sat, Velocity.range_rate_to_doppler(rho_dot, Map.fetch!(carriers, sat))}
+        end)
+
+      # Solving with the correct per-sat carriers recovers the truth.
+      assert {:ok, good} =
+               Velocity.solve(ctx.sp3, doppler_obs, @epoch, @receiver,
+                 observable: :doppler,
+                 carrier_hz_by_sat: carriers
+               )
+
+      {gx, gy, gz} = good.velocity_m_s
+      {tx, ty, tz} = v_true
+      good_err = [abs(gx - tx), abs(gy - ty), abs(gz - tz)] |> Enum.max()
+      assert good_err < 1.0e-4, "per-sat carrier velocity max error #{good_err} m/s"
+
+      # Solving the SAME Doppler with the single GPS-L1 carrier is materially off
+      # (the FDMA carrier mismatch biases the range rate), proving the per-sat
+      # wiring is load-bearing.
+      assert {:ok, wrong} =
+               Velocity.solve(ctx.sp3, doppler_obs, @epoch, @receiver, observable: :doppler)
+
+      {wx, wy, wz} = wrong.velocity_m_s
+      wrong_err = [abs(wx - tx), abs(wy - ty), abs(wz - tz)] |> Enum.max()
+      assert wrong_err > 0.1, "single-L1 path was unexpectedly accurate (#{wrong_err} m/s)"
+    end
+
+    test "a function resolver works and nil falls back to :carrier_hz", ctx do
+      v_true = {12.0, -7.0, 3.0}
+      drift_true = 1.0e-9
+      carriers = per_sat_carriers(ctx.sats)
+      rr_obs = synth_observations(ctx.sp3, ctx.sats, v_true, drift_true)
+
+      doppler_obs =
+        Enum.map(rr_obs, fn {sat, rho_dot} ->
+          {sat, Velocity.range_rate_to_doppler(rho_dot, Map.fetch!(carriers, sat))}
+        end)
+
+      assert {:ok, via_fun} =
+               Velocity.solve(ctx.sp3, doppler_obs, @epoch, @receiver,
+                 observable: :doppler,
+                 carrier_hz_by_sat: fn sat -> Map.get(carriers, sat) end
+               )
+
+      assert {:ok, via_map} =
+               Velocity.solve(ctx.sp3, doppler_obs, @epoch, @receiver,
+                 observable: :doppler,
+                 carrier_hz_by_sat: carriers
+               )
+
+      assert via_fun.velocity_m_s == via_map.velocity_m_s
+    end
+
+    test "a non-positive per-sat carrier surfaces {:invalid_carrier, sat}", ctx do
+      [first | _] = ctx.sats
+      doppler_obs = Enum.map(ctx.sats, fn sat -> {sat, 1.0} end)
+
+      assert {:error, {:invalid_carrier, ^first}} =
+               Velocity.solve(ctx.sp3, doppler_obs, @epoch, @receiver,
+                 observable: :doppler,
+                 carrier_hz_by_sat: %{first => -1.0}
+               )
+    end
+
+    test "a non-finite per-sat carrier surfaces {:invalid_carrier, sat}", ctx do
+      [first | _] = ctx.sats
+      doppler_obs = Enum.map(ctx.sats, fn sat -> {sat, 1.0} end)
+
+      assert {:error, {:invalid_carrier, ^first}} =
+               Velocity.solve(ctx.sp3, doppler_obs, @epoch, @receiver,
+                 observable: :doppler,
+                 carrier_hz_by_sat: %{first => :infinity}
+               )
+    end
+
+    test "per-sat carriers are ignored on the :range_rate path", ctx do
+      observations = synth_observations(ctx.sp3, ctx.sats, {12.0, -7.0, 3.0}, 1.0e-9)
+
+      assert {:ok, base} = Velocity.solve(ctx.sp3, observations, @epoch, @receiver)
+
+      # A bogus carrier map must not affect the range-rate path (no conversion).
+      assert {:ok, same} =
+               Velocity.solve(ctx.sp3, observations, @epoch, @receiver,
+                 carrier_hz_by_sat: %{hd(ctx.sats) => -1.0}
+               )
+
+      assert same.velocity_m_s == base.velocity_m_s
+    end
+  end
+
   describe "solve/5 residuals" do
     test "a consistent set has ~zero residuals", ctx do
       observations = synth_observations(ctx.sp3, ctx.sats, {12.0, -7.0, 3.0}, 1.0e-9)

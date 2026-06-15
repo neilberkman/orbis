@@ -14,6 +14,7 @@ mod rinex_obs;
 mod rtk_filter;
 mod sp3;
 mod spp;
+mod tides;
 mod tropo;
 
 use rustler::{Env, NifResult, Term};
@@ -304,6 +305,27 @@ fn find_conjunctions<'a>(
         step_min,
         threshold_km,
     )
+}
+
+#[rustler::nif]
+fn sun_moon_ecef(datetime_tuple: Term) -> NifResult<((f64, f64, f64), (f64, f64, f64))> {
+    tides::sun_moon_ecef_impl(datetime_tuple)
+}
+
+#[rustler::nif]
+#[allow(clippy::too_many_arguments)]
+fn solid_earth_tide(
+    sta_x: f64,
+    sta_y: f64,
+    sta_z: f64,
+    year: i32,
+    month: i32,
+    day: i32,
+    fhr: f64,
+    sun: (f64, f64, f64),
+    moon: (f64, f64, f64),
+) -> NifResult<(f64, f64, f64)> {
+    tides::solid_earth_tide_impl(sta_x, sta_y, sta_z, year, month, day, fhr, sun, moon)
 }
 
 rustler::init!("Elixir.Orbis.NIF");

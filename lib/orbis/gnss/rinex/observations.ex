@@ -348,24 +348,38 @@ defmodule Orbis.GNSS.RINEX.Observations do
   number; a GLONASS satellite without a channel map entry keeps
   `wavelength_m`/`value_m` as `nil`.
 
+  ## `SYS / PHASE SHIFT` correction
+
+  When the file carries `SYS / PHASE SHIFT` header records with a non-zero
+  `correction_cycles`, that fractional-cycle bias is added to `value_cycles`
+  (and folded into `value_m`) so the carrier phase is aligned to a common
+  reference, which is what an integer-ambiguity resolver requires. A record's
+  satellite list scopes the correction: an empty list applies to every
+  satellite of that system/code, a non-empty list applies only to the listed
+  satellites. The applied offset is reported on each phase row as
+  `:phase_shift_cycles` (0.0 when no record matches), and `:value_cycles`
+  already includes it. With the common all-zero `SYS / PHASE SHIFT` records the
+  output is bit-identical to the uncorrected values.
+
   Returns `{:ok, %{satellite_id => [phase]}}` where each `phase` is
 
       %{code: "L1C", value_cycles: 1.23e8, lli: 0 | nil, ssi: 7 | nil,
         frequency_hz: 1.57542e9 | nil, wavelength_m: 0.1903 | nil,
-        value_m: 2.34e7 | nil}
+        value_m: 2.34e7 | nil, phase_shift_cycles: 0.0}
   """
   @spec phases(t(), non_neg_integer() | tuple(), keyword()) ::
           {:ok, %{String.t() => [map()]}} | {:error, term()}
   def phases(%__MODULE__{} = obs, epoch, opts \\ []) do
     with {:ok, by_sat} <- values(obs, epoch, opts) do
       glonass_slots = glonass_slots(obs)
+      shift_table = phase_shift_table(obs)
 
       phases =
         Map.new(by_sat, fn {sat, observations} ->
           rows =
             observations
             |> Enum.filter(&(&1.kind == :carrier_phase))
-            |> Enum.map(&phase_row(sat, &1, glonass_slots))
+            |> Enum.map(&phase_row(sat, &1, glonass_slots, shift_table))
 
           {sat, rows}
         end)
@@ -454,7 +468,7 @@ defmodule Orbis.GNSS.RINEX.Observations do
   defp obs_units(:signal_strength), do: :db_hz
   defp obs_units(:unknown), do: :unknown
 
-  defp phase_row(sat, obs, glonass_slots) do
+  defp phase_row(sat, obs, glonass_slots, shift_table) do
     freq =
       band_frequency_hz(
         String.first(sat),
@@ -462,11 +476,19 @@ defmodule Orbis.GNSS.RINEX.Observations do
         Map.get(glonass_slots, sat)
       )
 
+    shift_cycles = phase_shift_cycles(shift_table, sat, obs.code)
+
+    value_cycles =
+      case obs.value do
+        v when is_number(v) -> v + shift_cycles
+        _ -> obs.value
+      end
+
     {wavelength_m, value_m} =
       cond do
-        is_number(freq) and is_number(obs.value) ->
+        is_number(freq) and is_number(value_cycles) ->
           lambda = @speed_of_light_m_s / freq
-          {lambda, obs.value * lambda}
+          {lambda, value_cycles * lambda}
 
         is_number(freq) ->
           {@speed_of_light_m_s / freq, nil}
@@ -477,13 +499,54 @@ defmodule Orbis.GNSS.RINEX.Observations do
 
     %{
       code: obs.code,
-      value_cycles: obs.value,
+      value_cycles: value_cycles,
       lli: obs.lli,
       ssi: obs.ssi,
       frequency_hz: freq,
       wavelength_m: wavelength_m,
-      value_m: value_m
+      value_m: value_m,
+      phase_shift_cycles: shift_cycles
     }
+  end
+
+  # Build the `SYS / PHASE SHIFT` lookup keyed by {system, code}. Each value is
+  # the list of {correction_cycles, satellites_set} records for that key; a
+  # record with an empty satellite list applies to every satellite of the
+  # system/code, otherwise only to the listed satellites. Empty when the file
+  # carries no records, in which case every lookup returns a 0.0 correction.
+  defp phase_shift_table(%__MODULE__{} = obs) do
+    obs
+    |> phase_shifts()
+    |> Enum.reduce(%{}, fn %{system: system, code: code} = row, acc ->
+      entry = {row.correction_cycles, MapSet.new(row.satellites)}
+      Map.update(acc, {system, code}, [entry], &[entry | &1])
+    end)
+  end
+
+  # Resolve the phase-shift correction (cycles) for a satellite/code. Prefers a
+  # per-satellite record (non-empty satellite list containing the sat) over a
+  # system-wide record (empty satellite list); returns 0.0 when none matches.
+  defp phase_shift_cycles(table, sat, code) do
+    system = String.first(sat)
+
+    case Map.get(table, {system, code}) do
+      nil ->
+        0.0
+
+      records ->
+        per_sat =
+          Enum.find_value(records, fn {cycles, sats} ->
+            if MapSet.size(sats) > 0 and MapSet.member?(sats, sat), do: cycles
+          end)
+
+        if is_number(per_sat) do
+          per_sat
+        else
+          Enum.find_value(records, 0.0, fn {cycles, sats} ->
+            if MapSet.size(sats) == 0, do: cycles
+          end)
+        end
+    end
   end
 
   defp wrap(handle) when is_reference(handle), do: {:ok, %__MODULE__{handle: handle}}

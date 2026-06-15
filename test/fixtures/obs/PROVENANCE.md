@@ -157,3 +157,16 @@ CRINEX round-trip and RINEX observation parser tests.
     `684902dec4e06d3c0478c4fc421dc717dcb8d5426b33674e322b3ccef502f492`
 - **Rebuild recipe:**
   `test/fixtures/rtk/generators/cd_phase1_pasa_scoa_2026_120.py`.
+
+## ESBC00DNK_phase_shift_nonzero_trim.rnx (synthetic SYS / PHASE SHIFT regression)
+
+- **Derived from:** `ESBC00DNK_R_20201770000_01D_30S_MO_trim.rnx` (byte-for-byte
+  identical) with a single header edit: the `G L1C ... SYS / PHASE SHIFT` record
+  was changed from a blank (0.0) correction to `0.25000` cycles. Every other
+  `SYS / PHASE SHIFT` record stays 0.0.
+- **Purpose:** regression fixture for `Observations.phases/3` applying the
+  `SYS / PHASE SHIFT` `correction_cycles` to the carrier-phase `value_cycles`
+  (and `value_m`). The all-zero parent verifies the correction is a no-op when
+  no shift is present; this fixture verifies a non-zero shift is added.
+- **Edit recipe:** copy the parent file and replace the `G L1C` phase-shift line
+  with `G L1C  0.25000` padded to the RINEX label column.
