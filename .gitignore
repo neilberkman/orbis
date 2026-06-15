@@ -32,3 +32,6 @@ mise.toml
 
 # Local-dev cargo override for the orbis_nif git deps (machine-specific)
 native/orbis_nif/.cargo/config.toml
+
+# Local planning artifacts (do not commit)
+/_planning/
